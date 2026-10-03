@@ -215,6 +215,21 @@ def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
         # 导入历史 / 编辑历史台账
 ```
 
+**AI 确认约定（用户需求）**：所有会调用 AI 的方法都必须显式确认，未确认时拒绝执行：
+
+```text
+create_question(draft, analyze_difficulty=False)      # True 才调用 AI 分析难度
+update_question(id, patch, analyze_difficulty=False)
+batch_commit(drafts, analyze_difficulty=False)
+recognize_draft(stem, options, include_solution=True, confirmed=False)   # True 才调用 AI
+reanalyze_difficulties(ids, confirmed=False)                             # True 才调用 AI
+PaperComposer.generate(criteria, allow_ai_supplement=False)               # True 才允许 AI 补题
+QuestionGenerator.generate_questions(..., allow_ai=False)                 # True 才调用 AI
+```
+
+界面在每次 AI 动作前弹出确认框（「AI 分析 / AI 辨识 / 允许 AI 补题 / 跳过」），
+用户确认后才传对应标志；拒绝时不发起任何 AI 请求。
+
 调用方：`presentation/views/question_bank_view`（录入 / 编辑 / 检索 / AI 辨识）、
 `presentation/views/history_view`（经 QuestionHistoryService 读取台账）。
 

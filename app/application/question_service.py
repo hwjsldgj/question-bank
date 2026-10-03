@@ -152,12 +152,21 @@ class QuestionService:
 
     # ------------------------------------------------------------------ CRUD
 
-    def create_question(self, draft: Question) -> Question:
-        """新增题目：校验通过后落库并触发 AI 难度分析（需求 R1 / R4）。"""
+    def create_question(
+        self, draft: Question, analyze_difficulty: bool = False
+    ) -> Question:
+        """新增题目：校验通过后落库（需求 R1）。
+
+        AI 难度分析必须经用户确认：仅当 ``analyze_difficulty=True`` 时才会调用
+        AI（用户需求：所有使用 AI 的内容都需手动确认）。
+
+        :param draft: 待保存题目草稿
+        :param analyze_difficulty: 用户是否已确认调用 AI 分析难度
+        """
         self._normalize_enums(draft)
         self._validator.validate(draft)
         saved = self._repository.save(draft)
-        self._analyze_if_automatic(saved)
+        self._analyze_if_automatic(saved, analyze_difficulty)
         self._record(
             QuestionOpAction.CREATE,
             saved,
@@ -165,8 +174,13 @@ class QuestionService:
         )
         return saved
 
-    def update_question(self, question_id: str, patch: dict) -> Question:
-        """编辑题目：合并字段、校验后更新，保留 id 与使用记录（需求 R1 第 3 条）。"""
+    def update_question(
+        self, question_id: str, patch: dict, analyze_difficulty: bool = False
+    ) -> Question:
+        """编辑题目：合并字段、校验后更新，保留 id 与使用记录（需求 R1 第 3 条）。
+
+        :param analyze_difficulty: 用户是否已确认调用 AI 分析难度
+        """
         current = self._repository.get(question_id)
         if current is None:
             raise QuestionValidationError(f"题目不存在：{question_id}")
@@ -178,7 +192,7 @@ class QuestionService:
         self._normalize_enums(current)
         self._validator.validate(current)
         updated = self._repository.update(current)
-        self._analyze_if_automatic(updated)
+        self._analyze_if_automatic(updated, analyze_difficulty)
         # 换图后清理旧图片（无其他题目引用时）
         if old.image_path and old.image_path != updated.image_path:
             self._cleanup_image(old.image_path)
@@ -235,11 +249,19 @@ class QuestionService:
             changed += 1
         return changed
 
-    def reanalyze_difficulties(self, question_ids: list[str]) -> dict:
+    def reanalyze_difficulties(
+        self, question_ids: list[str], confirmed: bool = False
+    ) -> dict:
         """批量重析难度（仅 AI 来源题目，人工难度保持不变，需求 R5 第 4 条）。
 
+        用户需求：所有使用 AI 的内容都需手动确认，``confirmed=False`` 时拒绝执行。
+
+        :param question_ids: 待重分析的题目 id
+        :param confirmed: 用户是否已在界面确认调用 AI
         :return: 难度服务返回的统计摘要
         """
+        if not confirmed:
+            raise AIServiceError("批量重析难度会调用 AI，需要出题者确认后执行")
         if not question_ids:
             return {"total": 0, "updated": 0, "skipped": 0, "failed": 0}
         return self._difficulty_service.batch_reanalyze(question_ids)
@@ -255,8 +277,13 @@ class QuestionService:
         blocks = [block.strip() for block in _BLOCK_SPLIT.split(raw_text or "") if block.strip()]
         return [self._parse_block(block) for block in blocks]
 
-    def batch_commit(self, drafts: list[Question]) -> list[Question]:
-        """批量写入确认后的候选题目（需求 R2 第 3 条）。"""
+    def batch_commit(
+        self, drafts: list[Question], analyze_difficulty: bool = False
+    ) -> list[Question]:
+        """批量写入确认后的候选题目（需求 R2 第 3 条）。
+
+        :param analyze_difficulty: 用户是否已确认对入库题目调用 AI 分析难度
+        """
         saved_questions: list[Question] = []
         batch_id = uuid.uuid4().hex[:12]
         failures: list[str] = []
@@ -268,7 +295,7 @@ class QuestionService:
                 failures.append(f"第 {index} 题：{exc}")
                 continue
             saved = self._repository.save(draft)
-            self._analyze_if_automatic(saved)
+            self._analyze_if_automatic(saved, analyze_difficulty)
             self._record(
                 QuestionOpAction.IMPORT,
                 saved,
@@ -301,18 +328,28 @@ class QuestionService:
         return bool(self._ai_client is not None and self._ai_client.is_configured())
 
     def recognize_draft(
-        self, stem: str, options: list[Option], include_solution: bool = True
+        self,
+        stem: str,
+        options: list[Option],
+        include_solution: bool = True,
+        confirmed: bool = False,
     ) -> dict:
         """调用 AI 辨识题目字段，结果仅供参考（用户需求）。
+
+        用户需求：所有使用 AI 的内容都需手动确认，``confirmed=False`` 时拒绝调用；
+        界面在用户点击「AI 辨识」按钮或确认补全对话框后传 ``confirmed=True``。
 
         :param stem: 题干文本
         :param options: 当前已填选项（可为空）
         :param include_solution: 是否要求 AI 输出解析；为 False 时提示词明确
             要求不输出解析，且返回结果的 solution 恒为空（用户需求）
+        :param confirmed: 用户是否已确认调用 AI
         :return: 归一化后的字段字典，键包含 subject / knowledge_points /
             question_type / difficulty / quality_flag / answer / solution
-        :raises app.domain.errors.AIServiceError: 未配置或调用失败
+        :raises app.domain.errors.AIServiceError: 未确认 / 未配置或调用失败
         """
+        if not confirmed:
+            raise AIServiceError("AI 辨识会调用 AI，需要出题者确认后执行")
         if self._ai_client is None:
             raise AIServiceError("未接入 AI 客户端，无法进行 AI 辨识")
         subjects = self.list_subjects()
@@ -424,12 +461,16 @@ class QuestionService:
                 ) from exc
         return question
 
-    def _analyze_if_automatic(self, question: Question) -> None:
-        """难度来源为 AI 且尚未标注时执行难度分析。
+    def _analyze_if_automatic(self, question: Question, enabled: bool = False) -> None:
+        """在用户已确认的前提下调用 AI 分析难度。
 
-        人工设置（difficulty_source = MANUAL）或已带难度值的题目保持不变
+        用户需求：所有使用 AI 的内容都需手动确认，因此默认 ``enabled=False``
+        时不会发起任何 AI 调用，难度保持"待确认"，由出题者手工设置。
+        人工难度（difficulty_source = MANUAL）与已有难度值同样保持不变
         （需求 R4 第 4 条 / R5 第 4 条）。
         """
+        if not enabled:
+            return
         if question.difficulty_source is DifficultySource.MANUAL:
             return
         if question.difficulty is not Difficulty.PENDING:

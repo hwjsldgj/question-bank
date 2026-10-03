@@ -54,10 +54,17 @@ class PaperComposer:
         self._score_calculator = score_calculator
         self._config = config
 
-    def generate(self, criteria: PaperCriteria) -> Paper:
+    def generate(
+        self, criteria: PaperCriteria, allow_ai_supplement: bool = False
+    ) -> Paper:
         """执行一次完整组卷并返回试卷实体（需求 R7-R10 / R13）。
 
-        :param criteria: 组卷条件（两部分均可选，至少启用一个）
+        用户需求：所有使用 AI 的内容都需手动确认，因此默认
+        ``allow_ai_supplement=False``：题库不足时不得调用 AI 补题，
+        而是按实际可提供数量报告；仅当界面在用户确认后传 True 才允许补题。
+
+        :param criteria: 组卷条件（各部分均可选，至少启用一个）
+        :param allow_ai_supplement: 用户是否已确认允许 AI 补题
         :return: 已完成选题与分值汇总的试卷
         :raises app.domain.errors.CriteriaValidationError: 组卷条件非法
         """

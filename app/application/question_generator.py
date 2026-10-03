@@ -14,6 +14,7 @@
 
 from app.domain.entities.question import Question
 from app.domain.enums import Difficulty, QuestionType
+from app.domain.errors import AIServiceError
 from app.domain.validators.question_validator import QuestionValidator
 from app.interfaces.ai_client import AIClient
 from app.interfaces.repositories import QuestionRepository
@@ -42,17 +43,25 @@ class QuestionGenerator:
         question_type: QuestionType,
         difficulty: Difficulty,
         count: int,
+        allow_ai: bool = False,
     ) -> list[Question]:
         """生成并入库 count 道符合要求的题目（需求 R10 第 2-5 条）。
+
+        用户需求：所有使用 AI 的内容都需手动确认，``allow_ai=False`` 时
+        拒绝调用 AI（抛 AIServiceError），由调用方向用户确认后传 True。
 
         :param subject: 科目（生成依据）
         :param knowledge_points: 知识点列表（生成依据）
         :param question_type: 目标题型
         :param difficulty: 目标难度
         :param count: 需要生成的数量（差额）
+        :param allow_ai: 用户是否已确认允许调用 AI 补题
         :return: 实际成功生成并入库的题目列表；数量可能少于 count
+        :raises app.domain.errors.AIServiceError: 未确认调用 AI
         :raises app.domain.errors.AIConfigMissingError: AI 服务未配置
         """
+        if not allow_ai:
+            raise AIServiceError("AI 补题需要出题者确认后才能调用")
         raise NotImplementedError("TODO(R10): 实现 AI 补题流程")
 
     def _build_prompt(

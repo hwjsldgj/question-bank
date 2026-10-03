@@ -457,6 +457,19 @@ class PaperGenerationView(QWidget):
 
     # --------------------------------------------------------------- 生成
 
+    def _confirm_ai_supplement(self) -> bool:
+        """组卷前询问是否允许 AI 补题（用户需求：AI 使用需手动确认）。"""
+        if not self._question_service.ai_configured():
+            return False
+        return ui_utils.confirm_action(
+            self,
+            "组卷时若题库题量不足，可能需要调用 AI 补题。\n\n"
+            "是否允许本次组卷使用 AI 补题？（选「仅用题库」则不足部分不补）",
+            title="AI 补题确认",
+            accept_text="允许 AI 补题",
+            reject_text="仅用题库",
+        )
+
     def _on_generate(self) -> None:
         """执行组卷（需求 R7-R10 / R13）。"""
         criteria = self._build_criteria()
@@ -465,8 +478,13 @@ class PaperGenerationView(QWidget):
                 self, "请至少启用「单选题」「多选题」「填空题」或「解答题」中的一项。"
             )
             return
+        allow_ai = self._confirm_ai_supplement()
         ok, paper = ui_utils.run_guarded(
-            self, self._composer.generate, criteria, success_message="试卷已生成"
+            self,
+            self._composer.generate,
+            criteria,
+            allow_ai,
+            success_message="试卷已生成",
         )
         if not ok or paper is None:
             return

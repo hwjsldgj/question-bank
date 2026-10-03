@@ -246,7 +246,7 @@ def test_reanalyze_difficulties_skips_manual(container) -> None:
     manual.difficulty_source = DifficultySource.MANUAL
     saved_manual = service.create_question(manual)
 
-    summary = service.reanalyze_difficulties(service.all_question_ids())
+    summary = service.reanalyze_difficulties(service.all_question_ids(), True)
     assert summary == {"total": 2, "updated": 1, "skipped": 1, "failed": 0}
     assert container.question_repository.get(saved_auto.id).difficulty is Difficulty.HARD
     assert container.question_repository.get(saved_manual.id).difficulty is Difficulty.EASY
@@ -335,6 +335,51 @@ def test_save_rejects_invalid_enum_value(service) -> None:
         service.create_question(bad)
 
 
+def test_ai_actions_require_confirmation(container) -> None:
+    """所有 AI 调用都需用户确认：未确认时拒绝执行且不发起调用。"""
+    from app.domain.errors import AIServiceError
+
+    fake = FakeAIClient({"difficulty": "hard"})
+    local = QuestionService(
+        container.question_repository,
+        QuestionValidator(),
+        DifficultyService(fake, container.config_store, container.question_repository),
+        op_repository=container.question_op_repository,
+        config_store=container.config_store,
+        ai_client=fake,
+    )
+
+    # 未确认：不调用 AI，难度保持"待确认"
+    pending = _single_question()
+    pending.difficulty = Difficulty.PENDING
+    saved = local.create_question(pending)
+    assert saved.difficulty is Difficulty.PENDING
+    assert fake.prompts == []
+
+    # 确认后：才调用 AI 分析难度
+    confirmed = _single_question()
+    confirmed.difficulty = Difficulty.PENDING
+    analyzed = local.create_question(confirmed, analyze_difficulty=True)
+    assert analyzed.difficulty is Difficulty.HARD
+    assert fake.prompts
+
+    # 辨识与批量重析未确认 -> 拒绝执行
+    with pytest.raises(AIServiceError, match="确认"):
+        local.recognize_draft("题干", [])
+    with pytest.raises(AIServiceError, match="确认"):
+        local.reanalyze_difficulties([analyzed.id])
+
+
+def test_ai_supplement_requires_confirmation(container) -> None:
+    """AI 补题未确认时拒绝执行（用户需求：AI 使用需手动确认）。"""
+    from app.domain.errors import AIServiceError
+
+    with pytest.raises(AIServiceError, match="确认"):
+        container.question_generator.generate_questions(
+            "数学", ["集合"], QuestionType.SINGLE, Difficulty.EASY, 1
+        )
+
+
 def test_recognize_can_skip_solution(container) -> None:
     """AI 辨识可要求不输出解析（用户需求）。"""
     fake = FakeAIClient(
@@ -355,11 +400,13 @@ def test_recognize_can_skip_solution(container) -> None:
         config_store=container.config_store,
         ai_client=fake,
     )
-    result = service.recognize_draft("题干", [], include_solution=False)
+    result = service.recognize_draft("题干", [], include_solution=False, confirmed=True)
     assert result["solution"] == ""
     assert "不要输出解题解析" in fake.prompts[0]
 
-    with_solution = service.recognize_draft("题干", [], include_solution=True)
+    with_solution = service.recognize_draft(
+        "题干", [], include_solution=True, confirmed=True
+    )
     assert with_solution["solution"] == "AI 生成的解析"
 
 
@@ -402,7 +449,7 @@ def test_recognize_draft_normalizes_and_uses_prompt(container) -> None:
         )
     )
 
-    result = service.recognize_draft("题干内容", [Option("A", "1")])
+    result = service.recognize_draft("题干内容", [Option("A", "1")], confirmed=True)
     assert service.ai_configured() is True
     assert result["subject"] == "数学"
     assert result["knowledge_points"] == ["一元二次方程", "因式分解"]
@@ -429,4 +476,4 @@ def test_recognize_without_ai_raises(container) -> None:
     )
     assert service.ai_configured() is False
     with pytest.raises(AIConfigMissingError):
-        service.recognize_draft("题干", [])
+        service.recognize_draft("题干", [], confirmed=True)

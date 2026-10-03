@@ -668,6 +668,7 @@ class QuestionBankView(QWidget):
             stem,
             self._collect_options(),
             not self._no_solution_check.isChecked(),
+            True,
         )
         if not ok or not result:
             return
@@ -799,6 +800,7 @@ class QuestionBankView(QWidget):
             draft.stem,
             draft.options,
             include_solution,
+            True,
         )
         if not ok or not result:
             return False
@@ -813,6 +815,24 @@ class QuestionBankView(QWidget):
             return False
         return True
 
+    def _confirm_difficulty_ai(self, draft: Question) -> bool:
+        """保存前询问是否调用 AI 分析难度（用户需求：AI 使用需手动确认）。
+
+        :return: True 表示用户同意调用 AI（且难度确实待确认、AI 已配置）
+        """
+        if not self._question_service.ai_configured():
+            return False
+        if draft.difficulty is not Difficulty.PENDING:
+            return False
+        return ui_utils.confirm_action(
+            self,
+            "该题难度仍为「待确认」。\n\n是否调用 AI 分析难度？"
+            "（结果仅供参考，可随时手工修改）",
+            title="AI 难度分析",
+            accept_text="AI 分析难度",
+            reject_text="跳过",
+        )
+
     def _on_save_clicked(self) -> None:
         """保存或更新题目（需求 R1）。
 
@@ -820,17 +840,20 @@ class QuestionBankView(QWidget):
         - 题干（选择题含选项）不全时直接提示，必须由出题者补齐；
         - 其余信息（科目 / 知识点 / 答案 / 难度）不全时，弹出窗口提供
           "AI 分析"选项，由 AI 辨识补全后再保存（结果仅供参考）。
+        所有 AI 调用（辨识补全、难度分析）都需用户在弹窗中确认。
         """
         draft = self._build_draft()
         if not self._ensure_required_fields(draft):
             return
         draft = self._build_draft()
+        analyze_difficulty = self._confirm_difficulty_ai(draft)
         if self._editing_id:
             ok, _ = ui_utils.run_guarded(
                 self,
                 self._question_service.update_question,
                 self._editing_id,
                 self._build_patch(draft),
+                analyze_difficulty,
                 success_message="题目已更新",
             )
         else:
@@ -838,7 +861,12 @@ class QuestionBankView(QWidget):
                 self,
                 self._question_service.create_question,
                 draft,
-                success_message="题目已保存，已触发 AI 难度分析（未配置则置为待确认）",
+                analyze_difficulty,
+                success_message=(
+                    "题目已保存"
+                    if not analyze_difficulty
+                    else "题目已保存，AI 难度分析结果仅供参考"
+                ),
             )
         if ok:
             self._reset_form()
@@ -866,10 +894,26 @@ class QuestionBankView(QWidget):
         if not self._paste_drafts:
             ui_utils.info(self, "请先点击“解析预览”确认候选题。")
             return
+        pending = [
+            draft for draft in self._paste_drafts if draft.difficulty is Difficulty.PENDING
+        ]
+        analyze_difficulty = bool(
+            pending
+            and self._question_service.ai_configured()
+            and ui_utils.confirm_action(
+                self,
+                f"本次将入库 {len(self._paste_drafts)} 道题，其中 {len(pending)} 道难度为"
+                "「待确认」。\n\n是否调用 AI 分析这些题目的难度？（结果仅供参考）",
+                title="AI 难度分析",
+                accept_text="AI 分析难度",
+                reject_text="跳过",
+            )
+        )
         ok, saved = ui_utils.run_guarded(
             self,
             self._question_service.batch_commit,
             self._paste_drafts,
+            analyze_difficulty,
             success_message="候选题目已批量入库",
         )
         if not ok:
@@ -1106,10 +1150,11 @@ class QuestionBankView(QWidget):
             self.reload_questions()
 
     def _on_reanalyze_selected(self) -> None:
-        """批量重析难度：选中题目优先，未选中则确认后处理全库（需求 R4 / R5）。"""
+        """批量重析难度：先确认再调用 AI（用户需求：AI 使用需手动确认）。"""
         questions = self._selected_questions()
         if questions:
             ids = [question.id for question in questions]
+            prompt = f"是否对选中的 {len(ids)} 道题重新调用 AI 分析难度？（人工难度不会被覆盖）"
         else:
             ids = ui_utils.safe_call(
                 self._question_service.all_question_ids, default=None
@@ -1117,12 +1162,28 @@ class QuestionBankView(QWidget):
             if not ids:
                 ui_utils.info(self, "题库为空，无可重析的题目。")
                 return
-            if not ui_utils.confirm(
-                self, f"未选择题目，是否对全库 {len(ids)} 道题重新分析难度？"
-            ):
-                return
+            prompt = (
+                f"未选择题目，是否对全库 {len(ids)} 道题重新调用 AI 分析难度？"
+                "（人工难度不会被覆盖）"
+            )
+
+        if not self._question_service.ai_configured():
+            ui_utils.warning(
+                self,
+                "AI 服务未配置，无法重析难度；请先在「设置 -> AI 设置」中配置。",
+            )
+            return
+        if not ui_utils.confirm_action(
+            self,
+            prompt,
+            title="AI 难度分析",
+            accept_text="AI 分析难度",
+            reject_text="取消",
+        ):
+            return
+
         ok, summary = ui_utils.run_guarded(
-            self, self._question_service.reanalyze_difficulties, ids
+            self, self._question_service.reanalyze_difficulties, ids, True
         )
         if not ok or not summary:
             return

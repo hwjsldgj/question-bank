@@ -165,22 +165,27 @@ class SQLiteQuestionRepository(QuestionRepository):
     # ------------------------------------------------------------------ 映射
 
     def _to_row(self, question: Question) -> tuple:
-        """Question 实体 -> questions 表列值元组。"""
+        """Question 实体 -> questions 表列值元组。
+
+        枚举字段统一经 :meth:`_enum_value` 取值：既接受枚举成员，也接受
+        ``"single"`` / ``"easy"`` 这类字符串，避免调用方传入字符串时抛出
+        ``'str' object has no attribute 'value'``。
+        """
         return (
             question.id,
             question.subject,
             self._dump_json(question.knowledge_points),
-            question.type.value,
+            self._enum_value(question.type, QuestionType),
             question.stem,
             self._dump_json(
                 [{"key": o.key, "text": o.text} for o in question.options]
             ),
             self._dump_json(question.answer),
             question.solution,
-            question.difficulty.value,
-            question.difficulty_source.value,
-            question.quality_flag.value,
-            question.source.value,
+            self._enum_value(question.difficulty, Difficulty),
+            self._enum_value(question.difficulty_source, DifficultySource),
+            self._enum_value(question.quality_flag, QualityFlag),
+            self._enum_value(question.source, QuestionSource),
             question.image_path,
             question.created_at.isoformat(timespec="seconds")
             if question.created_at
@@ -189,6 +194,22 @@ class SQLiteQuestionRepository(QuestionRepository):
             if question.updated_at
             else None,
         )
+
+    @staticmethod
+    def _enum_value(value, enum_cls) -> str:
+        """枚举成员或等价字符串 -> 数据库存储值。
+
+        :raises ValueError: 取值不在枚举范围内（消息说明字段与合法取值）
+        """
+        if isinstance(value, enum_cls):
+            return value.value
+        try:
+            return enum_cls(value).value
+        except (TypeError, ValueError) as exc:
+            allowed = "、".join(member.value for member in enum_cls)
+            raise ValueError(
+                f"{enum_cls.__name__} 取值非法：{value!r}（可选值：{allowed}）"
+            ) from exc
 
     @staticmethod
     def _row_to_question(row) -> Question:

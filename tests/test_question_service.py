@@ -252,6 +252,57 @@ def test_reanalyze_difficulties_skips_manual(container) -> None:
     assert container.question_repository.get(saved_manual.id).difficulty is Difficulty.EASY
 
 
+def test_save_accepts_string_enum_fields(container, service) -> None:
+    """回归：枚举字段以字符串给出时也能保存（曾报 'str' 没有 'value' 属性）。"""
+    draft = _single_question()
+    draft.type = "single"
+    draft.difficulty = "easy"
+    draft.difficulty_source = "manual"
+    draft.quality_flag = "quality"
+    draft.source = "bank"
+
+    saved = service.create_question(draft)
+    assert saved.type is QuestionType.SINGLE
+    assert saved.difficulty is Difficulty.EASY
+    assert saved.difficulty_source is DifficultySource.MANUAL
+    stored = container.question_repository.get(saved.id)
+    assert stored.quality_flag is QualityFlag.QUALITY
+    assert stored.source.value == "bank"
+
+    # 编辑补丁同样接受字符串
+    service.update_question(saved.id, {"difficulty": "hard", "quality_flag": "low"})
+    updated = container.question_repository.get(saved.id)
+    assert updated.difficulty is Difficulty.HARD
+    assert updated.quality_flag is QualityFlag.LOW
+
+
+def test_storage_layer_accepts_string_enum_fields(container) -> None:
+    """存储边界兜底：仓储直接写入字符串枚举取值不会抛 AttributeError。"""
+    direct = Question(
+        id="direct-1",
+        subject="物理",
+        knowledge_points=["力学"],
+        type="fill",
+        stem="填空",
+        answer=["3"],
+        difficulty="medium",
+    )
+    container.question_repository.save(direct)
+    stored = container.question_repository.get("direct-1")
+    assert stored.type is QuestionType.FILL
+    assert stored.difficulty is Difficulty.MEDIUM
+
+
+def test_save_rejects_invalid_enum_value(service) -> None:
+    """非法枚举取值给出可读校验错误，而不是 AttributeError。"""
+    from app.domain.errors import QuestionValidationError
+
+    bad = _single_question()
+    bad.type = "judge"
+    with pytest.raises(QuestionValidationError, match="题型取值非法"):
+        service.create_question(bad)
+
+
 def test_recognize_can_skip_solution(container) -> None:
     """AI 辨识可要求不输出解析（用户需求）。"""
     fake = FakeAIClient(

@@ -45,7 +45,7 @@ class QuestionHistoryService:
         """读取指定操作类型的记录（仓储异常时返回空列表，界面不崩溃）。"""
         try:
             return self._op_repository.list_records(
-                [action.value for action in actions], limit
+                [QuestionOpAction(action).value for action in actions], limit
             )
         except Exception:  # noqa: BLE001 - 历史展示非关键路径
             return []

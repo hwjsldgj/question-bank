@@ -35,7 +35,7 @@ class SQLiteQuestionOpRepository(QuestionOpRepository):
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
-                    record.action.value,
+                    QuestionOpAction(record.action).value,
                     record.question_id,
                     record.subject,
                     record.stem_excerpt,

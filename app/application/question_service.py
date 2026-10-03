@@ -33,6 +33,7 @@ from app.domain.enums import (
     DifficultySource,
     QualityFlag,
     QuestionOpAction,
+    QuestionSource,
     QuestionType,
 )
 from app.domain.errors import AIServiceError, QuestionValidationError
@@ -153,6 +154,7 @@ class QuestionService:
 
     def create_question(self, draft: Question) -> Question:
         """新增题目：校验通过后落库并触发 AI 难度分析（需求 R1 / R4）。"""
+        self._normalize_enums(draft)
         self._validator.validate(draft)
         saved = self._repository.save(draft)
         self._analyze_if_automatic(saved)
@@ -173,6 +175,7 @@ class QuestionService:
             if hasattr(current, key):
                 setattr(current, key, value)
         current.id = question_id
+        self._normalize_enums(current)
         self._validator.validate(current)
         updated = self._repository.update(current)
         self._analyze_if_automatic(updated)
@@ -259,6 +262,7 @@ class QuestionService:
         failures: list[str] = []
         for index, draft in enumerate(drafts, start=1):
             try:
+                self._normalize_enums(draft)
                 self._validator.validate(draft)
             except QuestionValidationError as exc:
                 failures.append(f"第 {index} 题：{exc}")
@@ -378,10 +382,47 @@ class QuestionService:
         """读取题库操作台账（导入历史 / 编辑历史）。"""
         if self._op_repository is None:
             return []
-        values = [action.value for action in actions] if actions else None
+        values: list[str] | None = None
+        if actions:
+            values = []
+            for action in actions:
+                values.append(
+                    action.value
+                    if isinstance(action, QuestionOpAction)
+                    else QuestionOpAction(action).value
+                )
         return self._op_repository.list_records(values, limit)
 
     # ------------------------------------------------------------------ 内部
+
+    @staticmethod
+    def _normalize_enums(question: Question) -> Question:
+        """把枚举字段归一化为枚举成员，兼容外部传入的字符串取值。
+
+        AI 返回、界面下拉与旧调用方都可能给出 ``"single"`` 这类字符串；
+        若直接落库会在 ``question.type.value`` 处抛出
+        ``'str' object has no attribute 'value'``，因此统一在服务入口收敛。
+
+        :raises QuestionValidationError: 取值不在允许范围内（消息含字段与取值）
+        """
+        pairs = (
+            ("题型", "type", QuestionType),
+            ("难度", "difficulty", Difficulty),
+            ("难度来源", "difficulty_source", DifficultySource),
+            ("质量标记", "quality_flag", QualityFlag),
+            ("来源", "source", QuestionSource),
+        )
+        for label, field_name, enum_cls in pairs:
+            value = getattr(question, field_name, None)
+            try:
+                setattr(question, field_name, enum_cls(value))
+            except (TypeError, ValueError) as exc:
+                raise QuestionValidationError(
+                    f"{label}取值非法：{value!r}（可选值："
+                    + "、".join(member.value for member in enum_cls)
+                    + "）"
+                ) from exc
+        return question
 
     def _analyze_if_automatic(self, question: Question) -> None:
         """难度来源为 AI 且尚未标注时执行难度分析。

@@ -162,7 +162,11 @@ class QuestionValidator:
 
 - `validate`：非法时抛 `QuestionValidationError`，消息说明不一致原因。
   规则：单选 >=2 选项且答案恰 1 个 key；多选 >=2 选项且答案 >=1 个 key；
-  解答题无选项且参考答案非空；科目 / 题干 / 知识点非空。
+  填空题无选项且参考答案非空；解答题无选项且参考答案非空；科目 / 题干 / 知识点非空。
+- 枚举容错：`QuestionService` 在入库前统一把 `type / difficulty /
+  difficulty_source / quality_flag / source` 归一化为枚举成员（接受 `"single"`
+  这类字符串），仓储层 `_to_row` 亦做同样兜底，避免
+  `'str' object has no attribute 'value'`；取值非法时抛出带可选值的可读错误。
 - `validate_many`：批量粘贴场景，返回通过列表，失败信息聚合抛出。
 - 调用方：`application/question_service`（入库前）、`application/question_generator`（AI 题校验，R10-4）。
 

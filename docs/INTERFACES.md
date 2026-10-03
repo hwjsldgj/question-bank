@@ -73,16 +73,35 @@ class ConfigStore(ABC):
     def save_ai_config(self, config: AIConfig) -> None
     def load_scoring_config(self) -> ScoringConfig
     def save_scoring_config(self, config: ScoringConfig) -> None
+    def load_prompt_config(self) -> PromptConfig      # AI 提示词（用户可改）
+    def save_prompt_config(self, config: PromptConfig) -> None
+    def load_subjects(self) -> list[str]              # 科目列表（选择式录入）
+    def save_subjects(self, subjects: list[str]) -> None
 ```
 
 | 项 | 说明 |
 |----|------|
-| 实现 | `infrastructure/config_store.py::SQLiteConfigStore`（已实现，框架管道代码） |
-| 调用方 | `app/container.py`（启动加载）、`presentation/views/history_settings_view`（设置读写） |
-| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；保存为 UPSERT (R15-3) |
+| 实现 | `infrastructure/config_store.py::SQLiteConfigStore`（settings 键值表，JSON 值） |
+| 调用方 | `app/container.py`（装配）、`presentation/views/settings_view`、`application/{question_service,difficulty_service}`（提示词与科目） |
+| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；提示词为空时逐项回退默认模板；科目列表去重且保序，为空时回退默认科目 |
 | 隐私 | API Key 仅存本机 settings 表，禁止外传或写日志 (R18) |
 
-### 1.5 AIClient —— AI API 客户端
+### 1.5 QuestionOpRepository —— 题库操作台账（用户需求）
+
+```python
+class QuestionOpRepository(ABC):
+    def record(self, record: QuestionOpRecord) -> None
+    def list_records(self, actions: list[str] | None = None,
+                     limit: int | None = None) -> list[QuestionOpRecord]
+```
+
+| 项 | 说明 |
+|----|------|
+| 实现 | `infrastructure/repositories/question_op_repository.py::SQLiteQuestionOpRepository` |
+| 调用方 | `application/question_service`（写入）、`application/question_history_service`（读取）、`app/container.py` |
+| 语义 | 历史界面据此分两类展示：导入历史（action = import）与编辑历史（create / update / delete） |
+
+### 1.6 AIClient —— AI API 客户端
 
 ```python
 class AIClient(ABC):
@@ -97,7 +116,7 @@ class AIClient(ABC):
 | 异常 | `AIServiceError`：超时 / 网络失败 / 重试耗尽 / JSON 不合规 (R4-3、R15-4)；`AIConfigMissingError`：未配置 (R15-2) |
 | 调用时序 | complete -> is_configured 前置校验 -> 请求（timeout=max_retries 取自 AIConfig）-> 解析 schema -> 返回 dict |
 
-### 1.6 BaseExporter —— 试卷导出器
+### 1.7 BaseExporter —— 试卷导出器
 
 ```python
 class BaseExporter(ABC):
@@ -111,6 +130,22 @@ class BaseExporter(ABC):
 | 调用方 | `application/paper_exporter`（按 ExportFormat 路由） |
 | 语义 | 返回生成文件路径；排版契约：两部分分区 / 题型大题 / 小计与总分 / 卷末答案页 (R12) |
 | 异常 | `ExportError`：目录不可写 / 渲染依赖缺失（PDF 缺 reportlab 时提示改用 TXT，R18-4） |
+
+### 1.8 LocalImageStore —— 题目图片本地存储（用户需求）
+
+```python
+class LocalImageStore:                      # infrastructure/image_store.py
+    def __init__(self, root, subdir: str = "images") -> None
+    def save(self, source: str | Path) -> str        # 复制进 images/，返回相对路径
+    def resolve(self, relative: str | None) -> Path | None
+    def delete(self, relative: str | None) -> None
+    @staticmethod
+    def is_supported(source) -> bool
+```
+
+- 数据库只存相对路径（如 `images/xxx.png`），图片文件位于数据库同级 `images/` 目录。
+- 异常：`ImageImportError`（文件不存在 / 格式不支持）；支持 png / jpg / jpeg / bmp / gif / webp。
+- 调用方：`presentation/views/question_bank_view`（选择图片、预览）；由容器持有具体实现。
 
 ## 2. 领域校验器
 
@@ -155,14 +190,33 @@ def batch_parse(self, raw_text: str) -> list[Question]           # 粘贴文本 
 def batch_commit(self, drafts: list[Question]) -> list[Question]
 def search(self, question_filter: QuestionFilter) -> list[Question]
 def count_available(self, subject: str, difficulty: Difficulty, question_type: QuestionType) -> int
+# 用户需求追加：
+def list_subjects(self) -> list[str]                     # 可选科目（设置中维护）
+def ai_configured(self) -> bool                          # AI 是否已配置（决定按钮可用性）
+def recognize_draft(self, stem: str, options: list[Option]) -> dict
+        # AI 辨识科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析；结果仅供参考
+def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
+        # 导入历史 / 编辑历史台账
 ```
 
-调用方：`presentation/views/question_bank_view`。
+调用方：`presentation/views/question_bank_view`（录入 / 编辑 / 检索 / AI 辨识）、
+`presentation/views/history_view`（经 QuestionHistoryService 读取台账）。
+
+### 3.1.1 QuestionHistoryService（用户需求：历史中的导入 / 编辑历史）
+
+```python
+QuestionHistoryService(op_repository: QuestionOpRepository)
+
+def list_import_history(self, limit: int = 500) -> list[QuestionOpRecord]
+def list_edit_history(self, limit: int = 500) -> list[QuestionOpRecord]
+```
+
+调用方：`presentation/views/history_view`。
 
 ### 3.2 DifficultyService（R4 / R5）
 
 ```python
-DifficultyService(ai_client: AIClient)
+DifficultyService(ai_client: AIClient, config_store: ConfigStore | None = None)
 
 def analyze(self, question: Question) -> Difficulty        # 失败抛 AIServiceError
 def analyze_silent(self, question: Question) -> Difficulty # 失败返回 PENDING，不抛异常
@@ -273,7 +327,7 @@ def list_tasks(self) -> list[GenerationTask]
 def reuse_criteria(self, task_id: str) -> PaperCriteria   # 仅回填条件，题单允许不同
 ```
 
-调用方：`history_settings_view`；`paper_composer` 组卷完成后保存任务。
+调用方：`history_view`；`paper_composer` 组卷完成后保存任务。
 
 ## 4. 关键调用链（接口视角）
 
@@ -329,4 +383,5 @@ PaperGenerationView
 | question_usage | UsageRepository | 使用记录（R13） |
 | generation_tasks | TaskRepository | 组卷任务 |
 | task_exports | TaskRepository（save_task 一并写入） | 导出记录 |
-| settings | ConfigStore | AI / 评分配置（JSON 键值） |
+| settings | ConfigStore | AI / 评分 / 提示词 / 科目配置（JSON 键值） |
+| question_operations | QuestionOpRepository | 题库操作台账（导入历史 / 编辑历史） |

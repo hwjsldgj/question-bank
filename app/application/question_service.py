@@ -1,94 +1,495 @@
-"""题目服务：题库 CRUD、批量粘贴解析与可用量统计（需求 R1 / R2 / R6）。
+"""题目服务：题库 CRUD、批量粘贴解析、AI 辨识与可用量统计。
 
-依赖（构造注入）：
-- app.interfaces.repositories.QuestionRepository（题目持久化）
-- app.domain.validators.question_validator.QuestionValidator（入库前校验）
-- app.application.difficulty_service.DifficultyService（入库后触发难度分析）
+职责对应需求：
+
+- R1：题目手工录入与维护（保存 / 编辑 / 删除）
+- R2：批量粘贴录入（解析预览 -> 确认提交）
+- R5：难度、标签与质量人工修正
+- R6：题库检索与可用量统计
+- 用户需求：AI 辨识科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析（结果仅供参考）
+- 用户需求：题库操作台账（导入历史 / 编辑历史）
+
+依赖（构造注入，全部为抽象）：
+- app.interfaces.repositories.QuestionRepository
+- app.interfaces.repositories.QuestionOpRepository（可选，操作台账）
+- app.interfaces.repositories.ConfigStore（可选，科目列表与提示词）
+- app.interfaces.ai_client.AIClient（可选，AI 辨识）
+- app.domain.validators.question_validator.QuestionValidator
+- app.application.difficulty_service.DifficultyService
 
 被使用：app.presentation.views.question_bank_view、app.container
 """
 
-from app.domain.entities.question import Question, QuestionFilter
-from app.domain.enums import Difficulty, QualityFlag, QuestionType
-from app.domain.validators.question_validator import QuestionValidator
-from app.interfaces.repositories import QuestionRepository
+import re
+import uuid
 
 from app.application.difficulty_service import DifficultyService
+from app.application.prompt_utils import load_prompt_config, render
+from app.config.settings import DEFAULT_PROMPT_CONFIG, DEFAULT_SUBJECTS
+from app.domain.entities.question import Option, Question, QuestionFilter
+from app.domain.entities.question_op import QuestionOpRecord
+from app.domain.enums import (
+    Difficulty,
+    DifficultySource,
+    QualityFlag,
+    QuestionOpAction,
+    QuestionType,
+)
+from app.domain.errors import AIServiceError, QuestionValidationError
+from app.domain.validators.question_validator import QuestionValidator
+from app.interfaces.ai_client import AIClient
+from app.interfaces.repositories import (
+    ConfigStore,
+    QuestionOpRepository,
+    QuestionRepository,
+)
+
+#: 题块分隔：空行或 "---" / "===" 行
+_BLOCK_SPLIT = re.compile(r"\n\s*\n|\n\s*[-=]{3,}\s*\n")
+
+#: 字段标签行（如 "科目：数学"）
+_LABEL_LINE = re.compile(r"^\s*([\u4e00-\u9fa5A-Za-z]{1,6})\s*[：:]\s*(.*)$")
+
+#: 选项行（如 "A. 内容" / "A、内容" / "A) 内容"）
+_OPTION_LINE = re.compile(r"^\s*([A-Za-z])\s*[\.、\)．]\s*(.*)$")
+
+#: AI 辨识返回字段期望结构（提示模型输出 JSON 对象）
+RECOGNIZE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string"},
+        "knowledge_points": {"type": "array", "items": {"type": "string"}},
+        "question_type": {"type": "string"},
+        "difficulty": {"type": "string"},
+        "quality_flag": {"type": "string"},
+        "answer": {"type": "array", "items": {"type": "string"}},
+        "solution": {"type": "string"},
+    },
+}
+
+_FIELD_ALIASES: dict[str, str] = {
+    "科目": "subject",
+    "学科": "subject",
+    "subject": "subject",
+    "知识点": "knowledge",
+    "考点": "knowledge",
+    "knowledge": "knowledge",
+    "题型": "type",
+    "类型": "type",
+    "type": "type",
+    "题干": "stem",
+    "题目": "stem",
+    "stem": "stem",
+    "选项": "options",
+    "options": "options",
+    "答案": "answer",
+    "参考答案": "answer",
+    "answer": "answer",
+    "解析": "solution",
+    "solution": "solution",
+    "难度": "difficulty",
+}
+
+_TYPE_WORDS: dict[str, QuestionType] = {
+    "单选": QuestionType.SINGLE,
+    "单项选择": QuestionType.SINGLE,
+    "single": QuestionType.SINGLE,
+    "多选": QuestionType.MULTIPLE,
+    "多项选择": QuestionType.MULTIPLE,
+    "multiple": QuestionType.MULTIPLE,
+    "解答": QuestionType.SOLUTION,
+    "简答": QuestionType.SOLUTION,
+    "解答题": QuestionType.SOLUTION,
+    "solution": QuestionType.SOLUTION,
+}
+
+_DIFFICULTY_WORDS: dict[str, Difficulty] = {
+    "易": Difficulty.EASY,
+    "简单": Difficulty.EASY,
+    "easy": Difficulty.EASY,
+    "中": Difficulty.MEDIUM,
+    "中等": Difficulty.MEDIUM,
+    "medium": Difficulty.MEDIUM,
+    "难": Difficulty.HARD,
+    "困难": Difficulty.HARD,
+    "hard": Difficulty.HARD,
+}
+
+_QUALITY_WORDS: dict[str, QualityFlag] = {
+    "优质": QualityFlag.QUALITY,
+    "quality": QualityFlag.QUALITY,
+    "低质": QualityFlag.LOW,
+    "low": QualityFlag.LOW,
+    "普通": QualityFlag.NORMAL,
+    "normal": QualityFlag.NORMAL,
+}
 
 
 class QuestionService:
-    """题目服务：题库维护的统一入口。
-
-    职责对应需求：
-
-    - R1：题目手工录入与维护（保存 / 编辑 / 删除）
-    - R2：批量粘贴录入（解析预览 -> 确认提交）
-    - R6：题库检索与命中量统计
-    - R5：人工质量标记
-    """
+    """题目服务：题库维护的统一入口。"""
 
     def __init__(
         self,
         repository: QuestionRepository,
         validator: QuestionValidator,
         difficulty_service: DifficultyService,
+        op_repository: QuestionOpRepository | None = None,
+        config_store: ConfigStore | None = None,
+        ai_client: AIClient | None = None,
     ) -> None:
-        """注入仓储、校验器与难度分析服务。"""
+        """注入仓储、校验器、难度服务，以及可选的台账 / 配置 / AI 客户端。"""
         self._repository = repository
         self._validator = validator
         self._difficulty_service = difficulty_service
+        self._op_repository = op_repository
+        self._config_store = config_store
+        self._ai_client = ai_client
+
+    # ------------------------------------------------------------------ CRUD
 
     def create_question(self, draft: Question) -> Question:
-        """新增题目：校验通过后落库并触发 AI 难度分析（需求 R1 / R4）。
-
-        :param draft: 待保存的题目草稿（id 可为空，由仓储分配）
-        :return: 已落库并带唯一标识的题目
-        :raises app.domain.errors.QuestionValidationError: 题型规则不满足
-        """
-        raise NotImplementedError("TODO(R1/R4): 实现新增题目流程")
+        """新增题目：校验通过后落库并触发 AI 难度分析（需求 R1 / R4）。"""
+        self._validator.validate(draft)
+        saved = self._repository.save(draft)
+        self._analyze_if_automatic(saved)
+        self._record(
+            QuestionOpAction.CREATE,
+            saved,
+            detail=f"录入题目（{saved.type.value}）",
+        )
+        return saved
 
     def update_question(self, question_id: str, patch: dict) -> Question:
-        """编辑题目：合并字段、校验后更新，保留 id 与使用记录（需求 R1 第 3 条）。
-
-        :param question_id: 目标题目 id
-        :param patch: 待更新的字段字典（键为 Question 字段名）
-        :return: 更新后的题目
-        """
-        raise NotImplementedError("TODO(R1): 实现编辑题目流程")
+        """编辑题目：合并字段、校验后更新，保留 id 与使用记录（需求 R1 第 3 条）。"""
+        current = self._repository.get(question_id)
+        if current is None:
+            raise QuestionValidationError(f"题目不存在：{question_id}")
+        old = Question(**{**current.__dict__})
+        for key, value in patch.items():
+            if hasattr(current, key):
+                setattr(current, key, value)
+        current.id = question_id
+        self._validator.validate(current)
+        updated = self._repository.update(current)
+        self._analyze_if_automatic(updated)
+        self._record(
+            QuestionOpAction.UPDATE,
+            updated,
+            detail=self._diff_detail(old, updated),
+        )
+        return updated
 
     def delete_question(self, question_id: str) -> None:
         """删除题目，使其不再参与后续组卷（需求 R1 第 4 条）。"""
-        raise NotImplementedError("TODO(R1): 实现删除题目")
+        current = self._repository.get(question_id)
+        self._repository.delete(question_id)
+        if current is not None:
+            self._record(QuestionOpAction.DELETE, current, detail="删除题目")
 
     def set_quality_flag(self, question_id: str, flag: QualityFlag) -> None:
         """设置人工质量标记，参与后续选题评分（需求 R5 第 3 条 / R8 第 8 条）。"""
-        raise NotImplementedError("TODO(R5): 实现质量标记设置")
+        current = self._repository.get(question_id)
+        if current is None:
+            raise QuestionValidationError(f"题目不存在：{question_id}")
+        flag = QualityFlag(flag)
+        current.quality_flag = flag
+        updated = self._repository.update(current)
+        self._record(
+            QuestionOpAction.UPDATE,
+            updated,
+            detail=f"质量标记改为「{flag.value}」",
+        )
+
+    # ------------------------------------------------------------- 批量粘贴
 
     def batch_parse(self, raw_text: str) -> list[Question]:
-        """把粘贴的多题文本拆分为候选题目列表（需求 R2 第 1 条）。
-
-        无法解析必填字段的条目以"待修正"状态返回，交由界面预览突出显示
-        （需求 R2 第 2 / 4 条）。
-
-        :param raw_text: 用户粘贴的原始文本
-        :return: 候选题目列表（未落库）
-        """
-        raise NotImplementedError("TODO(R2): 实现粘贴文本解析")
+        """把粘贴的多题文本拆分为候选题目列表（需求 R2 第 1 条）。"""
+        blocks = [block.strip() for block in _BLOCK_SPLIT.split(raw_text or "") if block.strip()]
+        return [self._parse_block(block) for block in blocks]
 
     def batch_commit(self, drafts: list[Question]) -> list[Question]:
-        """批量写入确认后的候选题目（需求 R2 第 3 条），逐题触发难度分析。
+        """批量写入确认后的候选题目（需求 R2 第 3 条）。"""
+        saved_questions: list[Question] = []
+        batch_id = uuid.uuid4().hex[:12]
+        failures: list[str] = []
+        for index, draft in enumerate(drafts, start=1):
+            try:
+                self._validator.validate(draft)
+            except QuestionValidationError as exc:
+                failures.append(f"第 {index} 题：{exc}")
+                continue
+            saved = self._repository.save(draft)
+            self._analyze_if_automatic(saved)
+            self._record(
+                QuestionOpAction.IMPORT,
+                saved,
+                detail=f"批量导入（批次 {batch_id}）",
+                batch_id=batch_id,
+            )
+            saved_questions.append(saved)
+        if failures:
+            raise QuestionValidationError(
+                f"共 {len(failures)} 道题未通过校验：" + "；".join(failures)
+            )
+        return saved_questions
 
-        :param drafts: 预览确认后的候选题目
-        :return: 已落库的题目列表
-        """
-        raise NotImplementedError("TODO(R2): 实现批量入库")
+    # ------------------------------------------------------------- 检索统计
 
     def search(self, question_filter: QuestionFilter) -> list[Question]:
         """按条件检索题库（需求 R6 第 1 条），透传仓储查询。"""
-        raise NotImplementedError("TODO(R6): 实现题库检索")
+        return self._repository.search(question_filter)
 
     def count_available(
         self, subject: str, difficulty: Difficulty, question_type: QuestionType
     ) -> int:
         """统计某组卷条件的命中题数量（需求 R6 第 2 / 3 条）。"""
-        raise NotImplementedError("TODO(R6): 实现命中量统计")
+        return self._repository.count_available(subject, difficulty, question_type)
+
+    # ------------------------------------------------------------- AI 辨识
+
+    def ai_configured(self) -> bool:
+        """AI 服务是否已配置（未配置时界面禁用"AI 辨识"按钮）。"""
+        return bool(self._ai_client is not None and self._ai_client.is_configured())
+
+    def recognize_draft(self, stem: str, options: list[Option]) -> dict:
+        """调用 AI 辨识题目字段，结果仅供参考（用户需求）。
+
+        :param stem: 题干文本
+        :param options: 当前已填选项（可为空）
+        :return: 归一化后的字段字典，键包含 subject / knowledge_points /
+            question_type / difficulty / quality_flag / answer / solution
+        :raises app.domain.errors.AIServiceError: 未配置或调用失败
+        """
+        if self._ai_client is None:
+            raise AIServiceError("未接入 AI 客户端，无法进行 AI 辨识")
+        subjects = self.list_subjects()
+        prompts = load_prompt_config(self._config_store)
+        prompt = render(
+            prompts.recognize_prompt,
+            DEFAULT_PROMPT_CONFIG.recognize_prompt,
+            subjects="、".join(subjects),
+            stem=stem,
+            options="；".join(f"{o.key}. {o.text}" for o in options) or "无",
+        )
+        data = self._ai_client.complete(prompt, RECOGNIZE_SCHEMA)
+        return self._normalize_recognition(data)
+
+    def list_subjects(self) -> list[str]:
+        """返回可选科目列表（科目改为选择式录入，由设置界面维护）。"""
+        if self._config_store is None:
+            return list(DEFAULT_SUBJECTS)
+        try:
+            return list(self._config_store.load_subjects())
+        except Exception:  # noqa: BLE001 - 配置读取失败回退默认科目
+            return list(DEFAULT_SUBJECTS)
+
+    # ------------------------------------------------------------- 操作台账
+
+    def list_operations(
+        self, actions: list[QuestionOpAction] | None = None, limit: int | None = None
+    ) -> list[QuestionOpRecord]:
+        """读取题库操作台账（导入历史 / 编辑历史）。"""
+        if self._op_repository is None:
+            return []
+        values = [action.value for action in actions] if actions else None
+        return self._op_repository.list_records(values, limit)
+
+    # ------------------------------------------------------------------ 内部
+
+    def _analyze_if_automatic(self, question: Question) -> None:
+        """难度来源为 AI 且尚未标注时执行难度分析。
+
+        人工设置（difficulty_source = MANUAL）或已带难度值的题目保持不变
+        （需求 R4 第 4 条 / R5 第 4 条）。
+        """
+        if question.difficulty_source is DifficultySource.MANUAL:
+            return
+        if question.difficulty is not Difficulty.PENDING:
+            return
+        difficulty = self._difficulty_service.analyze_silent(question)
+        question.difficulty = difficulty
+        if difficulty is not Difficulty.PENDING:
+            self._repository.update(question)
+
+    def _record(
+        self,
+        action: QuestionOpAction,
+        question: Question,
+        detail: str = "",
+        batch_id: str | None = None,
+    ) -> None:
+        """写入一条题库操作记录；台账写入失败不影响主流程。"""
+        if self._op_repository is None:
+            return
+        record = QuestionOpRecord(
+            id="",
+            action=action,
+            question_id=question.id,
+            subject=question.subject,
+            stem_excerpt=question.stem[:60],
+            batch_id=batch_id,
+            detail=detail,
+        )
+        try:
+            self._op_repository.record(record)
+        except Exception:  # noqa: BLE001 - 台账非关键路径
+            pass
+
+    @staticmethod
+    def _diff_detail(old: Question, new: Question) -> str:
+        """比较新旧题目，生成可读的编辑说明。"""
+        parts: list[str] = []
+        if old.subject != new.subject:
+            parts.append(f"科目：{old.subject or '—'} → {new.subject or '—'}")
+        if old.type != new.type:
+            parts.append(f"题型：{old.type.value} → {new.type.value}")
+        if old.difficulty != new.difficulty:
+            parts.append(f"难度：{old.difficulty.value} → {new.difficulty.value}")
+        if old.quality_flag != new.quality_flag:
+            parts.append(
+                f"质量：{old.quality_flag.value} → {new.quality_flag.value}"
+            )
+        if old.stem != new.stem:
+            parts.append("题干已修改")
+        if old.answer != new.answer:
+            parts.append("答案已修改")
+        if old.image_path != new.image_path:
+            parts.append("图片已更新")
+        return "；".join(parts) if parts else "保存编辑（内容无变化）"
+
+    def _parse_block(self, block: str) -> Question:
+        """解析单个题块为候选题目（需求 R2）。"""
+        fields: dict[str, str] = {}
+        current: str | None = None
+        for line in block.splitlines():
+            match = _LABEL_LINE.match(line)
+            alias = None
+            if match:
+                alias = _FIELD_ALIASES.get(match.group(1).strip().lower())
+            if alias:
+                current = alias
+                fields[alias] = match.group(2).strip()
+            elif current:
+                # 未标注"选项："时，题干后紧跟的 A./B. 行按选项归类
+                if current in ("stem", "options") and _OPTION_LINE.match(line.strip()):
+                    current = "options"
+                    fields["options"] = (
+                        (fields.get("options", "") + "\n" + line).strip()
+                    )
+                else:
+                    fields[current] = (fields[current] + "\n" + line).strip()
+
+        if not fields:
+            # 完全无字段标签：把 A./B. 行抽为选项，其余作为题干
+            stem_lines: list[str] = []
+            option_lines: list[str] = []
+            for line in block.splitlines():
+                if _OPTION_LINE.match(line.strip()):
+                    option_lines.append(line)
+                else:
+                    stem_lines.append(line)
+            fields["stem"] = "\n".join(stem_lines).strip()
+            fields["options"] = "\n".join(option_lines)
+
+        stem = fields.get("stem", "").strip() or block.strip()
+        options = self._parse_options(fields.get("options", ""))
+        question_type = self._parse_type(fields.get("type", ""), options, fields.get("answer", ""))
+        if question_type is QuestionType.SOLUTION:
+            options = []
+        return Question(
+            id="",
+            subject=fields.get("subject", "").strip(),
+            knowledge_points=self._split_knowledge(fields.get("knowledge", "")),
+            type=question_type,
+            stem=stem,
+            options=options,
+            answer=self._parse_answer(fields.get("answer", ""), question_type),
+            solution=fields.get("solution", "").strip() or None,
+            difficulty=_DIFFICULTY_WORDS.get(
+                fields.get("difficulty", "").strip().lower(), Difficulty.PENDING
+            ),
+            difficulty_source=(
+                DifficultySource.MANUAL
+                if fields.get("difficulty", "").strip()
+                else DifficultySource.AI
+            ),
+        )
+
+    @staticmethod
+    def _parse_options(raw: str) -> list[Option]:
+        """从"选项"段落解析选项列表。"""
+        options: list[Option] = []
+        for line in raw.splitlines():
+            match = _OPTION_LINE.match(line.strip())
+            if match:
+                options.append(Option(key=match.group(1).upper(), text=match.group(2).strip()))
+        return options
+
+    @staticmethod
+    def _parse_type(
+        raw: str, options: list[Option], answer: str
+    ) -> QuestionType:
+        """推断题型：显式标注优先，其次按选项与答案形态判断。"""
+        text = raw.strip().lower()
+        for word, question_type in _TYPE_WORDS.items():
+            if word in text:
+                return question_type
+        if len(options) >= 2:
+            letters = re.findall(r"[A-Za-z]", answer)
+            return QuestionType.SINGLE if len(letters) <= 1 else QuestionType.MULTIPLE
+        return QuestionType.SOLUTION
+
+    @staticmethod
+    def _parse_answer(raw: str, question_type: QuestionType) -> list[str]:
+        """解析答案：选择题取标号，解答题取参考答案文本。"""
+        text = raw.strip()
+        if not text:
+            return []
+        if question_type is QuestionType.SOLUTION:
+            return [text]
+        return sorted({letter.upper() for letter in re.findall(r"[A-Za-z]", text)})
+
+    @staticmethod
+    def _split_knowledge(raw: str) -> list[str]:
+        """拆分知识点（支持中英文逗号、顿号与空格分隔）。"""
+        return [
+            part.strip()
+            for part in re.split(r"[,，、;；\s]+", raw or "")
+            if part.strip()
+        ]
+
+    def _normalize_recognition(self, data: dict) -> dict:
+        """把 AI 返回结果归一化为界面可直接使用的字段字典。"""
+        subject = str(data.get("subject", "")).strip()
+        points = data.get("knowledge_points") or data.get("knowledge") or []
+        if isinstance(points, str):
+            points = self._split_knowledge(points)
+        if not isinstance(points, list):
+            points = []
+
+        type_raw = str(data.get("question_type", data.get("type", ""))).strip().lower()
+        question_type = next(
+            (value for word, value in _TYPE_WORDS.items() if word in type_raw),
+            QuestionType.SINGLE,
+        )
+
+        answer = data.get("answer", [])
+        if isinstance(answer, str):
+            answer = self._parse_answer(answer, question_type)
+        if not isinstance(answer, list):
+            answer = []
+
+        solution = data.get("solution")
+        return {
+            "subject": subject,
+            "knowledge_points": [str(item).strip() for item in points if str(item).strip()],
+            "question_type": question_type,
+            "difficulty": _DIFFICULTY_WORDS.get(
+                str(data.get("difficulty", "")).strip().lower(), Difficulty.PENDING
+            ),
+            "quality_flag": _QUALITY_WORDS.get(
+                str(data.get("quality_flag", "")).strip().lower(), QualityFlag.NORMAL
+            ),
+            "answer": [str(item).strip() for item in answer if str(item).strip()],
+            "solution": str(solution).strip() if solution else "",
+        }

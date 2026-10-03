@@ -71,6 +71,7 @@ def test_schema_covers_all_tables() -> None:
         "generation_tasks",
         "task_exports",
         "settings",
+        "question_operations",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in joined
 

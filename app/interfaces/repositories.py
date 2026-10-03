@@ -13,8 +13,9 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from app.domain.entities.configs import AIConfig, ScoringConfig
+from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
 from app.domain.entities.question import Question, QuestionFilter
+from app.domain.entities.question_op import QuestionOpRecord
 from app.domain.entities.task import GenerationTask
 from app.domain.entities.usage_record import UsageRecord
 
@@ -93,13 +94,31 @@ class TaskRepository(ABC):
         """按创建时间倒序返回全部任务（需求 R14 第 2 条）。"""
 
 
+class QuestionOpRepository(ABC):
+    """题库操作台账仓储接口：导入历史与编辑历史（用户需求）。
+
+    实现方：app.infrastructure.repositories.question_op_repository
+    调用方：app.application.question_service（写入）、app.application.question_history_service（读取）
+    """
+
+    @abstractmethod
+    def record(self, record: QuestionOpRecord) -> None:
+        """追加一条题库操作记录。"""
+
+    @abstractmethod
+    def list_records(
+        self, actions: list[str] | None = None, limit: int | None = None
+    ) -> list[QuestionOpRecord]:
+        """按操作类型筛选并返回记录（按时间倒序）。"""
+
+
 class ConfigStore(ABC):
-    """配置存储接口：AI 配置与评分配置的持久化（需求 R15）。
+    """配置存储接口：AI 配置、评分配置、提示词与科目列表的持久化（需求 R15）。
 
     密钥仅保存在本机（需求 R18），实现方不得外传。
 
     实现方：app.infrastructure.config_store.SQLiteConfigStore
-    调用方：app.container（装配时加载）、app.presentation.views.history_settings_view
+    调用方：app.container（装配时加载）、app.presentation.views.settings_view
     """
 
     @abstractmethod
@@ -117,3 +136,19 @@ class ConfigStore(ABC):
     @abstractmethod
     def save_scoring_config(self, config: ScoringConfig) -> None:
         """保存评分与冷却配置（需求 R8 第 7 条 / R13 第 4 条）。"""
+
+    @abstractmethod
+    def load_prompt_config(self) -> PromptConfig:
+        """读取 AI 提示词配置；无配置时返回默认模板。"""
+
+    @abstractmethod
+    def save_prompt_config(self, config: PromptConfig) -> None:
+        """保存 AI 提示词配置，用于后续 AI 调用。"""
+
+    @abstractmethod
+    def load_subjects(self) -> list[str]:
+        """读取可选科目列表；无配置时返回默认科目。"""
+
+    @abstractmethod
+    def save_subjects(self, subjects: list[str]) -> None:
+        """保存可选科目列表（科目改为选择式录入后由设置界面维护）。"""

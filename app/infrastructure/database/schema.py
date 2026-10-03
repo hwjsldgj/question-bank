@@ -11,7 +11,8 @@
 - generation_tasks 组卷任务（需求 R14）
 - task_questions   任务与题目的关联
 - task_exports     任务导出记录
-- settings         键值配置（AIConfig / ScoringConfig，需求 R15）
+- settings         键值配置（AIConfig / ScoringConfig / PromptConfig / 科目列表，需求 R15）
+- question_operations 题库操作台账（导入历史 / 编辑历史）
 
 依赖：app.infrastructure.database.connection
 被使用：app.container（启动时初始化）
@@ -35,6 +36,7 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         difficulty_source TEXT NOT NULL DEFAULT 'ai',
         quality_flag      TEXT NOT NULL DEFAULT 'normal',
         source            TEXT NOT NULL DEFAULT 'bank',
+        image_path        TEXT,
         created_at        TEXT,
         updated_at        TEXT
     )
@@ -83,14 +85,42 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         value TEXT NOT NULL
     )
     """,
+    # 题库操作台账：导入历史 / 编辑历史（用户需求）
+    """
+    CREATE TABLE IF NOT EXISTS question_operations (
+        id           TEXT PRIMARY KEY,
+        action       TEXT NOT NULL CHECK (action IN ('create', 'update', 'delete', 'import')),
+        question_id  TEXT NOT NULL DEFAULT '',
+        subject      TEXT NOT NULL DEFAULT '',
+        stem_excerpt TEXT NOT NULL DEFAULT '',
+        batch_id     TEXT,
+        detail       TEXT NOT NULL DEFAULT '',
+        created_at   TEXT
+    )
+    """,
+)
+
+#: 幂等列迁移：(表名, 列名, 列定义)
+COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    # 题目图片列为后加字段，旧库需补列（用户需求：题目图片导入）
+    ("questions", "image_path", "TEXT"),
 )
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """执行幂等建表迁移（应用启动时调用一次）。
+    """执行幂等建表与补列迁移（应用启动时调用一次）。
 
     :param conn: 已打开的 SQLite 连接
     """
     for statement in SCHEMA_STATEMENTS:
         conn.execute(statement)
+    for table, column, definition in COLUMN_MIGRATIONS:
+        if not _has_column(conn, table, column):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     conn.commit()
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """判断表中是否已存在某列（旧库兼容用）。"""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row[1] == column for row in rows)

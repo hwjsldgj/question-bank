@@ -60,7 +60,7 @@ flowchart LR
 
 | 文件 | 依赖 | 被谁使用（调用方） | 被谁实现 |
 |------|------|--------------------|----------|
-| `app/interfaces/repositories.py` | `domain/entities/{configs,question,task,usage_record}` | `application/question_service`、`application/selection_scorer`、`application/paper_composer`、`application/task_history_service`、`app/container.py`（类型注解） | `infrastructure/repositories/*`、`infrastructure/config_store.py` |
+| `app/interfaces/repositories.py` | `domain/entities/{configs,question,question_op,task,usage_record}` | `application/question_service`、`application/question_history_service`、`application/selection_scorer`、`application/paper_composer`、`application/task_history_service`、`app/container.py`（类型注解） | `infrastructure/repositories/*`、`infrastructure/config_store.py` |
 | `app/interfaces/ai_client.py` | 无 | `application/difficulty_service`、`application/question_generator`、`app/container.py` | `infrastructure/ai/ai_client.py` |
 | `app/interfaces/exporters.py` | `domain/entities/{configs,paper}` | `application/paper_exporter`、`app/container.py` | `infrastructure/exporters/{txt,pdf}_exporter.py` |
 
@@ -68,8 +68,10 @@ flowchart LR
 
 | 文件 | 依赖（接口 / 领域 / 内部协作） | 被谁使用 |
 |------|--------------------------------|----------|
-| `application/question_service.py` | `interfaces/repositories.QuestionRepository`、`domain/validators/question_validator`、`application/difficulty_service` | `presentation/views/question_bank_view`、`app/container.py` |
-| `application/difficulty_service.py` | `interfaces/ai_client.AIClient` | `application/question_service`、`app/container.py` |
+| `application/question_service.py` | `interfaces/repositories.{QuestionRepository,QuestionOpRepository,ConfigStore}`、`interfaces/ai_client.AIClient`、`domain/validators/question_validator`、`application/{difficulty_service,prompt_utils}`、`config/settings` | `presentation/views/question_bank_view`、`app/container.py` |
+| `application/difficulty_service.py` | `interfaces/ai_client.AIClient`、`interfaces/repositories.ConfigStore`（提示词）、`application/prompt_utils` | `application/question_service`、`app/container.py` |
+| `application/question_history_service.py` | `interfaces/repositories.QuestionOpRepository`、`domain/entities/question_op`、`domain/enums` | `presentation/views/history_view`、`app/container.py` |
+| `application/prompt_utils.py` | `domain/entities/configs.PromptConfig`、`config/settings`（默认模板） | `application/{difficulty_service,question_service}` |
 | `application/cooldown_policy.py` | `domain/entities/configs.ScoringConfig`、`domain/entities/usage_record` | `application/selection_scorer`、`app/container.py` |
 | `application/selection_scorer.py` | `interfaces/repositories.UsageRepository`、`application/cooldown_policy`、`domain/entities/{configs,scoring}` | `application/paper_composer`、`app/container.py` |
 | `application/weighted_sampler.py` | `domain/entities/scoring.ScoredQuestion` | `application/paper_composer`、`app/container.py` |
@@ -77,7 +79,7 @@ flowchart LR
 | `application/paper_composer.py` | `interfaces/repositories.{QuestionRepository,UsageRepository}`、`application/{selection_scorer,weighted_sampler,question_generator,score_calculator}`、`domain/entities/{configs,criteria,paper}`、`domain/errors` | `presentation/views/paper_generation_view`、`app/container.py` |
 | `application/score_calculator.py` | `domain/entities/paper` | `application/paper_composer`、`presentation/views/paper_generation_view` |
 | `application/paper_exporter.py` | `interfaces/exporters.BaseExporter`（格式映射注入）、`domain/validators/score_validator`、`domain/entities/{configs,paper}` | `presentation/views/paper_generation_view`、`app/container.py` |
-| `application/task_history_service.py` | `interfaces/repositories.TaskRepository` | `presentation/views/history_settings_view`、`app/container.py` |
+| `application/task_history_service.py` | `interfaces/repositories.TaskRepository` | `presentation/views/history_view`、`app/container.py` |
 
 ### 2.5 基础设施层（infrastructure，实现方）
 
@@ -88,10 +90,12 @@ flowchart LR
 | `infrastructure/repositories/question_repository.py` | `database/connection`、`database/schema`（questions 表）、`domain/entities/question` | `interfaces/repositories.QuestionRepository` | `app/container.py` |
 | `infrastructure/repositories/usage_repository.py` | `database/connection`、`database/schema`（question_usage 表）、`domain/entities/usage_record` | `interfaces/repositories.UsageRepository` | `app/container.py` |
 | `infrastructure/repositories/task_repository.py` | `database/connection`、`database/schema`（generation_tasks 等表）、`domain/entities/task` | `interfaces/repositories.TaskRepository` | `app/container.py` |
-| `infrastructure/ai/ai_client.py` | `requests`、`domain/entities/configs.AIConfig`、`domain/errors` | `interfaces/ai_client.AIClient` | `app/container.py` |
+| `infrastructure/ai/ai_client.py` | 标准库 `urllib`/`json`/`socket`、`domain/entities/configs.AIConfig`、`domain/errors` | `interfaces/ai_client.AIClient` | `app/container.py` |
 | `infrastructure/exporters/txt_exporter.py` | 标准库 pathlib、`domain/entities/{configs,paper}`、`domain/errors` | `interfaces/exporters.BaseExporter` | `app/container.py`（注册）、`infrastructure/exporters/pdf_exporter.py`（目录校验复用） |
 | `infrastructure/exporters/pdf_exporter.py` | `reportlab`（方法内惰性导入）、`txt_exporter`（目录校验） | `interfaces/exporters.BaseExporter` | `app/container.py`（注册） |
-| `infrastructure/config_store.py` | `database/connection`、`database/schema`（settings 表）、`domain/entities/configs`、`config/settings`（默认值回退） | `interfaces/repositories.ConfigStore` | `app/container.py`、`presentation/views/history_settings_view` |
+| `infrastructure/config_store.py` | `database/connection`、`database/schema`（settings 表）、`domain/entities/configs`、`config/settings`（默认值回退） | `interfaces/repositories.ConfigStore` | `app/container.py`、`presentation/views/settings_view` |
+| `infrastructure/image_store.py` | 标准库 `shutil`/`uuid`/`pathlib`、`domain/errors` | —（容器直接持有具体实现） | `app/container.py`、`presentation/views/question_bank_view` |
+| `infrastructure/repositories/question_op_repository.py` | `database/connection`、`database/schema`（question_operations 表）、`domain/entities/question_op`、`domain/enums` | `interfaces/repositories.QuestionOpRepository` | `app/container.py`（装配给 QuestionService / QuestionHistoryService） |
 
 ### 2.6 表现层（presentation）
 
@@ -99,16 +103,18 @@ flowchart LR
 |------|------|----------|
 | `presentation/main_window.py` | `PySide6.QtGui`/`QtWidgets`、`app/container.Container`、`presentation/views/*`、`presentation/ui_utils`、`domain/entities/criteria`（复用信号载荷） | `main.py` |
 | `presentation/ui_utils.py` | `PySide6.QtCore`/`QtWidgets`、`domain/enums`（标签映射）、`domain/errors`（异常分类） | `presentation/main_window.py`、`presentation/views/*` |
-| `presentation/views/question_bank_view.py` | `PySide6.QtCore`/`QtGui`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/question`、`domain/enums`、`app/container.Container`（取 QuestionService、UsageRepository） | `presentation/main_window.py`（发出 `questions_changed`） |
+| `presentation/views/question_bank_view.py` | `PySide6.QtCore`/`QtGui`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/question`、`domain/enums`、`app/container.Container`（取 QuestionService、UsageRepository、image_store） | `presentation/main_window.py`（发出 `questions_changed`） |
 | `presentation/views/paper_generation_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/{criteria,paper,question,configs}`、`domain/enums`、`app/container.Container`（取 PaperComposer / ScoreCalculator / PaperExporter / QuestionService） | `presentation/main_window.py`（被 F5 与信号驱动刷新） |
-| `presentation/views/history_settings_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/{criteria,task,configs}`、`domain/enums`、`app/container.Container`（取 TaskHistoryService / ConfigStore） | `presentation/main_window.py`（发出 `config_changed` / `reuse_criteria_requested`） |
+| `presentation/views/history_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/{criteria,task}`、`app/container.Container`（取 TaskHistoryService / QuestionHistoryService） | `presentation/main_window.py`（发出 `reuse_criteria_requested`） |
+| `presentation/views/settings_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/configs`、`domain/enums`、`config/settings`（默认科目与提示词）、`app/container.Container`（取 ConfigStore） | `presentation/main_window.py`（发出 `config_changed`） |
 
 表现层内部信号（跨视图协调，由主窗口连接）：
 
 ```text
 QuestionBankView.questions_changed      -> PaperGenerationView.refresh_hit_counts
-HistorySettingsView.config_changed      -> MainWindow 刷新 AI 状态 + 命中量
-HistorySettingsView.reuse_criteria_requested(criteria)
+                                        -> HistoryView.reload_question_history
+SettingsView.config_changed             -> MainWindow 刷新 AI 状态 + 科目下拉框
+HistoryView.reuse_criteria_requested(criteria)
                                         -> MainWindow 回填 PaperGenerationView 并切页
 ```
 
@@ -118,7 +124,7 @@ HistorySettingsView.reuse_criteria_requested(criteria)
 |----|------|----------|------|
 | PySide6 | >=6.6 | `presentation/*`、`main.py` | 桌面 GUI |
 | reportlab | >=4.0 | `infrastructure/exporters/pdf_exporter.py`（惰性导入） | PDF 试卷渲染 |
-| requests | >=2.31 | `infrastructure/ai/ai_client.py` | AI API HTTP 访问 |
+| requests | >=2.31 | （可选）AI 调用已改用标准库 urllib | AI API HTTP 访问（备选） |
 | pytest | >=8.0 | `tests/*` | 测试 |
 
 ## 4. 对象装配关系（container.build_container）
@@ -128,13 +134,17 @@ DatabaseConnection(db_path)
  ├─ SQLiteQuestionRepository ──> QuestionRepository ─┐
  ├─ SQLiteUsageRepository ────> UsageRepository ─────┤
  ├─ SQLiteTaskRepository ─────> TaskRepository ──────┤
+ ├─ SQLiteQuestionOpRepository > QuestionOpRepository┤
  └─ SQLiteConfigStore ────────> ConfigStore ─────────┘
-        │ load_ai_config / load_scoring_config
+        │ load_ai_config / load_scoring_config / load_prompt_config / load_subjects
         ▼
- AIConfig ──> OpenAICompatibleAIClient ──> AIClient
+ ConfigStore.load_ai_config ──> OpenAICompatibleAIClient ──> AIClient
+ ConfigStore ──> DifficultyService ──> QuestionService（AI 辨识 / 入库难度分析）
+              ──> QuestionOpRepository ──> QuestionHistoryService（导入 / 编辑历史）
+ Path(db_path).parent ──> LocalImageStore ──> QuestionBankView（图片导入与预览）
  ScoringConfig ──> CooldownPolicy ──> SelectionScorer ──> PaperComposer
                   WeightedSampler ──┘        │
                   QuestionGenerator ─────────┤
                   ScoreCalculator ───────────┤
- Container ──> MainWindow ──> 三个视图（按需取服务）
+ Container ──> MainWindow ──> 四个视图（题库 / 组卷 / 历史 / 设置，按需取服务）
 ```

@@ -35,3 +35,7 @@ class AIConfigMissingError(AIServiceError):
 
 class ExportError(DomainError):
     """试卷导出失败（需求 R12 / R18），例如目录不可写或运行环境缺失。"""
+
+
+class ImageImportError(DomainError):
+    """题目图片导入失败（文件不存在、格式不受支持或复制失败）。"""

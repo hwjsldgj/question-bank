@@ -11,7 +11,7 @@
 依赖：PySide6.QtCore、PySide6.QtWidgets、app.domain.enums、app.domain.errors
 被使用：app.presentation.main_window、app.presentation.views.question_bank_view、
         app.presentation.views.paper_generation_view、
-        app.presentation.views.history_settings_view
+        app.presentation.views.history_view、app.presentation.views.settings_view
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from app.domain.enums import (
     Difficulty,
     ExportFormat,
     QualityFlag,
+    QuestionOpAction,
     QuestionSource,
     QuestionType,
     SectionKind,
@@ -69,6 +70,14 @@ SECTION_LABELS: dict[SectionKind, str] = {
 EXPORT_FORMAT_LABELS: dict[ExportFormat, str] = {
     ExportFormat.TXT: "TXT 文本",
     ExportFormat.PDF: "PDF 文档",
+}
+
+#: 题库操作类型 -> 中文标签（导入历史 / 编辑历史）
+OP_ACTION_LABELS: dict[QuestionOpAction, str] = {
+    QuestionOpAction.CREATE: "录入",
+    QuestionOpAction.UPDATE: "编辑",
+    QuestionOpAction.DELETE: "删除",
+    QuestionOpAction.IMPORT: "导入",
 }
 
 

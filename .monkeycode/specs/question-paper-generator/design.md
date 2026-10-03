@@ -238,6 +238,7 @@ Question
   difficulty_source: "ai" | "manual"
   quality_flag: "normal" | "quality" | "low"
   source: "bank" | "ai"
+  image_path: string | null                   # 本地 images/ 相对路径（用户需求：图片导入）
   created_at: datetime
   updated_at: datetime
 ```
@@ -312,6 +313,7 @@ AIConfig
 - `generation_tasks`：组卷任务
 - `task_questions`：任务与题目的关联
 - `settings`：AI 配置与评分配置
+- `question_operations`：题库操作台账（导入历史 / 编辑历史，用户需求）
 
 ## 关键流程
 

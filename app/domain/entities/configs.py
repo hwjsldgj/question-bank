@@ -76,6 +76,29 @@ class AIConfig:
 
 
 @dataclass
+class PromptConfig:
+    """AI 提示词配置（用户需求：AI 设置中可修改提示词）。
+
+    三个可编辑模板分别用于：
+
+    - ``recognize_prompt``：AI 辨识（科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析）
+    - ``difficulty_prompt``：入库后的难度分析
+    - ``supplement_prompt``：题库不足时的 AI 补题
+
+    模板中的 ``{name}`` 占位符由调用方填充；修改后立即用于后续 AI 调用。
+    """
+
+    recognize_prompt: str = ""
+    """AI 辨识提示词模板。"""
+
+    difficulty_prompt: str = ""
+    """难度分析提示词模板。"""
+
+    supplement_prompt: str = ""
+    """AI 补题提示词模板。"""
+
+
+@dataclass
 class ExportOptions:
     """导出选项（需求 R12 / R18）。
 

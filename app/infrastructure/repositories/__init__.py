@@ -5,6 +5,7 @@
 - ``question_repository.SQLiteQuestionRepository`` -> interfaces.repositories.QuestionRepository
 - ``usage_repository.SQLiteUsageRepository``       -> interfaces.repositories.UsageRepository
 - ``task_repository.SQLiteTaskRepository``         -> interfaces.repositories.TaskRepository
+- ``question_op_repository.SQLiteQuestionOpRepository`` -> interfaces.repositories.QuestionOpRepository
 
 被使用：app.container（装配）、tests（以接口契约驱动测试）
 """

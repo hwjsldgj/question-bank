@@ -92,3 +92,18 @@ class CooldownMode(str, Enum):
 
     DAYS = "days"
     TASKS = "tasks"
+
+
+class QuestionOpAction(str, Enum):
+    """题库操作类型：用于"导入历史 / 编辑历史"台账。
+
+    - ``CREATE`` 单题录入
+    - ``UPDATE`` 题目编辑（含难度 / 质量标记修正）
+    - ``DELETE`` 题目删除
+    - ``IMPORT`` 批量导入（粘贴解析或图片批量入库）
+    """
+
+    CREATE = "create"
+    UPDATE = "update"
+    DELETE = "delete"
+    IMPORT = "import"

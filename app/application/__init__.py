@@ -15,6 +15,8 @@
 - ``score_calculator``      分值与总分计算（R11）
 - ``paper_exporter``        导出编排（R12）
 - ``task_history_service``  组卷历史与配置复用（R14）
+- ``question_history_service`` 题库操作台账：导入历史 / 编辑历史（用户需求）
+- ``prompt_utils``          用户可编辑提示词的安全填充
 
 约束：本层禁止直接依赖 sqlite3 / requests / reportlab / PySide6 等具体实现，
 一切外部能力经 app.interfaces 抽象注入。

@@ -2,14 +2,21 @@
 
 界面结构（内嵌三个子页签）：
 
-- 录入 / 编辑：结构化表单（科目 / 知识点 / 题型 / 选项 / 答案 / 解析 /
-  难度 / 质量标记），题型为解答题时切换为"参考答案"输入
+- 录入 / 编辑：结构化表单（科目下拉选择 / 知识点 / 题型 / 选项 / 答案 / 解析 /
+  难度 / 质量标记 / 题目图片），题型为解答题时切换为"参考答案"输入
 - 批量粘贴：粘贴多题文本 -> 解析预览（"待修正"行标红）-> 确认批量入库
-- 检索：按科目 / 知识点 / 难度 / 题型过滤，结果展示使用次数与最近使用时间，
+- 检索：按科目（下拉）/ 知识点 / 难度 / 题型过滤，结果展示使用次数与最近使用时间，
   并可对选中题目执行编辑 / 删除 / 质量标记
 
+用户需求补充：
+
+- 科目改为下拉选择（列表在"设置 -> 科目管理"中维护）
+- 支持题目图片导入（复制到本地 images/ 目录并预览）
+- "AI 辨识"按钮调用 AI 识别科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案 / 解析，
+  结果仅供参考，须由出题者人工确认后保存
+
 所有业务操作经 ``app.application.question_service.QuestionService`` 完成；
-框架阶段服务为 TODO，界面通过 ``ui_utils.run_guarded`` 统一提示而不崩溃。
+异常经 ``ui_utils.run_guarded`` 统一提示而不崩溃。
 
 依赖：PySide6.QtCore / QtGui / QtWidgets、app.container.Container、
       app.domain.entities.question、app.domain.enums、app.presentation.ui_utils
@@ -18,10 +25,11 @@
 """
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -41,6 +49,9 @@ from app.domain.entities.question import Option, Question, QuestionFilter
 from app.domain.enums import Difficulty, DifficultySource, QualityFlag, QuestionType
 from app.presentation import ui_utils
 
+#: 图片预览的最大尺寸（像素）
+PREVIEW_SIZE = (220, 160)
+
 
 class QuestionBankView(QWidget):
     """题库管理视图：题目增删改查、批量粘贴与检索界面。"""
@@ -58,8 +69,10 @@ class QuestionBankView(QWidget):
         self._editing_id: str | None = None
         self._paste_drafts: list[Question] = []
         self._search_results: list[Question] = []
+        self._image_path: str | None = None
 
         self._build_ui()
+        self.reload_subjects()
         self.reload_questions()
 
     # ------------------------------------------------------------------ 构建
@@ -78,8 +91,9 @@ class QuestionBankView(QWidget):
         page = QWidget()
         form = QFormLayout(page)
 
-        self._subject_edit = QLineEdit()
-        self._subject_edit.setPlaceholderText("必填，如：高中数学")
+        self._subject_combo = QComboBox()
+        self._subject_combo.setMinimumWidth(140)
+        self._subject_combo.setToolTip("科目只能从列表中选择；新增科目请到「设置 -> 科目管理」")
         self._knowledge_edit = QLineEdit()
         self._knowledge_edit.setPlaceholderText("多个知识点用逗号分隔，如：一元二次方程,因式分解")
 
@@ -115,12 +129,13 @@ class QuestionBankView(QWidget):
 
         self._choice_container = self._build_options_group()
         self._solution_container = self._build_reference_group()
+        self._image_container = self._build_image_group()
 
         self._solution_edit = QPlainTextEdit()
         self._solution_edit.setPlaceholderText("选填：解题思路 / 答案解析")
         self._solution_edit.setFixedHeight(70)
 
-        form.addRow("科目 *", self._subject_edit)
+        form.addRow("科目 *", self._subject_combo)
         form.addRow("知识点", self._knowledge_edit)
         form.addRow("题型 *", self._type_combo)
         form.addRow("难度", self._difficulty_combo)
@@ -129,6 +144,23 @@ class QuestionBankView(QWidget):
         form.addRow(self._choice_container)
         form.addRow(self._solution_container)
         form.addRow("解析（可选）", self._solution_edit)
+        form.addRow(self._image_container)
+
+        self._recognize_button = QPushButton("AI 辨识（科目/知识点/题型/难度/质量/答案/解析）")
+        self._recognize_button.setToolTip(
+            "调用已配置的 AI 服务识别题目字段并填入表单；结果仅供参考，请人工复核"
+        )
+        self._recognize_button.clicked.connect(self._on_recognize_clicked)
+        self._recognize_note = QLabel(
+            "AI 辨识结果仅供参考，必须人工复核后再保存。"
+        )
+        self._recognize_note.setWordWrap(True)
+        self._recognize_row = QHBoxLayout()
+        self._recognize_row.addWidget(self._recognize_button)
+        self._recognize_row.addWidget(self._recognize_note, 1)
+        recognize_holder = QWidget()
+        recognize_holder.setLayout(self._recognize_row)
+        form.addRow(recognize_holder)
 
         self._save_button = QPushButton("保存题目")
         self._save_button.clicked.connect(self._on_save_clicked)
@@ -191,6 +223,35 @@ class QuestionBankView(QWidget):
         layout.addWidget(self._reference_edit)
         return group
 
+    def _build_image_group(self) -> QGroupBox:
+        """构建题目图片导入区（用户需求：题目图像的导入方式）。
+
+        图片被复制到数据库同级 ``images/`` 目录，数据库保存相对路径；
+        此处仅做导入、预览与移除，不参与 AI 辨识。
+        """
+        group = QGroupBox("题目图片（可选）")
+        layout = QHBoxLayout(group)
+
+        self._image_preview = QLabel("未选择图片")
+        self._image_preview.setFixedSize(*PREVIEW_SIZE)
+        self._image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image_preview.setStyleSheet("border: 1px dashed #999; color: #666;")
+        layout.addWidget(self._image_preview)
+
+        column = QVBoxLayout()
+        self._image_path_label = QLabel("—")
+        self._image_path_label.setWordWrap(True)
+        choose_button = QPushButton("选择图片…")
+        choose_button.clicked.connect(self._on_choose_image)
+        clear_button = QPushButton("移除图片")
+        clear_button.clicked.connect(self._on_clear_image)
+        column.addWidget(self._image_path_label)
+        column.addWidget(choose_button)
+        column.addWidget(clear_button)
+        column.addStretch(1)
+        layout.addLayout(column, 1)
+        return group
+
     def _build_paste_tab(self) -> QWidget:
         """构建批量粘贴页。"""
         page = QWidget()
@@ -239,8 +300,8 @@ class QuestionBankView(QWidget):
         layout = QVBoxLayout(page)
 
         filter_row = QHBoxLayout()
-        self._search_subject = QLineEdit()
-        self._search_subject.setPlaceholderText("科目（可空）")
+        self._search_subject = QComboBox()
+        self._search_subject.setMinimumWidth(120)
         self._search_knowledge = QLineEdit()
         self._search_knowledge.setPlaceholderText("知识点（可空）")
         self._search_difficulty = QComboBox()
@@ -271,9 +332,19 @@ class QuestionBankView(QWidget):
         filter_row.addWidget(search_button)
         layout.addLayout(filter_row)
 
-        self._result_table = QTableWidget(0, 8)
+        self._result_table = QTableWidget(0, 9)
         self._result_table.setHorizontalHeaderLabels(
-            ["题目 ID", "科目", "题型", "难度", "质量", "使用次数", "最近使用", "题干"]
+            [
+                "题目 ID",
+                "科目",
+                "题型",
+                "难度",
+                "质量",
+                "图片",
+                "使用次数",
+                "最近使用",
+                "题干",
+            ]
         )
         self._result_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
@@ -285,7 +356,7 @@ class QuestionBankView(QWidget):
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self._result_table.horizontalHeader().setSectionResizeMode(
-            7, QHeaderView.ResizeMode.Stretch
+            8, QHeaderView.ResizeMode.Stretch
         )
         layout.addWidget(self._result_table)
 
@@ -386,7 +457,7 @@ class QuestionBankView(QWidget):
         difficulty = self._difficulty_combo.currentData()
         return Question(
             id=self._editing_id or "",
-            subject=self._subject_edit.text().strip(),
+            subject=self._subject_combo.currentText().strip(),
             knowledge_points=self._parse_knowledge(),
             type=question_type,
             stem=self._stem_edit.toPlainText().strip(),
@@ -404,6 +475,7 @@ class QuestionBankView(QWidget):
                 else DifficultySource.AI
             ),
             quality_flag=self._quality_combo.currentData(),
+            image_path=self._image_path,
         )
 
     def _build_patch(self, draft: Question) -> dict:
@@ -419,21 +491,25 @@ class QuestionBankView(QWidget):
             "difficulty": draft.difficulty,
             "difficulty_source": draft.difficulty_source,
             "quality_flag": draft.quality_flag,
+            "image_path": draft.image_path,
         }
 
     def _reset_form(self) -> None:
         """清空表单并回到"新增"模式。"""
         self._editing_id = None
-        self._subject_edit.clear()
         self._knowledge_edit.clear()
         self._stem_edit.clear()
         self._answer_edit.clear()
         self._reference_edit.clear()
         self._solution_edit.clear()
+        if self._subject_combo.count():
+            self._subject_combo.setCurrentIndex(0)
         ui_utils.select_combo_data(self._type_combo, QuestionType.SINGLE)
         ui_utils.select_combo_data(self._difficulty_combo, Difficulty.PENDING)
         ui_utils.select_combo_data(self._quality_combo, QualityFlag.NORMAL)
         self._reset_options()
+        self._set_image(None)
+        self._recognize_note.setText("AI 辨识结果仅供参考，必须人工复核后再保存。")
         self._save_button.setText("保存题目")
         self._on_type_changed()
 
@@ -448,7 +524,12 @@ class QuestionBankView(QWidget):
     def _load_question_into_form(self, question: Question) -> None:
         """把已有题目载入表单进入编辑模式。"""
         self._editing_id = question.id
-        self._subject_edit.setText(question.subject)
+        index = self._subject_combo.findText(question.subject)
+        if index < 0 and question.subject:
+            self._subject_combo.addItem(question.subject, question.subject)
+            index = self._subject_combo.findText(question.subject)
+        if index >= 0:
+            self._subject_combo.setCurrentIndex(index)
         self._knowledge_edit.setText("，".join(question.knowledge_points))
         self._stem_edit.setPlainText(question.stem)
         ui_utils.select_combo_data(self._type_combo, question.type)
@@ -467,9 +548,128 @@ class QuestionBankView(QWidget):
         self._solution_edit.setPlainText(question.solution or "")
         ui_utils.select_combo_data(self._difficulty_combo, question.difficulty)
         ui_utils.select_combo_data(self._quality_combo, question.quality_flag)
+        self._set_image(question.image_path)
         self._save_button.setText("更新题目")
         self._on_type_changed()
         self._inner_tabs.setCurrentIndex(0)
+
+    # --------------------------------------------------------- 图片与 AI 辨识
+
+    def _set_image(self, relative_path: str | None) -> None:
+        """设置当前题目的图片相对路径并刷新预览。"""
+        self._image_path = relative_path or None
+        resolved = ui_utils.safe_call(
+            self._container.image_store.resolve, self._image_path, default=None
+        )
+        if resolved is None:
+            self._image_preview.setPixmap(QPixmap())
+            self._image_preview.setText(
+                "未选择图片" if not self._image_path else "图片文件缺失"
+            )
+        else:
+            pixmap = QPixmap(str(resolved))
+            if pixmap.isNull():
+                self._image_preview.setPixmap(QPixmap())
+                self._image_preview.setText("无法预览该图片")
+            else:
+                self._image_preview.setText("")
+                self._image_preview.setPixmap(
+                    pixmap.scaled(
+                        PREVIEW_SIZE[0],
+                        PREVIEW_SIZE[1],
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+        self._image_path_label.setText(self._image_path or "—")
+
+    def _on_choose_image(self) -> None:
+        """选择本地图片并复制进 images/ 目录（用户需求：题目图片导入）。"""
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            "选择题目图片",
+            "",
+            "图片文件 (*.png *.jpg *.jpeg *.bmp *.gif *.webp)",
+        )
+        if not path:
+            return
+        ok, relative = ui_utils.run_guarded(
+            self, self._container.image_store.save, path
+        )
+        if ok and relative:
+            self._set_image(relative)
+
+    def _on_clear_image(self) -> None:
+        """移除当前题目的图片引用（保留磁盘文件，避免误删历史图片）。"""
+        self._set_image(None)
+
+    def _on_recognize_clicked(self) -> None:
+        """调用 AI 辨识题目字段并回填表单（用户需求；结果仅供参考）。"""
+        stem = self._stem_edit.toPlainText().strip()
+        if not stem:
+            ui_utils.info(self, "请先填写题干，再使用 AI 辨识。")
+            return
+        if not self._question_service.ai_configured():
+            ui_utils.warning(
+                self,
+                "AI 服务未配置，请先到「设置 -> AI 设置」填写接口地址、API Key 与模型名称。",
+            )
+            return
+        ok, result = ui_utils.run_guarded(
+            self,
+            self._question_service.recognize_draft,
+            stem,
+            self._collect_options(),
+        )
+        if not ok or not result:
+            return
+        self._apply_recognition(result)
+
+    def _apply_recognition(self, result: dict) -> None:
+        """把 AI 辨识结果写入表单，并给出"仅供参考"的提示文字。"""
+        notes = ["AI 辨识结果仅供参考，请人工复核后再保存。"]
+
+        subject = result.get("subject", "")
+        index = self._subject_combo.findText(subject)
+        if index >= 0 and subject:
+            self._subject_combo.setCurrentIndex(index)
+            notes.append(f"科目：{subject}")
+        elif subject:
+            notes.append(
+                f"AI 建议科目「{subject}」不在科目列表中，请先在「设置 -> 科目管理」维护"
+            )
+
+        points = result.get("knowledge_points") or []
+        if points:
+            self._knowledge_edit.setText("，".join(points))
+
+        question_type = result.get("question_type")
+        if question_type is not None:
+            ui_utils.select_combo_data(self._type_combo, question_type)
+            self._on_type_changed()
+
+        difficulty = result.get("difficulty")
+        if difficulty is not None:
+            ui_utils.select_combo_data(self._difficulty_combo, difficulty)
+
+        quality = result.get("quality_flag")
+        if quality is not None:
+            ui_utils.select_combo_data(self._quality_combo, quality)
+
+        answer = [str(item) for item in (result.get("answer") or [])]
+        if question_type == QuestionType.SOLUTION:
+            if answer:
+                self._reference_edit.setPlainText("；".join(answer))
+        elif answer:
+            self._answer_edit.setText(",".join(answer))
+            notes.append("答案若为选项标号，请确认选项内容已填写完整")
+
+        solution = result.get("solution")
+        if solution:
+            self._solution_edit.setPlainText(str(solution))
+
+        notes.append("核对无误后点击保存即可入库。")
+        self._recognize_note.setText(" ".join(notes))
 
     # --------------------------------------------------------------- 保存
 
@@ -571,11 +771,32 @@ class QuestionBankView(QWidget):
     def _build_filter(self) -> QuestionFilter:
         """根据检索控件构建过滤器（空条件表示不过滤）。"""
         return QuestionFilter(
-            subject=self._search_subject.text().strip() or None,
+            subject=self._search_subject.currentData() or None,
             knowledge_point=self._search_knowledge.text().strip() or None,
             difficulty=self._search_difficulty.currentData(),
             question_type=self._search_type.currentData(),
         )
+
+    def reload_subjects(self) -> None:
+        """按设置中的科目列表重建录入与检索的科目下拉框（用户需求）。"""
+        subjects = ui_utils.safe_call(self._question_service.list_subjects, default=None)
+        if not subjects:
+            return
+
+        for combo, with_all in (
+            (self._subject_combo, False),
+            (self._search_subject, True),
+        ):
+            current = combo.currentData()
+            combo.blockSignals(True)
+            combo.clear()
+            if with_all:
+                combo.addItem("全部科目", None)
+            for subject in subjects:
+                combo.addItem(subject, subject)
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
 
     def reload_questions(self) -> None:
         """静默重新检索（初始化与跨视图刷新使用，不弹窗）。"""
@@ -624,6 +845,7 @@ class QuestionBankView(QWidget):
                 ui_utils.QUESTION_TYPE_LABELS.get(question.type, ""),
                 ui_utils.DIFFICULTY_LABELS.get(question.difficulty, ""),
                 ui_utils.QUALITY_LABELS.get(question.quality_flag, ""),
+                "有" if question.image_path else "—",
                 str(record.use_count) if record is not None else "0",
                 last_used,
                 question.stem,

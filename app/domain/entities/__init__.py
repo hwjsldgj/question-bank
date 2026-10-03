@@ -7,8 +7,9 @@
 - ``criteria``      PaperCriteria：组卷条件（两部分均可选）
 - ``paper``         Paper / Section：试卷与分区
 - ``scoring``       ScoreFactors / ScoredQuestion / ScoringContext：评分模型
-- ``configs``       ScoringConfig / AIConfig / ExportOptions：配置值对象
+- ``configs``       ScoringConfig / AIConfig / PromptConfig / ExportOptions：配置值对象
 - ``task``          GenerationTask：组卷任务记录
+- ``question_op``   QuestionOpRecord：题库操作台账（导入历史 / 编辑历史）
 
 依赖：app.domain.enums
 被使用：app.domain.validators、app.interfaces.*、app.application.*、

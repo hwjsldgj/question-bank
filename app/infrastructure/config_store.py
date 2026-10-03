@@ -4,7 +4,7 @@
 依赖：app.infrastructure.database.connection.DatabaseConnection、
       app.infrastructure.database.schema（settings 键值表）、
       app.domain.entities.configs
-被使用：app.container（装配）、app.presentation.views.history_settings_view
+被使用：app.container（装配）、app.presentation.views.settings_view
 
 隐私约束（需求 R18）：API Key 仅保存在本机 settings 表，禁止外传或写入日志。
 
@@ -15,8 +15,13 @@
 import json
 import sqlite3
 
-from app.config.settings import DEFAULT_AI_CONFIG, DEFAULT_SCORING_CONFIG
-from app.domain.entities.configs import AIConfig, ScoringConfig
+from app.config.settings import (
+    DEFAULT_AI_CONFIG,
+    DEFAULT_PROMPT_CONFIG,
+    DEFAULT_SCORING_CONFIG,
+    DEFAULT_SUBJECTS,
+)
+from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
 from app.infrastructure.database.connection import DatabaseConnection
 from app.interfaces.repositories import ConfigStore
 
@@ -26,6 +31,8 @@ class SQLiteConfigStore(ConfigStore):
 
     KEY_AI = "ai_config"
     KEY_SCORING = "scoring_config"
+    KEY_PROMPT = "prompt_config"
+    KEY_SUBJECTS = "subjects"
 
     def __init__(self, db: DatabaseConnection) -> None:
         """注入数据库连接管理器。"""
@@ -60,6 +67,49 @@ class SQLiteConfigStore(ConfigStore):
     def save_scoring_config(self, config: ScoringConfig) -> None:
         """保存评分与冷却配置（UPSERT）。"""
         self._write_key(self.KEY_SCORING, self._dump(config))
+
+    def load_prompt_config(self) -> PromptConfig:
+        """读取 AI 提示词配置；无记录或解析失败时返回默认模板。"""
+        raw = self._read_key(self.KEY_PROMPT)
+        if raw is None:
+            return DEFAULT_PROMPT_CONFIG
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_PROMPT_CONFIG
+        merged = dict(DEFAULT_PROMPT_CONFIG.__dict__)
+        saved = self._filter_fields(PromptConfig, data)
+        # 空模板回退默认值，避免用户清空后 AI 调用失去上下文
+        for key in list(merged):
+            merged[key] = saved.get(key) or merged[key]
+        return PromptConfig(**merged)
+
+    def save_prompt_config(self, config: PromptConfig) -> None:
+        """保存 AI 提示词配置（UPSERT），后续 AI 调用立即生效。"""
+        self._write_key(self.KEY_PROMPT, self._dump(config))
+
+    def load_subjects(self) -> list[str]:
+        """读取可选科目列表；无记录或为空时返回默认科目。"""
+        raw = self._read_key(self.KEY_SUBJECTS)
+        if raw is None:
+            return list(DEFAULT_SUBJECTS)
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return list(DEFAULT_SUBJECTS)
+        if not isinstance(data, list):
+            return list(DEFAULT_SUBJECTS)
+        subjects = [str(item).strip() for item in data if str(item).strip()]
+        return subjects or list(DEFAULT_SUBJECTS)
+
+    def save_subjects(self, subjects: list[str]) -> None:
+        """保存可选科目列表（去重且保持顺序）。"""
+        cleaned: list[str] = []
+        for subject in subjects:
+            name = str(subject).strip()
+            if name and name not in cleaned:
+                cleaned.append(name)
+        self._write_key(self.KEY_SUBJECTS, json.dumps(cleaned, ensure_ascii=False))
 
     def _read_key(self, key: str) -> str | None:
         """读取单个配置键；表未创建时返回 None（启动早期容错）。"""

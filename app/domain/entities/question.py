@@ -79,6 +79,13 @@ class Question:
     source: QuestionSource = QuestionSource.BANK
     """题目来源：bank（手工录入）/ ai（AI 补题，需求 R10）。"""
 
+    image_path: str | None = None
+    """题目图片的本地相对路径（相对数据库所在目录，如 ``images/xxx.png``）。
+
+    导入时由图片存储复制到本地 ``images/`` 目录后写入；仅做本地存储与
+    界面展示，不参与 AI 难度分析与 AI 辨识。
+    """
+
     created_at: datetime | None = None
     """入库时间。"""
 

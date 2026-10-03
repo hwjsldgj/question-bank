@@ -49,18 +49,20 @@ workspace/
 ├── docs/                          架构 / 依赖 / 接口文档（本目录）
 ├── app/
 │   ├── container.py               组合根：装配完整对象图
-│   ├── config/settings.py         默认配置常量（权重 / 冷却 / AI）
+│   ├── config/settings.py         默认配置常量（权重 / 冷却 / AI / 科目 / 提示词）
 │   ├── domain/                    领域层（零外部依赖）
-│   │   ├── enums.py               题型 / 难度 / 来源等枚举
+│   │   ├── enums.py               题型 / 难度 / 来源 / 题库操作类型等枚举
 │   │   ├── errors.py              领域异常体系
-│   │   ├── entities/              Question / UsageRecord / Criteria / Paper / 配置值对象
+│   │   ├── entities/              Question / UsageRecord / Criteria / Paper / 操作台账 / 配置值对象
 │   │   └── validators/            题型规则校验 / 分值校验
 │   ├── interfaces/                抽象接口（端口）
-│   │   ├── repositories.py        题目 / 使用记录 / 任务仓储 + 配置存储
+│   │   ├── repositories.py        题目 / 使用记录 / 任务 / 操作台账仓储 + 配置存储
 │   │   ├── ai_client.py           AI API 客户端
 │   │   └── exporters.py           试卷导出器
 │   ├── application/               应用服务层（用例编排）
-│   │   ├── question_service.py    题库 CRUD / 批量粘贴 / 检索统计
+│   │   ├── question_service.py    题库 CRUD / 批量粘贴 / 检索统计 / AI 辨识
+│   │   ├── question_history_service.py 题库操作台账：导入历史 / 编辑历史
+│   │   ├── prompt_utils.py        用户可编辑提示词的安全填充
 │   │   ├── difficulty_service.py  AI 难度分析
 │   │   ├── cooldown_policy.py     冷却窗口策略
 │   │   ├── selection_scorer.py    选题评分决策（核心算法）
@@ -71,16 +73,17 @@ workspace/
 │   │   ├── paper_exporter.py      导出分发
 │   │   └── task_history_service.py 组卷历史与配置复用
 │   ├── infrastructure/            基础设施层（接口的具体实现）
-│   │   ├── database/              SQLite 连接与建表
-│   │   ├── repositories/          三个仓储的 SQLite 实现
-│   │   ├── ai/                    OpenAI 兼容 AI 客户端
+│   │   ├── database/              SQLite 连接与建表 / 补列迁移
+│   │   ├── repositories/          题目 / 使用记录 / 任务 / 操作台账的 SQLite 实现
+│   │   ├── ai/                    OpenAI 兼容 AI 客户端（urllib 实现，含重试与降级）
+│   │   ├── image_store.py         题目图片本地存储（复制 + 相对路径解析）
 │   │   ├── exporters/             TXT / PDF 导出器
-│   │   └── config_store.py        配置持久化实现
+│   │   └── config_store.py        配置持久化实现（AI / 评分 / 提示词 / 科目）
 │   └── presentation/              表现层（PySide6）
-│       ├── main_window.py         主窗口（菜单 / 状态栏 / 三标签页 / 信号协调）
+│       ├── main_window.py         主窗口（菜单 / 状态栏 / 四标签页 / 信号协调）
 │       ├── ui_utils.py            共享工具（枚举标签 / 对话框 / 受限调用包装）
-│       └── views/                 题库 / 组卷 / 历史与设置视图
-└── tests/                         测试骨架（冒烟已启用，专项用例待业务实现）
+│       └── views/                 题库 / 组卷 / 历史 / 设置四个视图
+└── tests/                         测试（冒烟 / 校验器 / 题目服务 / 配置 / 表现层离屏）
 ```
 
 ## 3. 核心流程与组件协作
@@ -132,15 +135,17 @@ PaperGenerationView -> PaperExporter.export
 
 ## 5. 框架完成度说明
 
-本仓库当前状态为**表现层完成、业务待实现**：
+本仓库当前状态为**表现层与题库主链路完成、组卷算法待实现**：
 
-- **表现层已完成**：主窗口（菜单 / 状态栏 / 三标签页 / 跨视图信号协调）、
-  题库管理 / 组卷 / 历史与设置三个视图，以及共享工具 `ui_utils.py`
-  （枚举中文标签、统一对话框、`run_guarded` 受限调用包装）。界面按需求
-  R1-R15 提供了完整的表单、列表、实时命中量、分值编辑与导出入口。
-- **业务方法为 TODO**：`application` 与 `infrastructure` 中的业务方法以
-  `raise NotImplementedError("TODO(需求编号)")` 标注，TODO 括号内为对应需求
-  编号（如 `TODO(R8)`），实现时可全库检索 `TODO(` 定位。
-- **界面不崩溃**：视图统一经 `ui_utils.run_guarded` 调用服务；框架阶段会捕获
-  未实现异常并提示，因此当前即可启动演示。仅基础设施中的连接管理、建表迁移、
-  配置键值读写属于框架管道代码，已实现。
+- **表现层已完成**：主窗口（菜单 / 状态栏 / 四标签页 / 跨视图信号协调）、
+  题库管理 / 组卷 / 历史 / 设置四个视图（历史与设置已分开），以及共享工具
+  `ui_utils.py`。界面按需求 R1-R15 提供完整表单、列表、实时命中量、分值编辑与
+  导出入口，并包含用户追加需求：科目下拉选择、题目图片导入、
+  "AI 辨识（仅供参考）"按钮、AI 提示词编辑与科目管理。
+- **已实现的业务**：题型校验器、题目仓储与使用记录仓储、题库操作台账仓储、
+  题目服务（CRUD / 批量粘贴解析 / 检索统计 / 搜索命中量 / AI 辨识 / 台账记录）、
+  难度分析服务、提示词配置、图片本地存储、OpenAI 兼容 AI 客户端（含超时与重试）。
+- **仍为 TODO**：评分器 / 抽样器 / 组卷编排 / 分值计算 / 导出渲染 / 组卷任务历史，
+  以 `raise NotImplementedError("TODO(需求编号)")` 标注，全库检索 `TODO(` 可定位。
+- **界面不崩溃**：视图统一经 `ui_utils.run_guarded` / `safe_call` 调用服务，
+  未实现的服务会给出可读提示或静默降级，因此当前即可启动演示。

@@ -6,7 +6,7 @@
 依赖（构造注入）：
 - app.interfaces.repositories.TaskRepository（任务持久化）
 
-被使用：app.presentation.views.history_settings_view、
+被使用：app.presentation.views.history_view、
         app.application.paper_composer（组卷完成后保存任务）、app.container
 """
 

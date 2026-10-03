@@ -51,6 +51,12 @@
 **/__pycache__/
 *.py[cod]
 *$py.class
+
+# 本机运行数据（需求 R18：题库 / 使用记录 / 配置仅存本机）
+*.db
+*.sqlite
+*.sqlite3
+images/
 **/.Python
 **/build/
 **/develop-eggs/

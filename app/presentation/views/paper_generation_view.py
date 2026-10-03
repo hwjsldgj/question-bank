@@ -69,6 +69,7 @@ class PaperGenerationView(QWidget):
         self._hit_timer.timeout.connect(self.refresh_hit_counts)
 
         self._build_ui()
+        self.reload_subjects()
         self.refresh_hit_counts()
 
     # ------------------------------------------------------------------ 构建
@@ -98,6 +99,35 @@ class PaperGenerationView(QWidget):
         ui_utils.select_combo_data(combo, Difficulty.MEDIUM)
         return combo
 
+    @staticmethod
+    def _new_subject_combo() -> QComboBox:
+        """构建科目下拉框：科目只能从设置中维护的列表选择（用户需求）。"""
+        combo = QComboBox()
+        combo.setMinimumWidth(120)
+        return combo
+
+    def reload_subjects(self) -> None:
+        """按设置中的科目列表重建三个科目下拉框，并尽量保留当前选择（用户需求）。"""
+        subjects = ui_utils.safe_call(
+            self._question_service.list_subjects, default=None
+        )
+        if not subjects:
+            return
+        for combo in (
+            self._single_subject,
+            self._multiple_subject,
+            self._solution_subject,
+        ):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            for subject in subjects:
+                combo.addItem(subject, subject)
+            index = combo.findText(current)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
+        self.refresh_hit_counts()
+
     def _build_choice_group(self) -> QGroupBox:
         """构建选择题部分条件组（单选 / 多选）。"""
         group = QGroupBox("选择题部分")
@@ -110,7 +140,7 @@ class PaperGenerationView(QWidget):
         body = QWidget()
         form = QFormLayout(body)
 
-        self._single_subject = QLineEdit()
+        self._single_subject = self._new_subject_combo()
         self._single_difficulty = self._new_difficulty_combo()
         self._single_count = QSpinBox()
         self._single_count.setRange(1, 999)
@@ -121,7 +151,7 @@ class PaperGenerationView(QWidget):
         form.addRow("单选 · 数量", self._single_count)
         form.addRow("", self._single_hit)
 
-        self._multiple_subject = QLineEdit()
+        self._multiple_subject = self._new_subject_combo()
         self._multiple_difficulty = self._new_difficulty_combo()
         self._multiple_count = QSpinBox()
         self._multiple_count.setRange(1, 999)
@@ -137,7 +167,7 @@ class PaperGenerationView(QWidget):
         body.setEnabled(self._choice_enabled.isChecked())
 
         for subject in (self._single_subject, self._multiple_subject):
-            subject.textChanged.connect(self._on_conditions_changed)
+            subject.currentIndexChanged.connect(self._on_conditions_changed)
         for combo in (self._single_difficulty, self._multiple_difficulty):
             combo.currentIndexChanged.connect(self._on_conditions_changed)
         for spin in (self._single_count, self._multiple_count):
@@ -155,7 +185,7 @@ class PaperGenerationView(QWidget):
 
         body = QWidget()
         form = QFormLayout(body)
-        self._solution_subject = QLineEdit()
+        self._solution_subject = self._new_subject_combo()
         self._solution_difficulty = self._new_difficulty_combo()
         self._solution_count = QSpinBox()
         self._solution_count.setRange(1, 999)
@@ -170,7 +200,7 @@ class PaperGenerationView(QWidget):
         self._solution_body = body
         body.setEnabled(self._solution_enabled.isChecked())
 
-        self._solution_subject.textChanged.connect(self._on_conditions_changed)
+        self._solution_subject.currentIndexChanged.connect(self._on_conditions_changed)
         self._solution_difficulty.currentIndexChanged.connect(
             self._on_conditions_changed
         )
@@ -265,6 +295,8 @@ class PaperGenerationView(QWidget):
 
     def refresh_hit_counts(self) -> None:
         """实时更新三个题型的命中量（需求 R6 第 2 / 3 条）。"""
+        if self._single_subject.count() == 0:
+            self.reload_subjects()
         self._update_hit(
             self._single_hit, self._single_subject, self._single_difficulty,
             QuestionType.SINGLE,
@@ -281,14 +313,14 @@ class PaperGenerationView(QWidget):
     def _update_hit(
         self,
         label: QLabel,
-        subject_edit: QLineEdit,
+        subject_edit: QComboBox,
         difficulty_combo: QComboBox,
         question_type: QuestionType,
     ) -> None:
         """查询某题型条件的命中题数量并写入标签。"""
-        subject = subject_edit.text().strip()
+        subject = subject_edit.currentText().strip()
         if not subject:
-            label.setText("命中：—（请填科目）")
+            label.setText("命中：—（请先在设置中维护科目）")
             return
         difficulty = difficulty_combo.currentData()
         count = ui_utils.safe_call(
@@ -310,7 +342,7 @@ class PaperGenerationView(QWidget):
             choice_items.append(
                 TypeRequirement(
                     question_type=QuestionType.SINGLE,
-                    subject=self._single_subject.text().strip(),
+                    subject=self._single_subject.currentText().strip(),
                     difficulty=self._single_difficulty.currentData(),
                     count=self._single_count.value(),
                 )
@@ -318,7 +350,7 @@ class PaperGenerationView(QWidget):
             choice_items.append(
                 TypeRequirement(
                     question_type=QuestionType.MULTIPLE,
-                    subject=self._multiple_subject.text().strip(),
+                    subject=self._multiple_subject.currentText().strip(),
                     difficulty=self._multiple_difficulty.currentData(),
                     count=self._multiple_count.value(),
                 )
@@ -328,7 +360,7 @@ class PaperGenerationView(QWidget):
         if solution_enabled:
             solution_item = TypeRequirement(
                 question_type=QuestionType.SOLUTION,
-                subject=self._solution_subject.text().strip(),
+                subject=self._solution_subject.currentText().strip(),
                 difficulty=self._solution_difficulty.currentData(),
                 count=self._solution_count.value(),
             )
@@ -364,13 +396,18 @@ class PaperGenerationView(QWidget):
 
     @staticmethod
     def _fill_requirement(
-        subject_edit: QLineEdit,
+        subject_combo: QComboBox,
         difficulty_combo: QComboBox,
         count_spin: QSpinBox,
         requirement: TypeRequirement,
     ) -> None:
-        """把单个题型要求回填到对应控件。"""
-        subject_edit.setText(requirement.subject)
+        """把单个题型要求回填到对应控件（科目不存在时临时补入，便于复用）。"""
+        index = subject_combo.findText(requirement.subject)
+        if index < 0 and requirement.subject:
+            subject_combo.addItem(requirement.subject, requirement.subject)
+            index = subject_combo.findText(requirement.subject)
+        if index >= 0:
+            subject_combo.setCurrentIndex(index)
         ui_utils.select_combo_data(difficulty_combo, requirement.difficulty)
         count_spin.setValue(max(1, int(requirement.count)))
 

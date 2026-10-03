@@ -20,14 +20,12 @@
 
 import sqlite3
 
-SCHEMA_STATEMENTS: tuple[str, ...] = (
-    # 题目主表：题型 / 难度 / 来源 / 质量标记与需求枚举取值一致
-    """
+QUESTIONS_TABLE = """
     CREATE TABLE IF NOT EXISTS questions (
         id                TEXT PRIMARY KEY,
         subject           TEXT NOT NULL,
         knowledge_points  TEXT NOT NULL DEFAULT '[]',
-        type              TEXT NOT NULL CHECK (type IN ('single', 'multiple', 'solution')),
+        type              TEXT NOT NULL CHECK (type IN ('single', 'multiple', 'fill', 'solution')),
         stem              TEXT NOT NULL,
         options           TEXT NOT NULL DEFAULT '[]',
         answer            TEXT NOT NULL DEFAULT '[]',
@@ -40,7 +38,30 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         created_at        TEXT,
         updated_at        TEXT
     )
-    """,
+"""
+
+#: questions 表列顺序（重建表迁移时复用）
+QUESTION_COLUMNS: tuple[str, ...] = (
+    "id",
+    "subject",
+    "knowledge_points",
+    "type",
+    "stem",
+    "options",
+    "answer",
+    "solution",
+    "difficulty",
+    "difficulty_source",
+    "quality_flag",
+    "source",
+    "image_path",
+    "created_at",
+    "updated_at",
+)
+
+SCHEMA_STATEMENTS: tuple[str, ...] = (
+    # 题目主表：题型 / 难度 / 来源 / 质量标记与需求枚举取值一致（含新增填空题）
+    QUESTIONS_TABLE,
     # 知识点字典：科目 -> 知识点，供录入界面下拉与 AI 补题取材
     """
     CREATE TABLE IF NOT EXISTS knowledge_points (
@@ -108,7 +129,7 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """执行幂等建表与补列迁移（应用启动时调用一次）。
+    """执行幂等建表、补列与题型约束迁移（应用启动时调用一次）。
 
     :param conn: 已打开的 SQLite 连接
     """
@@ -117,6 +138,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     for table, column, definition in COLUMN_MIGRATIONS:
         if not _has_column(conn, table, column):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    _migrate_question_type_check(conn)
     conn.commit()
 
 
@@ -124,3 +146,28 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     """判断表中是否已存在某列（旧库兼容用）。"""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(row[1] == column for row in rows)
+
+
+def _migrate_question_type_check(conn: sqlite3.Connection) -> None:
+    """旧库 questions 表不含 fill 题型时重建该表（CHECK 约束无法就地修改）。
+
+    重建期间关闭外键并保持列顺序一致；question_usage 按表名引用，
+    重建后仍指向新的 questions 表。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'questions'"
+    ).fetchone()
+    if row is None or "'fill'" in (row[0] or ""):
+        return
+
+    columns = ", ".join(QUESTION_COLUMNS)
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute(QUESTIONS_TABLE.replace("IF NOT EXISTS questions", "questions_rebuilt"))
+        conn.execute(
+            f"INSERT INTO questions_rebuilt ({columns}) SELECT {columns} FROM questions"
+        )
+        conn.execute("DROP TABLE questions")
+        conn.execute("ALTER TABLE questions_rebuilt RENAME TO questions")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")

@@ -34,6 +34,7 @@ _DIFFICULTY_WORDS: dict[str, Difficulty] = {
 _QUESTION_TYPE_TEXT = {
     QuestionType.SINGLE: "单选题",
     QuestionType.MULTIPLE: "多选题",
+    QuestionType.FILL: "填空题",
     QuestionType.SOLUTION: "解答题",
 }
 

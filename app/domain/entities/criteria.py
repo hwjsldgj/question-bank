@@ -34,12 +34,12 @@ class TypeRequirement:
 class PaperCriteria:
     """组卷条件实体。
 
-    ``choice_enabled`` 与 ``solution_enabled`` 至少一个为 True
-    （需求 R7 第 4 条：全部停用应拒绝请求）。
+    单选 / 多选 / 填空 / 解答四类题型各自独立启用（用户需求：单选多选分开）；
+    至少一个部分被启用，否则拒绝请求（需求 R7 第 4 条）。
     """
 
     choice_enabled: bool = False
-    """是否启用"选择题部分"。"""
+    """是否启用"选择题部分"（单选或多选任一启用即视为启用）。"""
 
     solution_enabled: bool = False
     """是否启用"解答题部分"。"""
@@ -50,11 +50,19 @@ class PaperCriteria:
     solution_item: TypeRequirement | None = None
     """解答题部分的出题要求；未启用解答题时为 None。"""
 
+    fill_enabled: bool = False
+    """是否启用"填空题部分"（用户新增题型）。"""
+
+    fill_item: TypeRequirement | None = None
+    """填空题部分的出题要求；未启用填空题时为 None。"""
+
     def enabled_requirements(self) -> list[TypeRequirement]:
         """返回所有启用部分的题型要求列表（组卷引擎按此逐题型选题）。"""
         requirements: list[TypeRequirement] = []
         if self.choice_enabled:
             requirements.extend(self.choice_items)
+        if self.fill_enabled and self.fill_item is not None:
+            requirements.append(self.fill_item)
         if self.solution_enabled and self.solution_item is not None:
             requirements.append(self.solution_item)
         return requirements

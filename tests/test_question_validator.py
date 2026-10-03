@@ -96,6 +96,41 @@ def test_solution_rules(validator) -> None:
         validator.validate(without_answer)
 
 
+def test_fill_rules(validator) -> None:
+    """填空题：无选项且参考答案非空 -> 通过；含选项或缺答案 -> 拒绝。"""
+    valid = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["因式分解"],
+        type=QuestionType.FILL,
+        stem="x^2-1 = ____",
+        answer=["3", "-1"],
+    )
+    validator.validate(valid)
+
+    with_options = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["因式分解"],
+        type=QuestionType.FILL,
+        stem="x^2-1 = ____",
+        options=[Option("A", "1")],
+        answer=["3"],
+    )
+    with pytest.raises(QuestionValidationError, match="选项"):
+        validator.validate(with_options)
+
+    without_answer = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["因式分解"],
+        type=QuestionType.FILL,
+        stem="x^2-1 = ____",
+    )
+    with pytest.raises(QuestionValidationError, match="参考答案"):
+        validator.validate(without_answer)
+
+
 def test_required_fields(validator) -> None:
     """科目 / 题干 / 知识点为空 -> 拒绝。"""
     for patch, message in (

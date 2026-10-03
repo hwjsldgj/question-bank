@@ -229,10 +229,10 @@ Question
   id: string (uuid)
   subject: string
   knowledge_points: string[]
-  type: "single" | "multiple" | "solution"    # 解答题 = solution
+  type: "single" | "multiple" | "fill" | "solution"   # 填空题为用户新增题型
   stem: string
-  options: { key: string, text: string }[]    # 解答题为空
-  answer: string[]                            # 解答题为用户参考答案（可为文本）
+  options: { key: string, text: string }[]    # 填空题/解答题为空
+  answer: string[]                            # 填空题按空的顺序存文本；解答题为用户参考答案
   solution: string | null                     # 解答题的解析
   difficulty: "easy" | "medium" | "hard" | "pending"
   difficulty_source: "ai" | "manual"
@@ -260,6 +260,8 @@ PaperCriteria
   solution_enabled: bool
   choice_items: { type: "single"|"multiple", subject, difficulty, count }[]
   solution_item: { subject, difficulty, count } | null
+  fill_enabled: bool                                          # 填空题部分（用户新增）
+  fill_item: { subject, difficulty, count } | null
 ```
 
 ### Paper

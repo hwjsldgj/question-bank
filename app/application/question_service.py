@@ -97,6 +97,8 @@ _TYPE_WORDS: dict[str, QuestionType] = {
     "多选": QuestionType.MULTIPLE,
     "多项选择": QuestionType.MULTIPLE,
     "multiple": QuestionType.MULTIPLE,
+    "填空": QuestionType.FILL,
+    "fill": QuestionType.FILL,
     "解答": QuestionType.SOLUTION,
     "简答": QuestionType.SOLUTION,
     "解答题": QuestionType.SOLUTION,
@@ -251,11 +253,15 @@ class QuestionService:
         """AI 服务是否已配置（未配置时界面禁用"AI 辨识"按钮）。"""
         return bool(self._ai_client is not None and self._ai_client.is_configured())
 
-    def recognize_draft(self, stem: str, options: list[Option]) -> dict:
+    def recognize_draft(
+        self, stem: str, options: list[Option], include_solution: bool = True
+    ) -> dict:
         """调用 AI 辨识题目字段，结果仅供参考（用户需求）。
 
         :param stem: 题干文本
         :param options: 当前已填选项（可为空）
+        :param include_solution: 是否要求 AI 输出解析；为 False 时提示词明确
+            要求不输出解析，且返回结果的 solution 恒为空（用户需求）
         :return: 归一化后的字段字典，键包含 subject / knowledge_points /
             question_type / difficulty / quality_flag / answer / solution
         :raises app.domain.errors.AIServiceError: 未配置或调用失败
@@ -271,8 +277,13 @@ class QuestionService:
             stem=stem,
             options="；".join(f"{o.key}. {o.text}" for o in options) or "无",
         )
+        if not include_solution:
+            prompt += "\n注意：本次不要输出解题解析，solution 请留空字符串。"
         data = self._ai_client.complete(prompt, RECOGNIZE_SCHEMA)
-        return self._normalize_recognition(data)
+        result = self._normalize_recognition(data)
+        if not include_solution:
+            result["solution"] = ""
+        return result
 
     def list_subjects(self) -> list[str]:
         """返回可选科目列表（科目改为选择式录入，由设置界面维护）。"""
@@ -394,7 +405,7 @@ class QuestionService:
         stem = fields.get("stem", "").strip() or block.strip()
         options = self._parse_options(fields.get("options", ""))
         question_type = self._parse_type(fields.get("type", ""), options, fields.get("answer", ""))
-        if question_type is QuestionType.SOLUTION:
+        if question_type in (QuestionType.SOLUTION, QuestionType.FILL):
             options = []
         return Question(
             id="",
@@ -441,11 +452,11 @@ class QuestionService:
 
     @staticmethod
     def _parse_answer(raw: str, question_type: QuestionType) -> list[str]:
-        """解析答案：选择题取标号，解答题取参考答案文本。"""
+        """解析答案：选择题取标号，填空题 / 解答题取参考答案文本。"""
         text = raw.strip()
         if not text:
             return []
-        if question_type is QuestionType.SOLUTION:
+        if question_type in (QuestionType.SOLUTION, QuestionType.FILL):
             return [text]
         return sorted({letter.upper() for letter in re.findall(r"[A-Za-z]", text)})
 

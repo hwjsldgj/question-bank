@@ -24,10 +24,13 @@
 被使用：app.presentation.main_window
 """
 
+import re
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -101,6 +104,7 @@ class QuestionBankView(QWidget):
         for question_type in (
             QuestionType.SINGLE,
             QuestionType.MULTIPLE,
+            QuestionType.FILL,
             QuestionType.SOLUTION,
         ):
             self._type_combo.addItem(
@@ -151,12 +155,17 @@ class QuestionBankView(QWidget):
             "调用已配置的 AI 服务识别题目字段并填入表单；结果仅供参考，请人工复核"
         )
         self._recognize_button.clicked.connect(self._on_recognize_clicked)
+        self._no_solution_check = QCheckBox("AI 不输出解析")
+        self._no_solution_check.setToolTip(
+            "勾选后要求 AI 只给出答案，不生成解析（用户需求）"
+        )
         self._recognize_note = QLabel(
             "AI 辨识结果仅供参考，必须人工复核后再保存。"
         )
         self._recognize_note.setWordWrap(True)
         self._recognize_row = QHBoxLayout()
         self._recognize_row.addWidget(self._recognize_button)
+        self._recognize_row.addWidget(self._no_solution_check)
         self._recognize_row.addWidget(self._recognize_note, 1)
         recognize_holder = QWidget()
         recognize_holder.setLayout(self._recognize_row)
@@ -214,11 +223,13 @@ class QuestionBankView(QWidget):
         return group
 
     def _build_reference_group(self) -> QGroupBox:
-        """构建解答题参考答案编辑器。"""
-        group = QGroupBox("参考答案（解答题）")
+        """构建填空题 / 解答题参考答案编辑器。"""
+        group = QGroupBox("参考答案（填空题 / 解答题）")
         layout = QVBoxLayout(group)
         self._reference_edit = QPlainTextEdit()
-        self._reference_edit.setPlaceholderText("必填：解答题的参考答案")
+        self._reference_edit.setPlaceholderText(
+            "必填：填空题多个空用分号分隔（如：3；-1）；解答题填参考答案"
+        )
         self._reference_edit.setFixedHeight(90)
         layout.addWidget(self._reference_edit)
         return group
@@ -315,6 +326,7 @@ class QuestionBankView(QWidget):
         for question_type in (
             QuestionType.SINGLE,
             QuestionType.MULTIPLE,
+            QuestionType.FILL,
             QuestionType.SOLUTION,
         ):
             self._search_type.addItem(
@@ -440,9 +452,17 @@ class QuestionBankView(QWidget):
         ]
 
     def _collect_answer(self, question_type: QuestionType) -> list[str]:
-        """收集答案：选择题取标号列表，解答题取参考答案文本。"""
-        if question_type == QuestionType.SOLUTION:
+        """收集答案：选择题取标号列表，填空题 / 解答题取参考答案文本。"""
+        if question_type in (QuestionType.SOLUTION, QuestionType.FILL):
             reference = self._reference_edit.toPlainText().strip()
+            if question_type == QuestionType.FILL and reference:
+                # 填空题多个空以分号 / 换行分隔，保留顺序
+                parts = [
+                    part.strip()
+                    for part in re.split(r"[;；\n]+", reference)
+                    if part.strip()
+                ]
+                return parts or [reference]
             return [reference] if reference else []
         raw = self._answer_edit.text().strip().replace("，", ",").replace(" ", ",")
         return [
@@ -463,7 +483,7 @@ class QuestionBankView(QWidget):
             stem=self._stem_edit.toPlainText().strip(),
             options=(
                 self._collect_options()
-                if question_type != QuestionType.SOLUTION
+                if question_type in (QuestionType.SINGLE, QuestionType.MULTIPLE)
                 else []
             ),
             answer=self._collect_answer(question_type),
@@ -515,10 +535,13 @@ class QuestionBankView(QWidget):
 
     def _on_type_changed(self) -> None:
         """题型切换时在"选项 + 答案"与"参考答案"之间切换。"""
-        is_solution = self._type_combo.currentData() == QuestionType.SOLUTION
-        self._choice_container.setVisible(not is_solution)
-        self._solution_container.setVisible(is_solution)
-        if not is_solution and self._options_table.rowCount() == 0:
+        needs_options = self._type_combo.currentData() in (
+            QuestionType.SINGLE,
+            QuestionType.MULTIPLE,
+        )
+        self._choice_container.setVisible(needs_options)
+        self._solution_container.setVisible(not needs_options)
+        if needs_options and self._options_table.rowCount() == 0:
             self._reset_options()
 
     def _load_question_into_form(self, question: Question) -> None:
@@ -533,8 +556,9 @@ class QuestionBankView(QWidget):
         self._knowledge_edit.setText("，".join(question.knowledge_points))
         self._stem_edit.setPlainText(question.stem)
         ui_utils.select_combo_data(self._type_combo, question.type)
-        if question.is_solution:
-            reference = question.answer[0] if question.answer else ""
+        if question.type in (QuestionType.SOLUTION, QuestionType.FILL):
+            separator = "；" if question.type == QuestionType.FILL else ""
+            reference = separator.join(question.answer) if question.answer else ""
             self._reference_edit.setPlainText(reference)
             self._answer_edit.clear()
         else:
@@ -620,14 +644,17 @@ class QuestionBankView(QWidget):
             self._question_service.recognize_draft,
             stem,
             self._collect_options(),
+            not self._no_solution_check.isChecked(),
         )
         if not ok or not result:
             return
-        self._apply_recognition(result)
+        self._apply_recognition(result, include_solution=not self._no_solution_check.isChecked())
 
-    def _apply_recognition(self, result: dict) -> None:
+    def _apply_recognition(self, result: dict, include_solution: bool = True) -> None:
         """把 AI 辨识结果写入表单，并给出"仅供参考"的提示文字。"""
         notes = ["AI 辨识结果仅供参考，请人工复核后再保存。"]
+        if not include_solution:
+            notes.append("已按要求不生成解析。")
 
         subject = result.get("subject", "")
         index = self._subject_combo.findText(subject)
@@ -657,15 +684,17 @@ class QuestionBankView(QWidget):
             ui_utils.select_combo_data(self._quality_combo, quality)
 
         answer = [str(item) for item in (result.get("answer") or [])]
-        if question_type == QuestionType.SOLUTION:
+        if question_type in (QuestionType.SOLUTION, QuestionType.FILL):
             if answer:
-                self._reference_edit.setPlainText("；".join(answer))
+                self._reference_edit.setPlainText(
+                    "；".join(answer) if question_type == QuestionType.FILL else answer[0]
+                )
         elif answer:
             self._answer_edit.setText(",".join(answer))
             notes.append("答案若为选项标号，请确认选项内容已填写完整")
 
         solution = result.get("solution")
-        if solution:
+        if include_solution and solution:
             self._solution_edit.setPlainText(str(solution))
 
         notes.append("核对无误后点击保存即可入库。")
@@ -762,7 +791,7 @@ class QuestionBankView(QWidget):
         """判断候选题是否缺少必填字段（预览"待修正"依据，需求 R2 第 4 条）。"""
         if not question.subject or not question.stem:
             return True
-        if question.is_solution:
+        if question.type in (QuestionType.SOLUTION, QuestionType.FILL):
             return not (question.answer and question.answer[0].strip())
         return len(question.options) < 2 or not question.answer
 

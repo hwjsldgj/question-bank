@@ -141,20 +141,70 @@ def test_batch_parse_and_commit_records_import(service) -> None:
     drafts = service.batch_parse(
         "科目：物理\n知识点：牛顿定律\n题型：单选\n题干：惯性由什么决定？\n"
         "A. 质量\nB. 速度\n答案：A\n\n"
-        "科目：数学\n知识点：函数\n题型：解答题\n题干：求极值。\n参考答案：令导数为零。"
+        "科目：数学\n知识点：函数\n题型：解答题\n题干：求极值。\n参考答案：令导数为零。\n\n"
+        "科目：数学\n知识点：因式分解\n题型：填空\n题干：x^2-1 = ____\n参考答案：3；-1"
     )
-    assert len(drafts) == 2
+    assert len(drafts) == 3
     assert drafts[0].type is QuestionType.SINGLE
     assert [option.text for option in drafts[0].options] == ["质量", "速度"]
     assert drafts[0].answer == ["A"]
     assert drafts[1].type is QuestionType.SOLUTION
     assert drafts[1].answer == ["令导数为零。"]
+    assert drafts[2].type is QuestionType.FILL
+    assert drafts[2].options == []
+    assert drafts[2].answer == ["3；-1"]
 
     committed = service.batch_commit(drafts)
-    assert len(committed) == 2
+    assert len(committed) == 3
     imports = service.list_operations([QuestionOpAction.IMPORT])
-    assert len(imports) == 2
+    assert len(imports) == 3
     assert imports[0].batch_id and imports[0].batch_id == imports[1].batch_id
+
+
+def test_fill_question_crud(service) -> None:
+    """填空题可入库、可检索（用户新增题型）。"""
+    fill = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["因式分解"],
+        type=QuestionType.FILL,
+        stem="x^2-1 = ____",
+        answer=["3", "-1"],
+        difficulty=Difficulty.EASY,
+    )
+    saved = service.create_question(fill)
+    found = service.search(QuestionFilter(question_type=QuestionType.FILL))
+    assert [q.id for q in found] == [saved.id]
+    assert found[0].answer == ["3", "-1"]
+    assert service.count_available("数学", Difficulty.EASY, QuestionType.FILL) == 1
+
+
+def test_recognize_can_skip_solution(container) -> None:
+    """AI 辨识可要求不输出解析（用户需求）。"""
+    fake = FakeAIClient(
+        {
+            "subject": "数学",
+            "knowledge_points": ["集合"],
+            "question_type": "单选",
+            "difficulty": "易",
+            "quality_flag": "普通",
+            "answer": ["A"],
+            "solution": "AI 生成的解析",
+        }
+    )
+    service = QuestionService(
+        container.question_repository,
+        QuestionValidator(),
+        DifficultyService(fake, container.config_store),
+        config_store=container.config_store,
+        ai_client=fake,
+    )
+    result = service.recognize_draft("题干", [], include_solution=False)
+    assert result["solution"] == ""
+    assert "不要输出解题解析" in fake.prompts[0]
+
+    with_solution = service.recognize_draft("题干", [], include_solution=True)
+    assert with_solution["solution"] == "AI 生成的解析"
 
 
 def test_batch_commit_reports_invalid_draft(service) -> None:

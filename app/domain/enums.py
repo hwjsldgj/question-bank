@@ -14,15 +14,17 @@ from enum import Enum
 class QuestionType(str, Enum):
     """题型枚举。
 
-    取值与需求文档 Glossary 一致：
+    取值与需求文档 Glossary 一致，并新增用户要求的填空题：
 
     - ``SINGLE``    单选题（属于"选择题部分"）
     - ``MULTIPLE``  多选题（属于"选择题部分"）
+    - ``FILL``      填空题（属于"填空题部分"，无选项，答案为文本）
     - ``SOLUTION``  解答题（属于"解答题部分"）
     """
 
     SINGLE = "single"
     MULTIPLE = "multiple"
+    FILL = "fill"
     SOLUTION = "solution"
 
 
@@ -71,12 +73,13 @@ class QuestionSource(str, Enum):
 
 
 class SectionKind(str, Enum):
-    """试卷分区：选择题部分（choice）/ 解答题部分（solution）。
+    """试卷分区：选择题部分（choice）/ 填空题部分（fill）/ 解答题部分（solution）。
 
-    需求 R7 / R12：两部分均可独立启用或停用。
+    需求 R7 / R12：各部分均可独立启用或停用。
     """
 
     CHOICE = "choice"
+    FILL = "fill"
     SOLUTION = "solution"
 
 

@@ -98,9 +98,19 @@ class Question:
         return self.type in (QuestionType.SINGLE, QuestionType.MULTIPLE)
 
     @property
+    def is_fill(self) -> bool:
+        """是否为填空题（无选项，答案为文本，用户新增题型）。"""
+        return self.type == QuestionType.FILL
+
+    @property
     def is_solution(self) -> bool:
         """是否属于"解答题部分"。"""
         return self.type == QuestionType.SOLUTION
+
+    @property
+    def has_options(self) -> bool:
+        """该题型是否需要选项（选择题需要，填空题与解答题不需要）。"""
+        return self.is_choice
 
 
 @dataclass

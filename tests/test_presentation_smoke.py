@@ -52,6 +52,18 @@ def test_main_window_has_four_tabs(window) -> None:
     assert [tabs.tabText(index) for index in range(4)] == list(TAB_TITLES)
 
 
+def test_tabs_are_scrollable(window) -> None:
+    """每个标签页包在可滚动容器中（用户需求：内容过高时上下滚动）。"""
+    from PySide6.QtWidgets import QScrollArea
+
+    tabs = window.centralWidget()
+    for index, view in enumerate(window._tab_views):
+        area = tabs.widget(index)
+        assert isinstance(area, QScrollArea)
+        assert area.widgetResizable() is True
+        assert area.widget() is view
+
+
 def test_views_share_container(window) -> None:
     """四个视图均以同一容器为依赖来源，刷新调用不抛异常地降级。"""
     window.paper_generation_view.refresh_hit_counts()
@@ -61,16 +73,80 @@ def test_views_share_container(window) -> None:
 
 
 def test_subject_widgets_are_dropdowns(window) -> None:
-    """科目使用下拉选择（题库录入、检索过滤与组卷条件）。"""
+    """科目使用下拉选择（题库录入、检索过滤与组卷条件，含填空题）。"""
     bank = window.question_bank_view
     assert bank._subject_combo.count() > 0
     assert bank._search_subject.itemData(0) is None  # "全部科目"
     for combo in (
         window.paper_generation_view._single_subject,
         window.paper_generation_view._multiple_subject,
+        window.paper_generation_view._fill_subject,
         window.paper_generation_view._solution_subject,
     ):
         assert combo.count() > 0
+
+
+def test_single_and_multiple_are_separately_enabled(window) -> None:
+    """组卷时单选与多选分开启用（用户需求）。"""
+    view = window.paper_generation_view
+    view._single_enabled.setChecked(True)
+    view._multiple_enabled.setChecked(False)
+    view._fill_enabled.setChecked(False)
+    view._solution_enabled.setChecked(False)
+    criteria = view._build_criteria()
+    assert criteria.choice_enabled is True
+    assert [item.question_type for item in criteria.choice_items] == [
+        QuestionType.SINGLE
+    ]
+
+    view._multiple_enabled.setChecked(True)
+    criteria = view._build_criteria()
+    assert [item.question_type for item in criteria.choice_items] == [
+        QuestionType.SINGLE,
+        QuestionType.MULTIPLE,
+    ]
+
+
+def test_fill_type_supported(window) -> None:
+    """填空题可用：题库题型下拉、组卷条件与命中量均已接入。"""
+    bank = window.question_bank_view
+    types = [
+        bank._type_combo.itemData(index) for index in range(bank._type_combo.count())
+    ]
+    assert QuestionType.FILL in types
+
+    view = window.paper_generation_view
+    view._fill_enabled.setChecked(True)
+    view._fill_count.setValue(4)
+    criteria = view._build_criteria()
+    assert criteria.fill_enabled is True
+    assert criteria.fill_item is not None
+    assert criteria.fill_item.question_type is QuestionType.FILL
+    assert criteria.fill_item.count == 4
+    assert [item.question_type for item in criteria.enabled_requirements()] == [
+        QuestionType.FILL
+    ]
+
+
+def test_ai_can_skip_solution(window) -> None:
+    """AI 辨识可要求不输出解析（用户需求）。"""
+    bank = window.question_bank_view
+    assert bank._no_solution_check.isChecked() is False
+    bank._solution_edit.setPlainText("已有解析")
+    bank._apply_recognition(
+        {
+            "subject": "数学",
+            "knowledge_points": ["集合"],
+            "question_type": QuestionType.SINGLE,
+            "difficulty": Difficulty.EASY,
+            "quality_flag": QualityFlag.NORMAL,
+            "answer": ["A"],
+            "solution": "",
+        },
+        include_solution=False,
+    )
+    assert bank._solution_edit.toPlainText() == "已有解析"
+    assert "不生成解析" in bank._recognize_note.text()
 
 
 def test_question_bank_has_image_and_ai_widgets(window) -> None:
@@ -135,7 +211,7 @@ def test_reuse_signal_routed_to_paper_view(window) -> None:
     window.history_view.reuse_criteria_requested.emit(criteria)
     assert window.paper_generation_view._single_subject.currentText() == "物理"
     assert window.paper_generation_view._single_count.value() == 6
-    assert window.centralWidget().currentWidget() is window.paper_generation_view
+    assert window.centralWidget().currentIndex() == TAB_TITLES.index("组卷")
 
 
 def test_settings_has_prompt_and_subject_editors(window) -> None:

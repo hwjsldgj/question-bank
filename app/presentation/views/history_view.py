@@ -269,6 +269,12 @@ class HistoryView(QWidget):
                     f"×{item.count}（{item.subject}/"
                     f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}）"
                 )
+        if criteria.fill_enabled and criteria.fill_item is not None:
+            item = criteria.fill_item
+            parts.append(
+                f"填空题×{item.count}（{item.subject}/"
+                f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}）"
+            )
         if criteria.solution_enabled and criteria.solution_item is not None:
             item = criteria.solution_item
             parts.append(

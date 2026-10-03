@@ -36,6 +36,7 @@ from app.domain.errors import DomainError
 QUESTION_TYPE_LABELS: dict[QuestionType, str] = {
     QuestionType.SINGLE: "单选题",
     QuestionType.MULTIPLE: "多选题",
+    QuestionType.FILL: "填空题",
     QuestionType.SOLUTION: "解答题",
 }
 
@@ -63,6 +64,7 @@ SOURCE_LABELS: dict[QuestionSource, str] = {
 #: 试卷分区 -> 中文标签
 SECTION_LABELS: dict[SectionKind, str] = {
     SectionKind.CHOICE: "选择题部分",
+    SectionKind.FILL: "填空题部分",
     SectionKind.SOLUTION: "解答题部分",
 }
 

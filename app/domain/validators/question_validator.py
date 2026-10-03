@@ -43,6 +43,13 @@ class QuestionValidator:
                 raise QuestionValidationError("解答题必须填写参考答案")
             return
 
+        if question.type is QuestionType.FILL:
+            if question.options:
+                raise QuestionValidationError("填空题不应包含选项")
+            if not answers:
+                raise QuestionValidationError("填空题必须填写参考答案（多个空用分号分隔）")
+            return
+
         if len([option for option in question.options if option.text.strip() or option.key.strip()]) < 2:
             raise QuestionValidationError("选择题至少需要 2 个选项")
         if not answers:

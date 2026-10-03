@@ -75,9 +75,26 @@ class PaperGenerationView(QWidget):
     # ------------------------------------------------------------------ 构建
 
     def _build_ui(self) -> None:
-        """构建组卷视图整体布局。"""
+        """构建组卷视图整体布局（单选 / 多选 / 填空 / 解答各自独立启用）。"""
         root = QVBoxLayout(self)
-        root.addWidget(self._build_choice_group())
+        root.addWidget(self._build_type_group(
+            "单选题", "single", 5,
+            {"enabled": "_single_enabled", "body": "_single_body",
+             "subject": "_single_subject", "difficulty": "_single_difficulty",
+             "count": "_single_count", "hit": "_single_hit"},
+        ))
+        root.addWidget(self._build_type_group(
+            "多选题", "multiple", 3,
+            {"enabled": "_multiple_enabled", "body": "_multiple_body",
+             "subject": "_multiple_subject", "difficulty": "_multiple_difficulty",
+             "count": "_multiple_count", "hit": "_multiple_hit"},
+        ))
+        root.addWidget(self._build_type_group(
+            "填空题", "fill", 4,
+            {"enabled": "_fill_enabled", "body": "_fill_body",
+             "subject": "_fill_subject", "difficulty": "_fill_difficulty",
+             "count": "_fill_count", "hit": "_fill_hit"},
+        ))
         root.addWidget(self._build_solution_group())
 
         self._generate_button = QPushButton("生成试卷")
@@ -106,72 +123,45 @@ class PaperGenerationView(QWidget):
         combo.setMinimumWidth(120)
         return combo
 
-    def reload_subjects(self) -> None:
-        """按设置中的科目列表重建三个科目下拉框，并尽量保留当前选择（用户需求）。"""
-        subjects = ui_utils.safe_call(
-            self._question_service.list_subjects, default=None
-        )
-        if not subjects:
-            return
-        for combo in (
-            self._single_subject,
-            self._multiple_subject,
-            self._solution_subject,
-        ):
-            current = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            for subject in subjects:
-                combo.addItem(subject, subject)
-            index = combo.findText(current)
-            combo.setCurrentIndex(index if index >= 0 else 0)
-            combo.blockSignals(False)
-        self.refresh_hit_counts()
+    def _build_type_group(
+        self, title: str, prefix: str, default_count: int, attrs: dict
+    ) -> QGroupBox:
+        """构建某一题型独立的条件组（启用开关 + 科目 / 难度 / 数量 / 命中量）。
 
-    def _build_choice_group(self) -> QGroupBox:
-        """构建选择题部分条件组（单选 / 多选）。"""
-        group = QGroupBox("选择题部分")
+        单选与多选各自独立启用（用户需求：组卷时单选多选分开）。
+        """
+        group = QGroupBox(f"{title}部分")
         outer = QVBoxLayout(group)
 
-        self._choice_enabled = QCheckBox("启用选择题部分")
-        self._choice_enabled.toggled.connect(self._on_conditions_changed)
-        outer.addWidget(self._choice_enabled)
+        enabled = QCheckBox(f"启用{title}部分")
+        enabled.toggled.connect(self._on_conditions_changed)
+        outer.addWidget(enabled)
 
         body = QWidget()
         form = QFormLayout(body)
-
-        self._single_subject = self._new_subject_combo()
-        self._single_difficulty = self._new_difficulty_combo()
-        self._single_count = QSpinBox()
-        self._single_count.setRange(1, 999)
-        self._single_count.setValue(5)
-        self._single_hit = QLabel("命中：—")
-        form.addRow("单选 · 科目", self._single_subject)
-        form.addRow("单选 · 难度", self._single_difficulty)
-        form.addRow("单选 · 数量", self._single_count)
-        form.addRow("", self._single_hit)
-
-        self._multiple_subject = self._new_subject_combo()
-        self._multiple_difficulty = self._new_difficulty_combo()
-        self._multiple_count = QSpinBox()
-        self._multiple_count.setRange(1, 999)
-        self._multiple_count.setValue(3)
-        self._multiple_hit = QLabel("命中：—")
-        form.addRow("多选 · 科目", self._multiple_subject)
-        form.addRow("多选 · 难度", self._multiple_difficulty)
-        form.addRow("多选 · 数量", self._multiple_count)
-        form.addRow("", self._multiple_hit)
-
+        subject = self._new_subject_combo()
+        difficulty = self._new_difficulty_combo()
+        count = QSpinBox()
+        count.setRange(1, 999)
+        count.setValue(default_count)
+        hit = QLabel("命中：—")
+        form.addRow("科目", subject)
+        form.addRow("难度", difficulty)
+        form.addRow("数量", count)
+        form.addRow("", hit)
         outer.addWidget(body)
-        self._choice_body = body
-        body.setEnabled(self._choice_enabled.isChecked())
+        body.setEnabled(enabled.isChecked())
 
-        for subject in (self._single_subject, self._multiple_subject):
-            subject.currentIndexChanged.connect(self._on_conditions_changed)
-        for combo in (self._single_difficulty, self._multiple_difficulty):
-            combo.currentIndexChanged.connect(self._on_conditions_changed)
-        for spin in (self._single_count, self._multiple_count):
-            spin.valueChanged.connect(self._on_conditions_changed)
+        subject.currentIndexChanged.connect(self._on_conditions_changed)
+        difficulty.currentIndexChanged.connect(self._on_conditions_changed)
+        count.valueChanged.connect(self._on_conditions_changed)
+
+        setattr(self, attrs["enabled"], enabled)
+        setattr(self, attrs["body"], body)
+        setattr(self, attrs["subject"], subject)
+        setattr(self, attrs["difficulty"], difficulty)
+        setattr(self, attrs["count"], count)
+        setattr(self, attrs["hit"], hit)
         return group
 
     def _build_solution_group(self) -> QGroupBox:
@@ -285,16 +275,44 @@ class PaperGenerationView(QWidget):
         layout.addWidget(export_button)
         return group
 
+    def reload_subjects(self) -> None:
+        """按设置中的科目列表重建全部科目下拉框，并尽量保留当前选择（用户需求）。"""
+        subjects = ui_utils.safe_call(
+            self._question_service.list_subjects, default=None
+        )
+        if not subjects:
+            return
+        for combo in (
+            self._single_subject,
+            self._multiple_subject,
+            self._fill_subject,
+            self._solution_subject,
+        ):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            for subject in subjects:
+                combo.addItem(subject, subject)
+            index = combo.findText(current)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
+        self.refresh_hit_counts()
+
     # ------------------------------------------------------------- 条件与命中量
 
     def _on_conditions_changed(self) -> None:
         """条件变化：切换编辑区可用性并触发命中量防抖刷新。"""
-        self._choice_body.setEnabled(self._choice_enabled.isChecked())
-        self._solution_body.setEnabled(self._solution_enabled.isChecked())
+        for body, enabled in (
+            (self._single_body, self._single_enabled),
+            (self._multiple_body, self._multiple_enabled),
+            (self._fill_body, self._fill_enabled),
+            (self._solution_body, self._solution_enabled),
+        ):
+            body.setEnabled(enabled.isChecked())
         self._hit_timer.start()
 
     def refresh_hit_counts(self) -> None:
-        """实时更新三个题型的命中量（需求 R6 第 2 / 3 条）。"""
+        """实时更新四个题型的命中量（需求 R6 第 2 / 3 条）。"""
         if self._single_subject.count() == 0:
             self.reload_subjects()
         self._update_hit(
@@ -304,6 +322,10 @@ class PaperGenerationView(QWidget):
         self._update_hit(
             self._multiple_hit, self._multiple_subject, self._multiple_difficulty,
             QuestionType.MULTIPLE,
+        )
+        self._update_hit(
+            self._fill_hit, self._fill_subject, self._fill_difficulty,
+            QuestionType.FILL,
         )
         self._update_hit(
             self._solution_hit, self._solution_subject, self._solution_difficulty,
@@ -333,12 +355,14 @@ class PaperGenerationView(QWidget):
         label.setText("命中：—" if count is None else f"命中：{count} 道")
 
     def _build_criteria(self) -> PaperCriteria:
-        """根据界面控件构建组卷条件（需求 R7）。"""
-        choice_enabled = self._choice_enabled.isChecked()
+        """根据界面控件构建组卷条件（需求 R7；单选 / 多选 / 填空各自独立启用）。"""
+        single_enabled = self._single_enabled.isChecked()
+        multiple_enabled = self._multiple_enabled.isChecked()
+        fill_enabled = self._fill_enabled.isChecked()
         solution_enabled = self._solution_enabled.isChecked()
 
         choice_items: list[TypeRequirement] = []
-        if choice_enabled:
+        if single_enabled:
             choice_items.append(
                 TypeRequirement(
                     question_type=QuestionType.SINGLE,
@@ -347,6 +371,7 @@ class PaperGenerationView(QWidget):
                     count=self._single_count.value(),
                 )
             )
+        if multiple_enabled:
             choice_items.append(
                 TypeRequirement(
                     question_type=QuestionType.MULTIPLE,
@@ -354,6 +379,15 @@ class PaperGenerationView(QWidget):
                     difficulty=self._multiple_difficulty.currentData(),
                     count=self._multiple_count.value(),
                 )
+            )
+
+        fill_item: TypeRequirement | None = None
+        if fill_enabled:
+            fill_item = TypeRequirement(
+                question_type=QuestionType.FILL,
+                subject=self._fill_subject.currentText().strip(),
+                difficulty=self._fill_difficulty.currentData(),
+                count=self._fill_count.value(),
             )
 
         solution_item: TypeRequirement | None = None
@@ -366,32 +400,42 @@ class PaperGenerationView(QWidget):
             )
 
         return PaperCriteria(
-            choice_enabled=choice_enabled,
+            choice_enabled=single_enabled or multiple_enabled,
             solution_enabled=solution_enabled,
             choice_items=choice_items,
             solution_item=solution_item,
+            fill_enabled=fill_enabled,
+            fill_item=fill_item,
         )
 
     def apply_criteria(self, criteria: PaperCriteria) -> None:
         """回填历史组卷条件（需求 R14 第 3 条：仅回填条件，题单重新生成）。"""
-        self._choice_enabled.setChecked(criteria.choice_enabled)
-        self._solution_enabled.setChecked(criteria.solution_enabled)
-        for item in criteria.choice_items:
-            if item.question_type == QuestionType.SINGLE:
-                self._fill_requirement(
-                    self._single_subject, self._single_difficulty,
-                    self._single_count, item,
-                )
-            elif item.question_type == QuestionType.MULTIPLE:
-                self._fill_requirement(
-                    self._multiple_subject, self._multiple_difficulty,
-                    self._multiple_count, item,
-                )
-        if criteria.solution_item is not None:
-            self._fill_requirement(
-                self._solution_subject, self._solution_difficulty,
-                self._solution_count, criteria.solution_item,
-            )
+        single = next(
+            (i for i in criteria.choice_items if i.question_type == QuestionType.SINGLE),
+            None,
+        )
+        multiple = next(
+            (i for i in criteria.choice_items if i.question_type == QuestionType.MULTIPLE),
+            None,
+        )
+        self._single_enabled.setChecked(single is not None)
+        self._multiple_enabled.setChecked(multiple is not None)
+        self._fill_enabled.setChecked(
+            criteria.fill_enabled and criteria.fill_item is not None
+        )
+        self._solution_enabled.setChecked(
+            criteria.solution_enabled and criteria.solution_item is not None
+        )
+
+        for item, combo, difficulty, count in (
+            (single, self._single_subject, self._single_difficulty, self._single_count),
+            (multiple, self._multiple_subject, self._multiple_difficulty, self._multiple_count),
+            (criteria.fill_item, self._fill_subject, self._fill_difficulty, self._fill_count),
+            (criteria.solution_item, self._solution_subject, self._solution_difficulty, self._solution_count),
+        ):
+            if item is not None:
+                self._fill_requirement(combo, difficulty, count, item)
+        self._on_conditions_changed()
         self.refresh_hit_counts()
 
     @staticmethod
@@ -416,8 +460,10 @@ class PaperGenerationView(QWidget):
     def _on_generate(self) -> None:
         """执行组卷（需求 R7-R10 / R13）。"""
         criteria = self._build_criteria()
-        if not criteria.choice_enabled and not criteria.solution_enabled:
-            ui_utils.warning(self, "请至少启用「选择题部分」或「解答题部分」。")
+        if not criteria.choice_enabled and not criteria.fill_enabled and not criteria.solution_enabled:
+            ui_utils.warning(
+                self, "请至少启用「单选题」「多选题」「填空题」或「解答题」中的一项。"
+            )
             return
         ok, paper = ui_utils.run_guarded(
             self, self._composer.generate, criteria, success_message="试卷已生成"

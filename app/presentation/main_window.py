@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
     QTabWidget,
+    QWidget,
 )
 
 from app.container import Container
@@ -67,13 +69,30 @@ class MainWindow(QMainWindow):
         self.settings_view = SettingsView(self._container)
 
     def _build_tabs(self) -> None:
-        """构建标签页并设为中央部件。"""
+        """构建标签页并设为中央部件。
+
+        每个视图都包在 ``QScrollArea`` 中（用户需求）：窗口最大化或内容
+        超出屏幕时可上下滚动，避免控件被裁剪或错位。
+        """
         self._tabs = QTabWidget(self)
-        self._tabs.addTab(self.question_bank_view, TAB_TITLES[0])
-        self._tabs.addTab(self.paper_generation_view, TAB_TITLES[1])
-        self._tabs.addTab(self.history_view, TAB_TITLES[2])
-        self._tabs.addTab(self.settings_view, TAB_TITLES[3])
+        self._tab_views = [
+            self.question_bank_view,
+            self.paper_generation_view,
+            self.history_view,
+            self.settings_view,
+        ]
+        for view, title in zip(self._tab_views, TAB_TITLES):
+            self._tabs.addTab(self._wrap_scroll(view), title)
         self.setCentralWidget(self._tabs)
+
+    @staticmethod
+    def _wrap_scroll(view: QWidget) -> QScrollArea:
+        """把视图包进可滚动的容器，保证内容过高时能上下滚动。"""
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(view)
+        return area
 
     def _build_menu(self) -> None:
         """构建菜单栏：文件 / 视图 / 帮助。"""
@@ -143,7 +162,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_current_view(self) -> None:
         """F5：按当前标签页刷新对应视图数据。"""
-        current = self._tabs.currentWidget()
+        current = self._tab_views[self._tabs.currentIndex()]
         if current is self.question_bank_view:
             self.question_bank_view.reload_subjects()
             self.question_bank_view.reload_questions()
@@ -171,7 +190,7 @@ class MainWindow(QMainWindow):
     def _on_reuse_criteria(self, criteria: PaperCriteria) -> None:
         """历史条件复用：回填组卷表单并切换到组卷标签页（需求 R14 第 3 条）。"""
         self.paper_generation_view.apply_criteria(criteria)
-        self._tabs.setCurrentWidget(self.paper_generation_view)
+        self._tabs.setCurrentIndex(self._tab_views.index(self.paper_generation_view))
         self.show_status("已回填历史组卷条件，题单将在组卷时按当前题库重新选组", 8000)
 
     def _show_about(self) -> None:

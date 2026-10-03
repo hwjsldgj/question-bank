@@ -1,0 +1,685 @@
+"""题库管理视图：题目录入 / 编辑 / 删除 / 批量粘贴 / 检索（需求 R1 / R2 / R5 / R6）。
+
+界面结构（内嵌三个子页签）：
+
+- 录入 / 编辑：结构化表单（科目 / 知识点 / 题型 / 选项 / 答案 / 解析 /
+  难度 / 质量标记），题型为解答题时切换为"参考答案"输入
+- 批量粘贴：粘贴多题文本 -> 解析预览（"待修正"行标红）-> 确认批量入库
+- 检索：按科目 / 知识点 / 难度 / 题型过滤，结果展示使用次数与最近使用时间，
+  并可对选中题目执行编辑 / 删除 / 质量标记
+
+所有业务操作经 ``app.application.question_service.QuestionService`` 完成；
+框架阶段服务为 TODO，界面通过 ``ui_utils.run_guarded`` 统一提示而不崩溃。
+
+依赖：PySide6.QtCore / QtGui / QtWidgets、app.container.Container、
+      app.domain.entities.question、app.domain.enums、app.presentation.ui_utils
+调用服务：app.application.question_service.QuestionService
+被使用：app.presentation.main_window
+"""
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.domain.entities.question import Option, Question, QuestionFilter
+from app.domain.enums import Difficulty, DifficultySource, QualityFlag, QuestionType
+from app.presentation import ui_utils
+
+
+class QuestionBankView(QWidget):
+    """题库管理视图：题目增删改查、批量粘贴与检索界面。"""
+
+    #: 题库数据发生变化（新增 / 更新 / 删除 / 批量入库）时发出，
+    #: 供主窗口刷新组卷视图的命中量统计。
+    questions_changed = Signal()
+
+    def __init__(self, container) -> None:
+        """注入容器、构建界面并加载初始数据。"""
+        super().__init__()
+        self._container = container
+        self._question_service = container.question_service
+
+        self._editing_id: str | None = None
+        self._paste_drafts: list[Question] = []
+        self._search_results: list[Question] = []
+
+        self._build_ui()
+        self.reload_questions()
+
+    # ------------------------------------------------------------------ 构建
+
+    def _build_ui(self) -> None:
+        """构建三个子页签。"""
+        root = QVBoxLayout(self)
+        self._inner_tabs = QTabWidget(self)
+        self._inner_tabs.addTab(self._build_editor_tab(), "录入 / 编辑")
+        self._inner_tabs.addTab(self._build_paste_tab(), "批量粘贴")
+        self._inner_tabs.addTab(self._build_search_tab(), "检索")
+        root.addWidget(self._inner_tabs)
+
+    def _build_editor_tab(self) -> QWidget:
+        """构建录入 / 编辑表单页。"""
+        page = QWidget()
+        form = QFormLayout(page)
+
+        self._subject_edit = QLineEdit()
+        self._subject_edit.setPlaceholderText("必填，如：高中数学")
+        self._knowledge_edit = QLineEdit()
+        self._knowledge_edit.setPlaceholderText("多个知识点用逗号分隔，如：一元二次方程,因式分解")
+
+        self._type_combo = QComboBox()
+        for question_type in (
+            QuestionType.SINGLE,
+            QuestionType.MULTIPLE,
+            QuestionType.SOLUTION,
+        ):
+            self._type_combo.addItem(
+                ui_utils.QUESTION_TYPE_LABELS[question_type], question_type
+            )
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+
+        self._difficulty_combo = QComboBox()
+        for difficulty in (
+            Difficulty.PENDING,
+            Difficulty.EASY,
+            Difficulty.MEDIUM,
+            Difficulty.HARD,
+        ):
+            self._difficulty_combo.addItem(
+                ui_utils.DIFFICULTY_LABELS[difficulty], difficulty
+            )
+
+        self._quality_combo = QComboBox()
+        for flag in (QualityFlag.NORMAL, QualityFlag.QUALITY, QualityFlag.LOW):
+            self._quality_combo.addItem(ui_utils.QUALITY_LABELS[flag], flag)
+
+        self._stem_edit = QPlainTextEdit()
+        self._stem_edit.setPlaceholderText("必填：题目的完整题干")
+        self._stem_edit.setFixedHeight(90)
+
+        self._choice_container = self._build_options_group()
+        self._solution_container = self._build_reference_group()
+
+        self._solution_edit = QPlainTextEdit()
+        self._solution_edit.setPlaceholderText("选填：解题思路 / 答案解析")
+        self._solution_edit.setFixedHeight(70)
+
+        form.addRow("科目 *", self._subject_edit)
+        form.addRow("知识点", self._knowledge_edit)
+        form.addRow("题型 *", self._type_combo)
+        form.addRow("难度", self._difficulty_combo)
+        form.addRow("质量标记", self._quality_combo)
+        form.addRow("题干 *", self._stem_edit)
+        form.addRow(self._choice_container)
+        form.addRow(self._solution_container)
+        form.addRow("解析（可选）", self._solution_edit)
+
+        self._save_button = QPushButton("保存题目")
+        self._save_button.clicked.connect(self._on_save_clicked)
+        clear_button = QPushButton("清空表单")
+        clear_button.clicked.connect(self._reset_form)
+        button_row = QHBoxLayout()
+        button_row.addWidget(self._save_button)
+        button_row.addWidget(clear_button)
+        button_row.addStretch(1)
+        button_holder = QWidget()
+        button_holder.setLayout(button_row)
+        form.addRow(button_holder)
+
+        self._on_type_changed()
+        return page
+
+    def _build_options_group(self) -> QGroupBox:
+        """构建选择题选项编辑器（标号 + 内容，可增删行）。"""
+        group = QGroupBox("选项（选择题，至少 2 项）")
+        layout = QVBoxLayout(group)
+
+        self._options_table = QTableWidget(0, 2)
+        self._options_table.setHorizontalHeaderLabels(["标号", "内容"])
+        self._options_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self._options_table.verticalHeader().setVisible(False)
+        self._options_table.setFixedHeight(150)
+        layout.addWidget(self._options_table)
+
+        add_button = QPushButton("添加选项")
+        add_button.clicked.connect(lambda _checked=False: self._add_option_row())
+        remove_button = QPushButton("删除选中选项")
+        remove_button.clicked.connect(
+            lambda _checked=False: self._remove_selected_option_rows()
+        )
+        row = QHBoxLayout()
+        row.addWidget(add_button)
+        row.addWidget(remove_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self._answer_edit = QLineEdit()
+        self._answer_edit.setPlaceholderText(
+            "单选填 1 个标号（如 A）；多选填多个（如 A,C）"
+        )
+        answer_row = QHBoxLayout()
+        answer_row.addWidget(QLabel("答案 *"))
+        answer_row.addWidget(self._answer_edit)
+        layout.addLayout(answer_row)
+        return group
+
+    def _build_reference_group(self) -> QGroupBox:
+        """构建解答题参考答案编辑器。"""
+        group = QGroupBox("参考答案（解答题）")
+        layout = QVBoxLayout(group)
+        self._reference_edit = QPlainTextEdit()
+        self._reference_edit.setPlaceholderText("必填：解答题的参考答案")
+        self._reference_edit.setFixedHeight(90)
+        layout.addWidget(self._reference_edit)
+        return group
+
+    def _build_paste_tab(self) -> QWidget:
+        """构建批量粘贴页。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        hint = QLabel(
+            "粘贴多道题目，以空行或“---”分隔；每条可用“科目：/知识点：/题型：/"
+            "题干：/选项：/答案：/解析：”标注字段。点击“解析预览”后确认提交。"
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._paste_edit = QPlainTextEdit()
+        self._paste_edit.setPlaceholderText("在此粘贴题目文本…")
+        layout.addWidget(self._paste_edit)
+
+        parse_button = QPushButton("解析预览")
+        parse_button.clicked.connect(self._on_parse_paste)
+        commit_button = QPushButton("确认提交")
+        commit_button.clicked.connect(self._on_commit_paste)
+        button_row = QHBoxLayout()
+        button_row.addWidget(parse_button)
+        button_row.addWidget(commit_button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        self._preview_table = QTableWidget(0, 6)
+        self._preview_table.setHorizontalHeaderLabels(
+            ["状态", "科目", "题型", "题干", "答案", "待修正"]
+        )
+        self._preview_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self._preview_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.Stretch
+        )
+        layout.addWidget(self._preview_table)
+
+        self._paste_status = QLabel("尚未解析")
+        layout.addWidget(self._paste_status)
+        return page
+
+    def _build_search_tab(self) -> QWidget:
+        """构建检索页：过滤条件 + 结果表 + 操作按钮。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        filter_row = QHBoxLayout()
+        self._search_subject = QLineEdit()
+        self._search_subject.setPlaceholderText("科目（可空）")
+        self._search_knowledge = QLineEdit()
+        self._search_knowledge.setPlaceholderText("知识点（可空）")
+        self._search_difficulty = QComboBox()
+        self._search_difficulty.addItem("难度不限", None)
+        for difficulty in (Difficulty.EASY, Difficulty.MEDIUM, Difficulty.HARD):
+            self._search_difficulty.addItem(
+                ui_utils.DIFFICULTY_LABELS[difficulty], difficulty
+            )
+        self._search_type = QComboBox()
+        self._search_type.addItem("题型不限", None)
+        for question_type in (
+            QuestionType.SINGLE,
+            QuestionType.MULTIPLE,
+            QuestionType.SOLUTION,
+        ):
+            self._search_type.addItem(
+                ui_utils.QUESTION_TYPE_LABELS[question_type], question_type
+            )
+
+        search_button = QPushButton("检索")
+        search_button.clicked.connect(self._on_search)
+        filter_row.addWidget(QLabel("科目"))
+        filter_row.addWidget(self._search_subject)
+        filter_row.addWidget(QLabel("知识点"))
+        filter_row.addWidget(self._search_knowledge)
+        filter_row.addWidget(self._search_difficulty)
+        filter_row.addWidget(self._search_type)
+        filter_row.addWidget(search_button)
+        layout.addLayout(filter_row)
+
+        self._result_table = QTableWidget(0, 8)
+        self._result_table.setHorizontalHeaderLabels(
+            ["题目 ID", "科目", "题型", "难度", "质量", "使用次数", "最近使用", "题干"]
+        )
+        self._result_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self._result_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._result_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self._result_table.horizontalHeader().setSectionResizeMode(
+            7, QHeaderView.ResizeMode.Stretch
+        )
+        layout.addWidget(self._result_table)
+
+        action_row = QHBoxLayout()
+        edit_button = QPushButton("编辑选中")
+        edit_button.clicked.connect(self._on_edit_selected)
+        delete_button = QPushButton("删除选中")
+        delete_button.clicked.connect(self._on_delete_selected)
+        quality_button = QPushButton("设为优质")
+        quality_button.clicked.connect(
+            lambda _checked=False: self._on_quality_selected(QualityFlag.QUALITY)
+        )
+        low_button = QPushButton("设为低质")
+        low_button.clicked.connect(
+            lambda _checked=False: self._on_quality_selected(QualityFlag.LOW)
+        )
+        normal_button = QPushButton("清除质量标记")
+        normal_button.clicked.connect(
+            lambda _checked=False: self._on_quality_selected(QualityFlag.NORMAL)
+        )
+        for button in (
+            edit_button,
+            delete_button,
+            quality_button,
+            low_button,
+            normal_button,
+        ):
+            action_row.addWidget(button)
+        action_row.addStretch(1)
+        layout.addLayout(action_row)
+
+        self._search_status = QLabel("尚未加载")
+        layout.addWidget(self._search_status)
+        return page
+
+    # ------------------------------------------------------------- 表单辅助
+
+    def _add_option_row(self, key: str = "", text: str = "") -> None:
+        """向选项表追加一行；未给标号时按 A/B/C… 自动分配。"""
+        row = self._options_table.rowCount()
+        self._options_table.insertRow(row)
+        if not key:
+            key = chr(ord("A") + row)
+        self._options_table.setItem(row, 0, QTableWidgetItem(key))
+        self._options_table.setItem(row, 1, QTableWidgetItem(text))
+
+    def _remove_selected_option_rows(self) -> None:
+        """删除选项表中选中的行。"""
+        rows = sorted(
+            {index.row() for index in self._options_table.selectedIndexes()},
+            reverse=True,
+        )
+        for row in rows:
+            self._options_table.removeRow(row)
+
+    def _reset_options(self) -> None:
+        """重置为 A-D 四个空选项。"""
+        self._options_table.setRowCount(0)
+        for key in ("A", "B", "C", "D"):
+            self._add_option_row(key, "")
+
+    def _collect_options(self) -> list[Option]:
+        """从选项表读取选项，跳过完全空白的行。"""
+        options: list[Option] = []
+        for row in range(self._options_table.rowCount()):
+            key_item = self._options_table.item(row, 0)
+            text_item = self._options_table.item(row, 1)
+            key = key_item.text().strip() if key_item else ""
+            text = text_item.text().strip() if text_item else ""
+            if key or text:
+                options.append(Option(key=key, text=text))
+        return options
+
+    def _parse_knowledge(self) -> list[str]:
+        """解析知识点输入（支持中英文逗号分隔）。"""
+        raw = self._knowledge_edit.text().strip()
+        return [
+            part.strip()
+            for part in raw.replace("，", ",").split(",")
+            if part.strip()
+        ]
+
+    def _collect_answer(self, question_type: QuestionType) -> list[str]:
+        """收集答案：选择题取标号列表，解答题取参考答案文本。"""
+        if question_type == QuestionType.SOLUTION:
+            reference = self._reference_edit.toPlainText().strip()
+            return [reference] if reference else []
+        raw = self._answer_edit.text().strip().replace("，", ",").replace(" ", ",")
+        return [
+            part.strip().upper()
+            for part in raw.split(",")
+            if part.strip()
+        ]
+
+    def _build_draft(self) -> Question:
+        """根据当前表单构建题目草稿（未落库）。"""
+        question_type = self._type_combo.currentData()
+        difficulty = self._difficulty_combo.currentData()
+        return Question(
+            id=self._editing_id or "",
+            subject=self._subject_edit.text().strip(),
+            knowledge_points=self._parse_knowledge(),
+            type=question_type,
+            stem=self._stem_edit.toPlainText().strip(),
+            options=(
+                self._collect_options()
+                if question_type != QuestionType.SOLUTION
+                else []
+            ),
+            answer=self._collect_answer(question_type),
+            solution=self._solution_edit.toPlainText().strip() or None,
+            difficulty=difficulty,
+            difficulty_source=(
+                DifficultySource.MANUAL
+                if difficulty != Difficulty.PENDING
+                else DifficultySource.AI
+            ),
+            quality_flag=self._quality_combo.currentData(),
+        )
+
+    def _build_patch(self, draft: Question) -> dict:
+        """把草稿转换为 QuestionService.update_question 所需的补丁字典。"""
+        return {
+            "subject": draft.subject,
+            "knowledge_points": draft.knowledge_points,
+            "type": draft.type,
+            "stem": draft.stem,
+            "options": draft.options,
+            "answer": draft.answer,
+            "solution": draft.solution,
+            "difficulty": draft.difficulty,
+            "difficulty_source": draft.difficulty_source,
+            "quality_flag": draft.quality_flag,
+        }
+
+    def _reset_form(self) -> None:
+        """清空表单并回到"新增"模式。"""
+        self._editing_id = None
+        self._subject_edit.clear()
+        self._knowledge_edit.clear()
+        self._stem_edit.clear()
+        self._answer_edit.clear()
+        self._reference_edit.clear()
+        self._solution_edit.clear()
+        ui_utils.select_combo_data(self._type_combo, QuestionType.SINGLE)
+        ui_utils.select_combo_data(self._difficulty_combo, Difficulty.PENDING)
+        ui_utils.select_combo_data(self._quality_combo, QualityFlag.NORMAL)
+        self._reset_options()
+        self._save_button.setText("保存题目")
+        self._on_type_changed()
+
+    def _on_type_changed(self) -> None:
+        """题型切换时在"选项 + 答案"与"参考答案"之间切换。"""
+        is_solution = self._type_combo.currentData() == QuestionType.SOLUTION
+        self._choice_container.setVisible(not is_solution)
+        self._solution_container.setVisible(is_solution)
+        if not is_solution and self._options_table.rowCount() == 0:
+            self._reset_options()
+
+    def _load_question_into_form(self, question: Question) -> None:
+        """把已有题目载入表单进入编辑模式。"""
+        self._editing_id = question.id
+        self._subject_edit.setText(question.subject)
+        self._knowledge_edit.setText("，".join(question.knowledge_points))
+        self._stem_edit.setPlainText(question.stem)
+        ui_utils.select_combo_data(self._type_combo, question.type)
+        if question.is_solution:
+            reference = question.answer[0] if question.answer else ""
+            self._reference_edit.setPlainText(reference)
+            self._answer_edit.clear()
+        else:
+            self._answer_edit.setText(",".join(question.answer))
+            self._reference_edit.clear()
+            self._options_table.setRowCount(0)
+            for option in question.options:
+                self._add_option_row(option.key, option.text)
+            if self._options_table.rowCount() == 0:
+                self._reset_options()
+        self._solution_edit.setPlainText(question.solution or "")
+        ui_utils.select_combo_data(self._difficulty_combo, question.difficulty)
+        ui_utils.select_combo_data(self._quality_combo, question.quality_flag)
+        self._save_button.setText("更新题目")
+        self._on_type_changed()
+        self._inner_tabs.setCurrentIndex(0)
+
+    # --------------------------------------------------------------- 保存
+
+    def _on_save_clicked(self) -> None:
+        """保存或更新题目（需求 R1）。"""
+        draft = self._build_draft()
+        if self._editing_id:
+            ok, _ = ui_utils.run_guarded(
+                self,
+                self._question_service.update_question,
+                self._editing_id,
+                self._build_patch(draft),
+                success_message="题目已更新",
+            )
+        else:
+            ok, _ = ui_utils.run_guarded(
+                self,
+                self._question_service.create_question,
+                draft,
+                success_message="题目已保存，已触发 AI 难度分析（未配置则置为待确认）",
+            )
+        if ok:
+            self._reset_form()
+            self.reload_questions()
+            self.questions_changed.emit()
+
+    # ------------------------------------------------------------- 批量粘贴
+
+    def _on_parse_paste(self) -> None:
+        """解析粘贴文本为候选题并展示预览（需求 R2 第 1 / 2 / 4 条）。"""
+        raw = self._paste_edit.toPlainText().strip()
+        if not raw:
+            ui_utils.info(self, "请先粘贴题目文本。")
+            return
+        ok, drafts = ui_utils.run_guarded(self, self._question_service.batch_parse, raw)
+        if not ok:
+            return
+        self._paste_drafts = drafts or []
+        self._render_paste_preview(self._paste_drafts)
+        self._paste_status.setText(f"解析出 {len(self._paste_drafts)} 道候选题目")
+
+    def _on_commit_paste(self) -> None:
+        """批量写入确认后的候选题（需求 R2 第 3 条）。"""
+        if not self._paste_drafts:
+            ui_utils.info(self, "请先点击“解析预览”确认候选题。")
+            return
+        ok, saved = ui_utils.run_guarded(
+            self,
+            self._question_service.batch_commit,
+            self._paste_drafts,
+            success_message="候选题目已批量入库",
+        )
+        if not ok:
+            return
+        self._paste_drafts = []
+        self._preview_table.setRowCount(0)
+        self._paste_edit.clear()
+        self._paste_status.setText(f"已入库 {len(saved or [])} 道题目")
+        self.reload_questions()
+        self.questions_changed.emit()
+
+    def _render_paste_preview(self, drafts: list[Question]) -> None:
+        """渲染候选题预览，待修正行标红（需求 R2 第 4 条）。"""
+        self._preview_table.setRowCount(0)
+        for draft in drafts:
+            incomplete = self._is_incomplete(draft)
+            row = self._preview_table.rowCount()
+            self._preview_table.insertRow(row)
+            values = [
+                "待修正" if incomplete else "就绪",
+                draft.subject,
+                ui_utils.QUESTION_TYPE_LABELS.get(draft.type, ""),
+                draft.stem,
+                self._answer_text(draft),
+                "是" if incomplete else "否",
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if incomplete:
+                    item.setForeground(QColor("red"))
+                self._preview_table.setItem(row, column, item)
+
+    @staticmethod
+    def _answer_text(question: Question) -> str:
+        """把答案列表渲染为可读文本。"""
+        return "，".join(question.answer)
+
+    @staticmethod
+    def _is_incomplete(question: Question) -> bool:
+        """判断候选题是否缺少必填字段（预览"待修正"依据，需求 R2 第 4 条）。"""
+        if not question.subject or not question.stem:
+            return True
+        if question.is_solution:
+            return not (question.answer and question.answer[0].strip())
+        return len(question.options) < 2 or not question.answer
+
+    # --------------------------------------------------------------- 检索
+
+    def _build_filter(self) -> QuestionFilter:
+        """根据检索控件构建过滤器（空条件表示不过滤）。"""
+        return QuestionFilter(
+            subject=self._search_subject.text().strip() or None,
+            knowledge_point=self._search_knowledge.text().strip() or None,
+            difficulty=self._search_difficulty.currentData(),
+            question_type=self._search_type.currentData(),
+        )
+
+    def reload_questions(self) -> None:
+        """静默重新检索（初始化与跨视图刷新使用，不弹窗）。"""
+        questions = ui_utils.safe_call(
+            self._question_service.search, self._build_filter(), default=None
+        )
+        if questions is None:
+            self._search_results = []
+            self._render_results([])
+            self._search_status.setText("检索功能尚未实现（框架占位）")
+            return
+        self._search_results = questions
+        self._render_results(questions)
+        self._search_status.setText(f"共 {len(questions)} 道题")
+
+    def _on_search(self) -> None:
+        """检索按钮：按条件查询题库（需求 R6 第 1 条）。"""
+        ok, questions = ui_utils.run_guarded(
+            self, self._question_service.search, self._build_filter()
+        )
+        if not ok:
+            return
+        self._search_results = questions or []
+        self._render_results(self._search_results)
+        self._search_status.setText(f"共 {len(self._search_results)} 道题")
+
+    def _render_results(self, questions: list[Question]) -> None:
+        """渲染结果表，并补充使用次数与最近使用时间（需求 R6 第 4 条）。"""
+        self._result_table.setRowCount(0)
+        ids = [question.id for question in questions]
+        usage = ui_utils.safe_call(
+            self._container.usage_repository.get_many, ids, default={}
+        ) or {}
+        for question in questions:
+            record = usage.get(question.id)
+            last_used = (
+                record.last_used_at.strftime("%Y-%m-%d %H:%M")
+                if record is not None and record.last_used_at is not None
+                else "从未"
+            )
+            row = self._result_table.rowCount()
+            self._result_table.insertRow(row)
+            values = [
+                question.id,
+                question.subject,
+                ui_utils.QUESTION_TYPE_LABELS.get(question.type, ""),
+                ui_utils.DIFFICULTY_LABELS.get(question.difficulty, ""),
+                ui_utils.QUALITY_LABELS.get(question.quality_flag, ""),
+                str(record.use_count) if record is not None else "0",
+                last_used,
+                question.stem,
+            ]
+            for column, value in enumerate(values):
+                self._result_table.setItem(row, column, QTableWidgetItem(str(value)))
+
+    def _selected_question(self) -> Question | None:
+        """返回结果表当前选中行对应的题目。"""
+        row = self._result_table.currentRow()
+        if row < 0 or row >= len(self._search_results):
+            return None
+        return self._search_results[row]
+
+    # ------------------------------------------------------- 结果行操作
+
+    def _on_edit_selected(self) -> None:
+        """把选中题目载入编辑表单。"""
+        question = self._selected_question()
+        if question is None:
+            ui_utils.info(self, "请先在检索结果中选择一道题目。")
+            return
+        self._load_question_into_form(question)
+
+    def _on_delete_selected(self) -> None:
+        """删除选中题目（需求 R1 第 4 条）。"""
+        question = self._selected_question()
+        if question is None:
+            ui_utils.info(self, "请先在检索结果中选择一道题目。")
+            return
+        if not ui_utils.confirm(
+            self, f"确定删除题目「{question.stem[:30]}」？删除后不再参与组卷。"
+        ):
+            return
+        ok, _ = ui_utils.run_guarded(
+            self,
+            self._question_service.delete_question,
+            question.id,
+            success_message="题目已删除",
+        )
+        if ok:
+            self.reload_questions()
+            self.questions_changed.emit()
+
+    def _on_quality_selected(self, flag: QualityFlag) -> None:
+        """设置选中题目的人工质量标记（需求 R5 第 3 条 / R8 第 8 条）。"""
+        question = self._selected_question()
+        if question is None:
+            ui_utils.info(self, "请先在检索结果中选择一道题目。")
+            return
+        ok, _ = ui_utils.run_guarded(
+            self,
+            self._question_service.set_quality_flag,
+            question.id,
+            flag,
+            success_message=f"质量标记已设为「{ui_utils.QUALITY_LABELS[flag]}」",
+        )
+        if ok:
+            self.reload_questions()

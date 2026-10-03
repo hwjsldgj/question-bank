@@ -1,0 +1,92 @@
+"""SQLiteConfigStore：AI 与评分配置的本机持久化实现。
+
+实现接口：app.interfaces.repositories.ConfigStore
+依赖：app.infrastructure.database.connection.DatabaseConnection、
+      app.infrastructure.database.schema（settings 键值表）、
+      app.domain.entities.configs
+被使用：app.container（装配）、app.presentation.views.history_settings_view
+
+隐私约束（需求 R18）：API Key 仅保存在本机 settings 表，禁止外传或写入日志。
+
+说明：本模块的"读取失败回退默认值 / JSON 键值存取"属于框架级管道代码，
+已实现以便组合根（container）完成装配；业务规则一概位于 application 层。
+"""
+
+import json
+import sqlite3
+
+from app.config.settings import DEFAULT_AI_CONFIG, DEFAULT_SCORING_CONFIG
+from app.domain.entities.configs import AIConfig, ScoringConfig
+from app.infrastructure.database.connection import DatabaseConnection
+from app.interfaces.repositories import ConfigStore
+
+
+class SQLiteConfigStore(ConfigStore):
+    """配置存储 SQLite 实现：settings 表键值对，值为 JSON 文本。"""
+
+    KEY_AI = "ai_config"
+    KEY_SCORING = "scoring_config"
+
+    def __init__(self, db: DatabaseConnection) -> None:
+        """注入数据库连接管理器。"""
+        self._db = db
+
+    def load_ai_config(self) -> AIConfig:
+        """读取 AI 配置；无记录或解析失败时返回默认值（视为未配置）。"""
+        raw = self._read_key(self.KEY_AI)
+        if raw is None:
+            return DEFAULT_AI_CONFIG
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_AI_CONFIG
+        return AIConfig(**self._filter_fields(AIConfig, data))
+
+    def save_ai_config(self, config: AIConfig) -> None:
+        """保存 AI 配置（UPSERT，需求 R15 第 3 条）。"""
+        self._write_key(self.KEY_AI, self._dump(config))
+
+    def load_scoring_config(self) -> ScoringConfig:
+        """读取评分与冷却配置；无记录时返回默认配置。"""
+        raw = self._read_key(self.KEY_SCORING)
+        if raw is None:
+            return DEFAULT_SCORING_CONFIG
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_SCORING_CONFIG
+        return ScoringConfig(**self._filter_fields(ScoringConfig, data))
+
+    def save_scoring_config(self, config: ScoringConfig) -> None:
+        """保存评分与冷却配置（UPSERT）。"""
+        self._write_key(self.KEY_SCORING, self._dump(config))
+
+    def _read_key(self, key: str) -> str | None:
+        """读取单个配置键；表未创建时返回 None（启动早期容错）。"""
+        try:
+            row = self._db.connect().execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return row["value"] if row is not None else None
+
+    def _write_key(self, key: str, value: str) -> None:
+        """写入单个配置键（UPSERT 语义）。"""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    @staticmethod
+    def _filter_fields(config_cls, data: dict) -> dict:
+        """过滤 JSON 数据中与配置字段不匹配的键（向后兼容容错）。"""
+        fields = set(config_cls.__dataclass_fields__)
+        return {k: v for k, v in data.items() if k in fields}
+
+    @staticmethod
+    def _dump(config) -> str:
+        """配置对象序列化为 JSON 文本。"""
+        return json.dumps(config.__dict__, ensure_ascii=False)

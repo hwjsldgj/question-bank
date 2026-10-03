@@ -102,7 +102,7 @@ class QuestionOpRepository(ABC):
 |----|------|
 | 实现 | `infrastructure/repositories/question_op_repository.py::SQLiteQuestionOpRepository` |
 | 调用方 | `application/question_service`（写入）、`application/question_history_service`（读取）、`app/container.py` |
-| 语义 | 历史界面据此分两类展示：导入历史（action = import）与编辑历史（create / update / delete） |
+| 语义 | 历史界面据此分两类展示：导入历史（手工录入 create + 批量导入 import）与编辑历史（update / delete） |
 
 ### 1.6 AIClient —— AI API 客户端
 

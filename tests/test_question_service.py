@@ -252,6 +252,38 @@ def test_reanalyze_difficulties_skips_manual(container) -> None:
     assert container.question_repository.get(saved_manual.id).difficulty is Difficulty.EASY
 
 
+def test_history_split_import_and_edit(container, service) -> None:
+    """历史分类：手工录入 / 批量导入归入导入历史，修改与删除归入编辑历史。"""
+    history = container.question_history_service
+
+    saved = service.create_question(_single_question())
+    fill = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["因式分解"],
+        type=QuestionType.FILL,
+        stem="填空",
+        answer=["3"],
+        difficulty=Difficulty.EASY,
+    )
+    service.batch_commit([fill])
+    service.update_question(saved.id, {"stem": "改后的题干"})
+
+    imports = history.list_import_history()
+    edits = history.list_edit_history()
+    assert [record.action for record in imports] == [
+        QuestionOpAction.IMPORT,
+        QuestionOpAction.CREATE,
+    ]
+    assert [record.action for record in edits] == [QuestionOpAction.UPDATE]
+
+    service.delete_question(saved.id)
+    assert [record.action for record in history.list_edit_history()] == [
+        QuestionOpAction.DELETE,
+        QuestionOpAction.UPDATE,
+    ]
+
+
 def test_save_accepts_string_enum_fields(container, service) -> None:
     """回归：枚举字段以字符串给出时也能保存（曾报 'str' 没有 'value' 属性）。"""
     draft = _single_question()

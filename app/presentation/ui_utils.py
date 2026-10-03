@@ -110,6 +110,27 @@ def confirm(parent: QWidget, text: str, title: str = "请确认") -> bool:
     return answer == QMessageBox.StandardButton.Yes
 
 
+def confirm_action(
+    parent: QWidget,
+    text: str,
+    title: str = "请确认",
+    accept_text: str = "确定",
+    reject_text: str = "取消",
+) -> bool:
+    """带自定义按钮文案的确认框（如"AI 分析 / 取消"）。
+
+    :return: 点击接受按钮返回 True，否则 False
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title)
+    box.setText(text)
+    accept_button = box.addButton(accept_text, QMessageBox.ButtonRole.AcceptRole)
+    box.addButton(reject_text, QMessageBox.ButtonRole.RejectRole)
+    box.exec()
+    return box.clickedButton() is accept_button
+
+
 def run_guarded(
     parent: QWidget,
     func: Callable[..., Any],

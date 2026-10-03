@@ -2,8 +2,8 @@
 
 历史界面把题库操作台账分为两类展示：
 
-- 导入历史：批量粘贴 / 批量入库产生的记录（action = import）
-- 编辑历史：单题录入 / 编辑 / 删除产生的记录（action = create / update / delete）
+- 导入历史：手工录入（create）与批量导入（import）——即"手动导入"的新增记录
+- 编辑历史：题目修改（update）与删除（delete）
 
 依赖（构造注入）：app.interfaces.repositories.QuestionOpRepository
 被使用：app.presentation.views.history_view、app.container
@@ -13,12 +13,14 @@ from app.domain.entities.question_op import QuestionOpRecord
 from app.domain.enums import QuestionOpAction
 from app.interfaces.repositories import QuestionOpRepository
 
-#: 导入类操作
-IMPORT_ACTIONS: tuple[QuestionOpAction, ...] = (QuestionOpAction.IMPORT,)
-
-#: 编辑类操作（录入 / 编辑 / 删除）
-EDIT_ACTIONS: tuple[QuestionOpAction, ...] = (
+#: 导入类操作：手工录入 + 批量导入（手动导入的记录归入导入历史）
+IMPORT_ACTIONS: tuple[QuestionOpAction, ...] = (
     QuestionOpAction.CREATE,
+    QuestionOpAction.IMPORT,
+)
+
+#: 编辑类操作：题目修改与删除
+EDIT_ACTIONS: tuple[QuestionOpAction, ...] = (
     QuestionOpAction.UPDATE,
     QuestionOpAction.DELETE,
 )
@@ -32,11 +34,11 @@ class QuestionHistoryService:
         self._op_repository = op_repository
 
     def list_import_history(self, limit: int = 500) -> list[QuestionOpRecord]:
-        """导入历史：批量导入题目的记录，按时间倒序。"""
+        """导入历史：手工录入与批量导入的记录，按时间倒序。"""
         return self._list(IMPORT_ACTIONS, limit)
 
     def list_edit_history(self, limit: int = 500) -> list[QuestionOpRecord]:
-        """编辑历史：单题录入 / 编辑 / 删除的记录，按时间倒序。"""
+        """编辑历史：题目修改与删除的记录，按时间倒序。"""
         return self._list(EDIT_ACTIONS, limit)
 
     def _list(

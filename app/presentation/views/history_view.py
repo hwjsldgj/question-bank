@@ -101,7 +101,7 @@ class HistoryView(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(
-            QLabel("记录每次批量导入（粘贴解析 / 批量入库）的时间、科目与批次。")
+            QLabel("记录手工录入与批量导入的新增题目（含时间、科目与批次）。")
         )
 
         self._import_table = QTableWidget(0, 5)
@@ -127,7 +127,7 @@ class HistoryView(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(
-            QLabel("记录题目的录入、编辑（含难度与质量修正）与删除操作。")
+            QLabel("记录题目的修改（含难度与质量修正）与删除操作。")
         )
 
         self._edit_table = QTableWidget(0, 5)

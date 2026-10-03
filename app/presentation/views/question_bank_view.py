@@ -175,10 +175,15 @@ class QuestionBankView(QWidget):
 
         self._save_button = QPushButton("保存题目")
         self._save_button.clicked.connect(self._on_save_clicked)
+        self._cancel_edit_button = QPushButton("取消编辑")
+        self._cancel_edit_button.setToolTip("退出编辑状态并清空表单")
+        self._cancel_edit_button.clicked.connect(self._on_cancel_edit)
+        self._cancel_edit_button.setVisible(False)
         clear_button = QPushButton("清空表单")
         clear_button.clicked.connect(self._reset_form)
         button_row = QHBoxLayout()
         button_row.addWidget(self._save_button)
+        button_row.addWidget(self._cancel_edit_button)
         button_row.addWidget(clear_button)
         button_row.addStretch(1)
         button_holder = QWidget()
@@ -541,7 +546,14 @@ class QuestionBankView(QWidget):
         self._set_image(None)
         self._recognize_note.setText("AI 辨识结果仅供参考，必须人工复核后再保存。")
         self._save_button.setText("保存题目")
+        self._cancel_edit_button.setVisible(False)
         self._on_type_changed()
+
+    def _on_cancel_edit(self) -> None:
+        """取消编辑：退出编辑状态并清空表单（用户需求）。"""
+        if self._editing_id:
+            self.show_status("已取消编辑，表单已清空")
+        self._reset_form()
 
     def _on_type_changed(self) -> None:
         """题型切换时在"选项 + 答案"与"参考答案"之间切换。"""
@@ -584,6 +596,7 @@ class QuestionBankView(QWidget):
         ui_utils.select_combo_data(self._quality_combo, question.quality_flag)
         self._set_image(question.image_path)
         self._save_button.setText("更新题目")
+        self._cancel_edit_button.setVisible(True)
         self._on_type_changed()
         self._inner_tabs.setCurrentIndex(0)
 
@@ -712,8 +725,105 @@ class QuestionBankView(QWidget):
 
     # --------------------------------------------------------------- 保存
 
+    # --------------------------------------------------- 保存前校验与 AI 补全
+
+    @staticmethod
+    def _stem_or_options_problem(question: Question) -> str | None:
+        """题干或选择题选项不全时返回提示文本（这两类必须由出题者填写）。"""
+        if not question.stem:
+            return "题干不能为空，请填写题干后再保存。"
+        if question.type in (QuestionType.SINGLE, QuestionType.MULTIPLE):
+            valid = [
+                option
+                for option in question.options
+                if option.key.strip() and option.text.strip()
+            ]
+            if len(valid) < 2:
+                return "选择题至少需要 2 个含标号与内容的选项，请补齐后再保存。"
+        return None
+
+    @staticmethod
+    def _missing_labels(question: Question) -> list[str]:
+        """列出除题干 / 选项之外缺失的必填信息（可由 AI 分析补全）。"""
+        missing: list[str] = []
+        if not question.subject:
+            missing.append("科目")
+        if not question.knowledge_points:
+            missing.append("知识点")
+        if not question.answer:
+            missing.append(
+                "参考答案"
+                if question.type in (QuestionType.FILL, QuestionType.SOLUTION)
+                else "答案"
+            )
+        if question.difficulty is Difficulty.PENDING:
+            missing.append("难度")
+        return missing
+
+    def _ensure_required_fields(self, draft: Question) -> bool:
+        """保存前检查必填信息；除题干 / 选项外信息不全时提供 AI 分析选项（用户需求）。
+
+        :return: True 表示信息齐全（或已由 AI 补全）可继续保存
+        """
+        problem = self._stem_or_options_problem(draft)
+        if problem:
+            ui_utils.warning(self, problem)
+            return False
+
+        missing = self._missing_labels(draft)
+        if not missing:
+            return True
+
+        if not self._question_service.ai_configured():
+            ui_utils.warning(
+                self,
+                "以下信息不完整：" + "、".join(missing)
+                + "。\n\nAI 服务未配置，请手工补齐后保存，或先在「设置 -> AI 设置」中配置。",
+            )
+            return False
+
+        if not ui_utils.confirm_action(
+            self,
+            "以下信息不完整：" + "、".join(missing)
+            + "。\n\n是否使用 AI 分析补全这些字段？（结果仅供参考，保存前请人工复核）",
+            title="信息不完整",
+            accept_text="AI 分析",
+            reject_text="取消",
+        ):
+            return False
+
+        include_solution = not self._no_solution_check.isChecked()
+        ok, result = ui_utils.run_guarded(
+            self,
+            self._question_service.recognize_draft,
+            draft.stem,
+            draft.options,
+            include_solution,
+        )
+        if not ok or not result:
+            return False
+        self._apply_recognition(result, include_solution=include_solution)
+
+        remaining = self._missing_labels(self._build_draft())
+        if remaining:
+            ui_utils.warning(
+                self,
+                "AI 补全后仍缺少：" + "、".join(remaining) + "，请手工补齐后保存。",
+            )
+            return False
+        return True
+
     def _on_save_clicked(self) -> None:
-        """保存或更新题目（需求 R1）。"""
+        """保存或更新题目（需求 R1）。
+
+        保存前检查必填信息（用户需求）：
+        - 题干（选择题含选项）不全时直接提示，必须由出题者补齐；
+        - 其余信息（科目 / 知识点 / 答案 / 难度）不全时，弹出窗口提供
+          "AI 分析"选项，由 AI 辨识补全后再保存（结果仅供参考）。
+        """
+        draft = self._build_draft()
+        if not self._ensure_required_fields(draft):
+            return
         draft = self._build_draft()
         if self._editing_id:
             ok, _ = ui_utils.run_guarded(

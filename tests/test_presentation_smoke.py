@@ -128,6 +128,78 @@ def test_fill_type_supported(window) -> None:
     ]
 
 
+def test_cancel_edit_button(window) -> None:
+    """修改题目时提供"取消编辑"入口（用户需求）。"""
+    from app.domain.entities.question import Option, Question
+
+    bank = window.question_bank_view
+    assert bank._cancel_edit_button.text() == "取消编辑"
+    assert bank._cancel_edit_button.isVisible() is False
+
+    question = Question(
+        id="q-1",
+        subject="数学",
+        knowledge_points=["集合"],
+        type=QuestionType.SINGLE,
+        stem="题干",
+        options=[Option("A", "1"), Option("B", "2")],
+        answer=["A"],
+    )
+    bank._load_question_into_form(question)
+    assert bank._cancel_edit_button.isVisibleTo(bank) is True
+    assert bank._save_button.text() == "更新题目"
+
+    bank._on_cancel_edit()
+    assert bank._editing_id is None
+    assert bank._cancel_edit_button.isVisibleTo(bank) is False
+    assert bank._save_button.text() == "保存题目"
+
+
+def test_save_precheck_offers_ai_for_missing_fields(window) -> None:
+    """保存前校验：题干 / 选项缺失必须人工补齐，其余信息不全时提供 AI 分析选项。"""
+    from app.domain.entities.question import Option, Question
+
+    bank = window.question_bank_view
+    complete = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["集合"],
+        type=QuestionType.SINGLE,
+        stem="题干",
+        options=[Option("A", "1"), Option("B", "2")],
+        answer=["A"],
+        difficulty=Difficulty.EASY,
+    )
+    assert bank._stem_or_options_problem(complete) is None
+    assert bank._missing_labels(complete) == []
+
+    no_stem = Question(id="", subject="数学", knowledge_points=["集合"], stem="")
+    assert "题干" in bank._stem_or_options_problem(no_stem)
+
+    one_option = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["集合"],
+        type=QuestionType.SINGLE,
+        stem="题干",
+        options=[Option("A", "1")],
+        answer=["A"],
+    )
+    assert "选项" in bank._stem_or_options_problem(one_option)
+
+    incomplete = Question(
+        id="",
+        subject="",
+        knowledge_points=[],
+        type=QuestionType.SINGLE,
+        stem="题干",
+        options=[Option("A", "1"), Option("B", "2")],
+        answer=[],
+    )
+    labels = bank._missing_labels(incomplete)
+    assert "科目" in labels and "知识点" in labels and "答案" in labels
+
+
 def test_bank_completion_widgets(window) -> None:
     """题库收尾功能入口：概览统计、知识点补全与批量重析难度按钮。"""
     bank = window.question_bank_view

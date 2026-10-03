@@ -26,11 +26,12 @@
 
 import re
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QStringListModel, Signal
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QCompleter,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -76,6 +77,7 @@ class QuestionBankView(QWidget):
 
         self._build_ui()
         self.reload_subjects()
+        self.reload_knowledge_points()
         self.reload_questions()
 
     # ------------------------------------------------------------------ 构建
@@ -389,12 +391,18 @@ class QuestionBankView(QWidget):
         normal_button.clicked.connect(
             lambda _checked=False: self._on_quality_selected(QualityFlag.NORMAL)
         )
+        reanalyze_button = QPushButton("批量重析难度（AI）")
+        reanalyze_button.setToolTip(
+            "对选中题目（未选中则全库）重新调用 AI 分析难度；人工设置的难度不会被覆盖"
+        )
+        reanalyze_button.clicked.connect(self._on_reanalyze_selected)
         for button in (
             edit_button,
             delete_button,
             quality_button,
             low_button,
             normal_button,
+            reanalyze_button,
         ):
             action_row.addWidget(button)
         action_row.addStretch(1)
@@ -402,6 +410,8 @@ class QuestionBankView(QWidget):
 
         self._search_status = QLabel("尚未加载")
         layout.addWidget(self._search_status)
+        self._stats_label = QLabel("题库概览：—")
+        layout.addWidget(self._stats_label)
         return page
 
     # ------------------------------------------------------------- 表单辅助
@@ -723,6 +733,7 @@ class QuestionBankView(QWidget):
         if ok:
             self._reset_form()
             self.reload_questions()
+            self.reload_knowledge_points()
             self.questions_changed.emit()
 
     # ------------------------------------------------------------- 批量粘贴
@@ -758,6 +769,7 @@ class QuestionBankView(QWidget):
         self._paste_edit.clear()
         self._paste_status.setText(f"已入库 {len(saved or [])} 道题目")
         self.reload_questions()
+        self.reload_knowledge_points()
         self.questions_changed.emit()
 
     def _render_paste_preview(self, drafts: list[Question]) -> None:
@@ -827,6 +839,17 @@ class QuestionBankView(QWidget):
             combo.setCurrentIndex(index if index >= 0 else 0)
             combo.blockSignals(False)
 
+    def reload_knowledge_points(self) -> None:
+        """按已有知识点刷新录入与检索的自动补全（用户需求：完成题库相关内容）。"""
+        points = ui_utils.safe_call(
+            self._question_service.list_knowledge_points, default=None
+        ) or []
+        for edit in (self._knowledge_edit, self._search_knowledge):
+            completer = QCompleter(QStringListModel(list(points), edit), edit)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            edit.setCompleter(completer)
+
     def reload_questions(self) -> None:
         """静默重新检索（初始化与跨视图刷新使用，不弹窗）。"""
         questions = ui_utils.safe_call(
@@ -836,10 +859,24 @@ class QuestionBankView(QWidget):
             self._search_results = []
             self._render_results([])
             self._search_status.setText("检索功能尚未实现（框架占位）")
+            self._update_statistics()
             return
         self._search_results = questions
         self._render_results(questions)
         self._search_status.setText(f"共 {len(questions)} 道题")
+        self._update_statistics()
+
+    def _update_statistics(self) -> None:
+        """刷新题库概览（总题数、各题型题量与待确认难度数）。"""
+        stats = ui_utils.safe_call(self._question_service.statistics, default=None)
+        if not stats:
+            self._stats_label.setText("题库概览：—")
+            return
+        self._stats_label.setText(
+            f"题库概览：共 {stats['total']} 道（单选 {stats['single']} / "
+            f"多选 {stats['multiple']} / 填空 {stats['fill']} / "
+            f"解答 {stats['solution']}），难度待确认 {stats['pending']} 道"
+        )
 
     def _on_search(self) -> None:
         """检索按钮：按条件查询题库（需求 R6 第 1 条）。"""
@@ -889,6 +926,15 @@ class QuestionBankView(QWidget):
             return None
         return self._search_results[row]
 
+    def _selected_questions(self) -> list[Question]:
+        """返回结果表中全部选中行对应的题目（支持批量操作）。"""
+        rows = sorted({index.row() for index in self._result_table.selectedIndexes()})
+        return [
+            self._search_results[row]
+            for row in rows
+            if 0 <= row < len(self._search_results)
+        ]
+
     # ------------------------------------------------------- 结果行操作
 
     def _on_edit_selected(self) -> None:
@@ -900,37 +946,83 @@ class QuestionBankView(QWidget):
         self._load_question_into_form(question)
 
     def _on_delete_selected(self) -> None:
-        """删除选中题目（需求 R1 第 4 条）。"""
-        question = self._selected_question()
-        if question is None:
-            ui_utils.info(self, "请先在检索结果中选择一道题目。")
+        """删除选中题目（支持多选批量，需求 R1 第 4 条）。"""
+        questions = self._selected_questions()
+        if not questions:
+            ui_utils.info(self, "请先在检索结果中选择要删除的题目。")
             return
         if not ui_utils.confirm(
-            self, f"确定删除题目「{question.stem[:30]}」？删除后不再参与组卷。"
+            self,
+            f"确定删除选中的 {len(questions)} 道题目？删除后不再参与组卷，"
+            "其题目图片也将一并清理。",
         ):
             return
-        ok, _ = ui_utils.run_guarded(
-            self,
-            self._question_service.delete_question,
-            question.id,
-            success_message="题目已删除",
-        )
+        if len(questions) == 1:
+            ok, _ = ui_utils.run_guarded(
+                self,
+                self._question_service.delete_question,
+                questions[0].id,
+                success_message="题目已删除",
+            )
+        else:
+            ok, deleted = ui_utils.run_guarded(
+                self,
+                self._question_service.delete_questions,
+                [question.id for question in questions],
+            )
+            if ok:
+                self.show_status(f"已删除 {deleted} 道题目")
         if ok:
             self.reload_questions()
+            self.reload_knowledge_points()
             self.questions_changed.emit()
 
     def _on_quality_selected(self, flag: QualityFlag) -> None:
-        """设置选中题目的人工质量标记（需求 R5 第 3 条 / R8 第 8 条）。"""
-        question = self._selected_question()
-        if question is None:
-            ui_utils.info(self, "请先在检索结果中选择一道题目。")
+        """设置选中题目的人工质量标记（支持多选，需求 R5 第 3 条 / R8 第 8 条）。"""
+        questions = self._selected_questions()
+        if not questions:
+            ui_utils.info(self, "请先在检索结果中选择题目。")
             return
-        ok, _ = ui_utils.run_guarded(
+        ok, changed = ui_utils.run_guarded(
             self,
-            self._question_service.set_quality_flag,
-            question.id,
+            self._question_service.set_quality_flag_many,
+            [question.id for question in questions],
             flag,
-            success_message=f"质量标记已设为「{ui_utils.QUALITY_LABELS[flag]}」",
         )
         if ok:
+            self.show_status(
+                f"已将 {changed} 道题的质量标记设为「{ui_utils.QUALITY_LABELS[flag]}」"
+            )
             self.reload_questions()
+
+    def _on_reanalyze_selected(self) -> None:
+        """批量重析难度：选中题目优先，未选中则确认后处理全库（需求 R4 / R5）。"""
+        questions = self._selected_questions()
+        if questions:
+            ids = [question.id for question in questions]
+        else:
+            ids = ui_utils.safe_call(
+                self._question_service.all_question_ids, default=None
+            ) or []
+            if not ids:
+                ui_utils.info(self, "题库为空，无可重析的题目。")
+                return
+            if not ui_utils.confirm(
+                self, f"未选择题目，是否对全库 {len(ids)} 道题重新分析难度？"
+            ):
+                return
+        ok, summary = ui_utils.run_guarded(
+            self, self._question_service.reanalyze_difficulties, ids
+        )
+        if not ok or not summary:
+            return
+        self.show_status(
+            f"难度重析完成：更新 {summary['updated']} 道，"
+            f"跳过人工难度 {summary['skipped']} 道，失败 {summary['failed']} 道",
+            8000,
+        )
+        self.reload_questions()
+
+    def show_status(self, message: str, timeout_ms: int = 5000) -> None:
+        """在检索页状态区显示临时消息（主窗口状态栏不可达时的本地反馈）。"""
+        self._search_status.setText(message)

@@ -128,6 +128,17 @@ def test_fill_type_supported(window) -> None:
     ]
 
 
+def test_bank_completion_widgets(window) -> None:
+    """题库收尾功能入口：概览统计、知识点补全与批量重析难度按钮。"""
+    bank = window.question_bank_view
+    assert bank._stats_label.text().startswith("题库概览：")
+    assert bank._knowledge_edit.completer() is not None
+    assert bank._search_knowledge.completer() is not None
+    assert bank._selected_questions() == []
+    bank._result_table.setRowCount(0)
+    assert bank._on_reanalyze_selected is not None
+
+
 def test_ai_can_skip_solution(window) -> None:
     """AI 辨识可要求不输出解析（用户需求）。"""
     bank = window.question_bank_view

@@ -14,7 +14,7 @@
 
 from app.config.settings import DEFAULT_PROMPT_CONFIG
 from app.domain.entities.question import Question
-from app.domain.enums import Difficulty, QuestionType
+from app.domain.enums import Difficulty, DifficultySource, QuestionType
 from app.domain.errors import AIServiceError
 from app.interfaces.ai_client import AIClient
 from app.interfaces.repositories import ConfigStore
@@ -42,10 +42,16 @@ _QUESTION_TYPE_TEXT = {
 class DifficultyService:
     """难度分析服务：唯一的 AI 难度判定入口。"""
 
-    def __init__(self, ai_client: AIClient, config_store: ConfigStore | None = None) -> None:
-        """注入 AI 客户端抽象与提示词配置来源。"""
+    def __init__(
+        self,
+        ai_client: AIClient,
+        config_store: ConfigStore | None = None,
+        question_repository=None,
+    ) -> None:
+        """注入 AI 客户端、提示词配置来源与（可选）题目仓储（批量重分析用）。"""
         self._ai_client = ai_client
         self._config_store = config_store
+        self._repository = question_repository
 
     def analyze(self, question: Question) -> Difficulty:
         """分析单道题目的难度（需求 R4 第 1 条）。
@@ -74,12 +80,37 @@ class DifficultyService:
         except Exception:  # noqa: BLE001 - AI 故障不阻塞入库
             return Difficulty.PENDING
 
-    def batch_reanalyze(self, question_ids: list[str]) -> None:
-        """对存量题目批量重新分析难度（设计文档预留的开放项，非本期必做）。
+    def batch_reanalyze(self, question_ids: list[str]) -> dict:
+        """对存量题目批量重新分析难度（用户需求：完成题库相关内容）。
 
         仅分析难度来源为 AI 的题目；人工难度保持不变（需求 R5 第 4 条）。
+        单题失败不中断整批，返回统计摘要供界面展示。
+
+        :param question_ids: 待重分析的题目 id 列表
+        :return: ``{"total": 总数, "updated": 成功数, "skipped": 人工难度跳过数,
+            "failed": 失败数}``
         """
-        raise NotImplementedError("TODO(开放项): 实现存量题批量重分析")
+        summary = {"total": len(question_ids), "updated": 0, "skipped": 0, "failed": 0}
+        if self._repository is None:
+            raise AIServiceError("未接入题目仓储，无法批量重分析难度")
+
+        for question_id in question_ids:
+            question = self._repository.get(question_id)
+            if question is None:
+                summary["failed"] += 1
+                continue
+            if question.difficulty_source is DifficultySource.MANUAL:
+                summary["skipped"] += 1
+                continue
+            try:
+                difficulty = self.analyze(question)
+            except Exception:  # noqa: BLE001 - 单题失败不影响其余题目
+                summary["failed"] += 1
+                continue
+            question.difficulty = difficulty
+            self._repository.update(question)
+            summary["updated"] += 1
+        return summary
 
     @staticmethod
     def _to_difficulty(data: dict) -> Difficulty:

@@ -25,6 +25,9 @@ class QuestionRepository(ABC):
     def delete(self, question_id: str) -> None
     def search(self, question_filter: QuestionFilter) -> list[Question]
     def count_available(self, subject: str, difficulty: str, question_type: str) -> int
+    def list_knowledge_points(self, subject: str | None = None) -> list[str]
+    def count_by_type(self) -> dict[str, int]
+    def count_by_image(self, image_path: str) -> int
 ```
 
 | 项 | 说明 |
@@ -192,9 +195,18 @@ def search(self, question_filter: QuestionFilter) -> list[Question]
 def count_available(self, subject: str, difficulty: Difficulty, question_type: QuestionType) -> int
 # 用户需求追加：
 def list_subjects(self) -> list[str]                     # 可选科目（设置中维护）
+def list_knowledge_points(self, subject: str | None = None) -> list[str]
+        # 知识点字典，供录入 / 检索自动补全
+def statistics(self) -> dict[str, int]                   # 题库概览：总题数与各题型题量
+def delete_questions(self, question_ids: list[str]) -> int       # 批量删除
+def set_quality_flag_many(self, question_ids: list[str], flag: QualityFlag) -> int
+def reanalyze_difficulties(self, question_ids: list[str]) -> dict  # 批量重析难度
+def all_question_ids(self) -> list[str]
 def ai_configured(self) -> bool                          # AI 是否已配置（决定按钮可用性）
-def recognize_draft(self, stem: str, options: list[Option]) -> dict
-        # AI 辨识科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析；结果仅供参考
+def recognize_draft(self, stem: str, options: list[Option],
+                    include_solution: bool = True) -> dict
+        # AI 辨识科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析；结果仅供参考，
+        # include_solution=False 时要求 AI 不输出解析（用户需求）
 def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
         # 导入历史 / 编辑历史台账
 ```
@@ -220,8 +232,14 @@ DifficultyService(ai_client: AIClient, config_store: ConfigStore | None = None)
 
 def analyze(self, question: Question) -> Difficulty        # 失败抛 AIServiceError
 def analyze_silent(self, question: Question) -> Difficulty # 失败返回 PENDING，不抛异常
-def batch_reanalyze(self, question_ids: list[str]) -> None # 开放项：人工难度不覆盖
+def batch_reanalyze(self, question_ids: list[str]) -> dict # 存量题重析：人工难度不覆盖，
+                                                           # 返回 {total, updated, skipped, failed}
 ```
+
+| 项 | 说明 |
+|----|------|
+| 构造 | `DifficultyService(ai_client, config_store=None, question_repository=None)` |
+| 提示词 | 取自 ConfigStore 的 PromptConfig（设置界面可改，改后立即生效） |
 
 调用方：`application/question_service`（analyze_silent）、`question_bank_view`（手动重析，可选）。
 

@@ -136,6 +136,32 @@ class SQLiteQuestionRepository(QuestionRepository):
         ).fetchall()
         return [row["subject"] for row in rows]
 
+    def list_knowledge_points(self, subject: str | None = None) -> list[str]:
+        """返回知识点字典（可按科目过滤），供录入与检索自动补全。"""
+        sql = "SELECT DISTINCT name FROM knowledge_points"
+        params: list[object] = []
+        if subject:
+            sql += " WHERE subject = ?"
+            params.append(subject)
+        sql += " ORDER BY name"
+        rows = self._db.connect().execute(sql, params).fetchall()
+        return [row["name"] for row in rows]
+
+    def count_by_type(self) -> dict[str, int]:
+        """按题型统计题量（题库概览）。"""
+        rows = self._db.connect().execute(
+            "SELECT type, COUNT(*) AS total FROM questions GROUP BY type"
+        ).fetchall()
+        return {row["type"]: int(row["total"]) for row in rows}
+
+    def count_by_image(self, image_path: str) -> int:
+        """统计引用同一图片路径的题目数（删除题目时判断图片能否清理）。"""
+        row = self._db.connect().execute(
+            "SELECT COUNT(*) AS total FROM questions WHERE image_path = ?",
+            (image_path,),
+        ).fetchone()
+        return int(row["total"]) if row is not None else 0
+
     # ------------------------------------------------------------------ 映射
 
     def _to_row(self, question: Question) -> tuple:

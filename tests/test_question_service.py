@@ -15,6 +15,7 @@ from app.domain.entities.configs import PromptConfig
 from app.domain.entities.question import Option, Question, QuestionFilter
 from app.domain.enums import (
     Difficulty,
+    DifficultySource,
     QuestionOpAction,
     QualityFlag,
     QuestionType,
@@ -177,6 +178,78 @@ def test_fill_question_crud(service) -> None:
     assert [q.id for q in found] == [saved.id]
     assert found[0].answer == ["3", "-1"]
     assert service.count_available("数学", Difficulty.EASY, QuestionType.FILL) == 1
+
+
+def test_statistics_and_knowledge_points(service) -> None:
+    """题库概览与知识点字典（录入 / 检索自动补全的数据来源）。"""
+    service.create_question(_single_question())
+    fill = _single_question()
+    fill.knowledge_points = ["因式分解"]
+    service.create_question(fill)
+
+    stats = service.statistics()
+    assert stats["total"] == 2
+    assert stats["single"] == 2
+    assert stats["fill"] == 0
+
+    points = service.list_knowledge_points()
+    assert "一元二次方程" in points and "因式分解" in points
+    assert service.list_knowledge_points("数学") == points
+    assert service.list_knowledge_points("不存在的科目") == []
+
+
+def test_batch_operations_and_image_cleanup(container, service, tmp_path) -> None:
+    """批量质量标记、批量删除，以及删除后本地图片的清理。"""
+    source = Path(tmp_path) / "stem.png"
+    source.write_bytes(PNG_BYTES)
+    relative = container.image_store.save(source)
+
+    with_image = service.create_question(_single_question(image=relative))
+    plain = service.create_question(_single_question())
+
+    changed = service.set_quality_flag_many(
+        [with_image.id, plain.id, "missing-id"], QualityFlag.QUALITY
+    )
+    assert changed == 2
+
+    assert service.delete_questions([with_image.id]) == 1
+    # 无其他题目引用该图片 -> 本地文件被清理
+    assert container.image_store.resolve(relative) is None
+    remaining = service.search(QuestionFilter())
+    assert [question.id for question in remaining] == [plain.id]
+
+
+def test_reanalyze_difficulties_skips_manual(container) -> None:
+    """批量重析难度：AI 来源题目被更新，人工难度保持不变（需求 R5 第 4 条）。"""
+
+    class HardAIClient(FakeAIClient):
+        def complete(self, prompt, response_schema=None):
+            self.prompts.append(prompt)
+            return {"difficulty": "hard"}
+
+    fake = HardAIClient()
+    service = QuestionService(
+        container.question_repository,
+        QuestionValidator(),
+        DifficultyService(fake, container.config_store, container.question_repository),
+        op_repository=container.question_op_repository,
+        config_store=container.config_store,
+        ai_client=fake,
+    )
+
+    auto = _single_question()
+    auto.difficulty = Difficulty.PENDING
+    saved_auto = service.create_question(auto)
+
+    manual = _single_question()
+    manual.difficulty = Difficulty.EASY
+    manual.difficulty_source = DifficultySource.MANUAL
+    saved_manual = service.create_question(manual)
+
+    summary = service.reanalyze_difficulties(service.all_question_ids())
+    assert summary == {"total": 2, "updated": 1, "skipped": 1, "failed": 0}
+    assert container.question_repository.get(saved_auto.id).difficulty is Difficulty.HARD
+    assert container.question_repository.get(saved_manual.id).difficulty is Difficulty.EASY
 
 
 def test_recognize_can_skip_solution(container) -> None:

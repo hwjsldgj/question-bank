@@ -119,7 +119,7 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     score_validator = ScoreValidator()
 
     # 应用服务装配
-    difficulty_service = DifficultyService(ai_client, config_store)
+    difficulty_service = DifficultyService(ai_client, config_store, question_repository)
     question_service = QuestionService(
         question_repository,
         question_validator,
@@ -127,6 +127,7 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         op_repository=question_op_repository,
         config_store=config_store,
         ai_client=ai_client,
+        image_store=image_store,
     )
 
     cooldown_policy = CooldownPolicy(scoring_config)

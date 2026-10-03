@@ -138,14 +138,16 @@ class QuestionService:
         op_repository: QuestionOpRepository | None = None,
         config_store: ConfigStore | None = None,
         ai_client: AIClient | None = None,
+        image_store=None,
     ) -> None:
-        """注入仓储、校验器、难度服务，以及可选的台账 / 配置 / AI 客户端。"""
+        """注入仓储、校验器、难度服务，以及可选的台账 / 配置 / AI 客户端 / 图片存储。"""
         self._repository = repository
         self._validator = validator
         self._difficulty_service = difficulty_service
         self._op_repository = op_repository
         self._config_store = config_store
         self._ai_client = ai_client
+        self._image_store = image_store
 
     # ------------------------------------------------------------------ CRUD
 
@@ -174,6 +176,9 @@ class QuestionService:
         self._validator.validate(current)
         updated = self._repository.update(current)
         self._analyze_if_automatic(updated)
+        # 换图后清理旧图片（无其他题目引用时）
+        if old.image_path and old.image_path != updated.image_path:
+            self._cleanup_image(old.image_path)
         self._record(
             QuestionOpAction.UPDATE,
             updated,
@@ -186,7 +191,21 @@ class QuestionService:
         current = self._repository.get(question_id)
         self._repository.delete(question_id)
         if current is not None:
+            self._cleanup_image(current.image_path)
             self._record(QuestionOpAction.DELETE, current, detail="删除题目")
+
+    def delete_questions(self, question_ids: list[str]) -> int:
+        """批量删除题目（用户需求：题库批量维护），返回实际删除数量。"""
+        deleted = 0
+        for question_id in question_ids:
+            current = self._repository.get(question_id)
+            if current is None:
+                continue
+            self._repository.delete(question_id)
+            self._cleanup_image(current.image_path)
+            self._record(QuestionOpAction.DELETE, current, detail="批量删除题目")
+            deleted += 1
+        return deleted
 
     def set_quality_flag(self, question_id: str, flag: QualityFlag) -> None:
         """设置人工质量标记，参与后续选题评分（需求 R5 第 3 条 / R8 第 8 条）。"""
@@ -201,6 +220,30 @@ class QuestionService:
             updated,
             detail=f"质量标记改为「{flag.value}」",
         )
+
+    def set_quality_flag_many(self, question_ids: list[str], flag: QualityFlag) -> int:
+        """批量设置质量标记（用户需求：题库批量维护），返回处理数量。"""
+        changed = 0
+        for question_id in question_ids:
+            try:
+                self.set_quality_flag(question_id, flag)
+            except QuestionValidationError:
+                continue
+            changed += 1
+        return changed
+
+    def reanalyze_difficulties(self, question_ids: list[str]) -> dict:
+        """批量重析难度（仅 AI 来源题目，人工难度保持不变，需求 R5 第 4 条）。
+
+        :return: 难度服务返回的统计摘要
+        """
+        if not question_ids:
+            return {"total": 0, "updated": 0, "skipped": 0, "failed": 0}
+        return self._difficulty_service.batch_reanalyze(question_ids)
+
+    def all_question_ids(self) -> list[str]:
+        """返回题库中全部题目 id（批量重析全库难度用）。"""
+        return [question.id for question in self._repository.search(QuestionFilter())]
 
     # ------------------------------------------------------------- 批量粘贴
 
@@ -293,6 +336,39 @@ class QuestionService:
             return list(self._config_store.load_subjects())
         except Exception:  # noqa: BLE001 - 配置读取失败回退默认科目
             return list(DEFAULT_SUBJECTS)
+
+    def list_knowledge_points(self, subject: str | None = None) -> list[str]:
+        """返回已有知识点（可按科目过滤），供录入与检索自动补全。"""
+        try:
+            return list(self._repository.list_knowledge_points(subject))
+        except Exception:  # noqa: BLE001 - 补全数据非关键路径
+            return []
+
+    def statistics(self) -> dict[str, int]:
+        """题库概览：总题数与各题型题量（用户需求：完成题库相关内容）。
+
+        :return: ``{"total": 总数, "single": n, "multiple": n, "fill": n,
+            "solution": n, "pending": n}``（pending 为难度待确认题量）
+        """
+        counts = self._repository.count_by_type()
+        stats = {"total": sum(counts.values())}
+        for question_type in QuestionType:
+            stats[question_type.value] = counts.get(question_type.value, 0)
+        pending = 0
+        for question in self._repository.search(QuestionFilter(difficulty=Difficulty.PENDING)):
+            pending += 1
+        stats["pending"] = pending
+        return stats
+
+    def _cleanup_image(self, image_path: str | None) -> None:
+        """删除题目 / 换图后清理本地图片文件（无其他题目引用时）。"""
+        if not image_path or self._image_store is None:
+            return
+        try:
+            if self._repository.count_by_image(image_path) == 0:
+                self._image_store.delete(image_path)
+        except Exception:  # noqa: BLE001 - 图片清理失败不影响主流程
+            pass
 
     # ------------------------------------------------------------- 操作台账
 

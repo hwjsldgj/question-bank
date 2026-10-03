@@ -53,6 +53,18 @@ class QuestionRepository(ABC):
     ) -> int:
         """统计满足组卷条件的命中题数量（需求 R6 第 2 条）。"""
 
+    @abstractmethod
+    def list_knowledge_points(self, subject: str | None = None) -> list[str]:
+        """返回知识点字典（可按科目过滤），供录入与检索自动补全。"""
+
+    @abstractmethod
+    def count_by_type(self) -> dict[str, int]:
+        """按题型统计题量（题库概览），key 为题型取值。"""
+
+    @abstractmethod
+    def count_by_image(self, image_path: str) -> int:
+        """统计引用同一图片路径的题目数（删除题目时判断图片能否清理）。"""
+
 
 class UsageRepository(ABC):
     """使用记录仓储接口：近期重复抑制（需求 R13）的数据读写。

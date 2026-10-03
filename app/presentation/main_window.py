@@ -3,10 +3,11 @@
 职责（对应需求 R1-R15 的界面入口）：
 
 - 装配"题库管理 / 组卷 / 历史与设置"三个标签页
-- 菜单栏：刷新当前视图（F5）、退出（Ctrl+Q）、视图切换、关于
+- 菜单栏：刷新当前视图（F5）、退出（Ctrl+Q）、视图切换（Ctrl+1/2/3）、关于
 - 状态栏：常驻显示 AI 服务配置状态，并提供临时状态消息
 - 跨视图协调：题库变更 -> 组卷命中量刷新；设置变更 -> 状态栏刷新；
   历史条件复用 -> 回填组卷表单并切换标签页（需求 R14 第 3 条）
+- 关闭窗口时释放本地数据库连接，保证写入落盘（需求 R16 第 1 条）
 
 视图仅通过本窗口注入的 ``Container`` 取用应用服务，不直接访问数据库。
 
@@ -15,7 +16,7 @@
 被使用：main.py
 """
 
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -88,6 +89,8 @@ class MainWindow(QMainWindow):
         view_menu = menu_bar.addMenu("视图(&V)")
         for index, title in enumerate(("题库管理", "组卷", "历史与设置")):
             action = QAction(title, self)
+            action.setShortcut(f"Ctrl+{index + 1}")
+            action.setStatusTip(f"切换到「{title}」标签页")
             action.triggered.connect(
                 lambda _checked=False, i=index: self._tabs.setCurrentIndex(i)
             )
@@ -177,3 +180,16 @@ class MainWindow(QMainWindow):
         frame = self.frameGeometry()
         frame.moveCenter(available.center())
         self.move(frame.topLeft())
+
+    # ------------------------------------------------------------------ 生命周期
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 命名约定
+        """关闭窗口前释放本地数据库连接（需求 R16：写入落盘、解除文件占用）。
+
+        退出阶段不再向用户抛错：关闭失败只保留连接交由进程结束时回收。
+        """
+        try:
+            self._container.db.close()
+        except Exception:  # noqa: BLE001 - 退出路径必须保证窗口能关闭
+            pass
+        super().closeEvent(event)

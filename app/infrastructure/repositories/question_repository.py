@@ -242,7 +242,7 @@ class SQLiteQuestionRepository(QuestionRepository):
         return Question(
             id=row["id"],
             subject=row["subject"],
-            section=row.get("section", ""),
+            section=row["section"],
             knowledge_points=SQLiteQuestionRepository._load_json(row["knowledge_points"], []),
             type=QuestionType(row["type"]),
             stem=row["stem"],

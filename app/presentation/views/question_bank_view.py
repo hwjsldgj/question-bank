@@ -227,11 +227,16 @@ class _PasteDraftEditor(QDialog):
         candidates = points.get(section) if section else [
             p for group in points.values() for p in group
         ]
-        self._knowledge_completer.setModel(QStringModel(list(candidates or []), self._knowledge_edit))
+        self._knowledge_completer.setModel(
+            QStringListModel(list(candidates or []), self._knowledge_edit)
+        )
 
     def _on_type_changed(self) -> None:
         """题型切换时在"选项 + 答案"与"参考答案"之间切换。"""
-        needs_options = self._type_combo.currentData() in (QuestionType.SINGLE, QuestionType.MULTIPLE)
+        needs_options = self._type_combo.currentData() in (
+            QuestionType.SINGLE,
+            QuestionType.MULTIPLE,
+        )
         self._options_container.setVisible(needs_options)
 
     def _fill(self, question: Question) -> None:
@@ -319,7 +324,9 @@ class QuestionBankView(QWidget):
 
         self._knowledge_edit = QLineEdit()
         self._knowledge_edit.setPlaceholderText("多个知识点用逗号分隔，如：一元二次方程,因式分解")
-        self._knowledge_completer = QCompleter(QStringModel([], self._knowledge_edit), self._knowledge_edit)
+        self._knowledge_completer = QCompleter(
+            QStringListModel([], self._knowledge_edit), self._knowledge_edit
+        )
         self._knowledge_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self._knowledge_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._knowledge_completer.setFilterMode(Qt.MatchFlag.MatchContains)
@@ -1627,11 +1634,17 @@ class QuestionBankView(QWidget):
         points = ui_utils.safe_call(
             self._question_service.list_knowledge_points, default=None
         ) or []
-        for edit in (self._knowledge_edit, self._search_knowledge):
-            completer = QCompleter(QStringListModel(list(points), edit), edit)
-            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            completer.setFilterMode(Qt.MatchFlag.MatchContains)
-            edit.setCompleter(completer)
+
+        # 录入页补全器由 _reload_knowledge_completer 按板块刷新；检索框独立新建一个。
+        # 注意：对 _knowledge_edit 调 setCompleter 会让 Qt 删除长期持有的
+        # _knowledge_completer，因此这里只碰检索框。
+        search_completer = QCompleter(
+            QStringListModel(list(points), self._search_knowledge), self._search_knowledge
+        )
+        search_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        search_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._search_knowledge.setCompleter(search_completer)
+
         # 录入页按当前科目重新联动板块与知识点（科目下拉刷新后需重建）
         self._reload_sections()
         self._reload_knowledge_completer()

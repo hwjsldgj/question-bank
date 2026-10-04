@@ -21,9 +21,15 @@
 被使用：app.presentation.main_window
 """
 
-from PySide6.QtCore import Qt, Signal
+import json
+import os
+from pathlib import Path
+
+from PySide6.QtCore import QUrl, Signal
+from PySide6.QtGui import QFont, QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -34,13 +40,13 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from app.config.settings import (
+    DEFAULT_DB_PATH,
     DEFAULT_KNOWLEDGE_SECTIONS,
     DEFAULT_MODULE_PROMPTS,
     DEFAULT_PROMPT_CONFIG,
@@ -264,7 +270,7 @@ class SettingsView(QWidget):
         return page
 
     def _build_sections_tab(self) -> QWidget:
-        """构建知识板块页（用户需求：手动导入时提供板块与对应知识点细分）。"""
+        """构建知识板块页（只读展示 + JSON 文件编辑，用户需求）。"""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(
@@ -273,74 +279,55 @@ class SettingsView(QWidget):
                 "最后从该板块的细分知识点中选取；AI 辨识也会先按板块分级、再细化知识点。"
             )
         )
+        layout.addWidget(
+            QLabel(
+                "本界面只负责展示，不可直接编辑。需要更改时：点击「导出 JSON」生成文件，"
+                "用任意文本编辑器修改后点击「导入 JSON」写回系统；"
+                "或直接点击「编辑 JSON」用默认编辑器打开文件。"
+            )
+        )
 
-        # 科目：决定左右两栏的数据范围
+        # 科目：只用来切换查看范围，不修改数据
         subject_row = QHBoxLayout()
-        subject_row.addWidget(QLabel("科目"))
+        subject_row.addWidget(QLabel("查看科目"))
         self._section_subject_combo = QComboBox()
         self._section_subject_combo.setMinimumWidth(120)
-        self._section_subject_combo.setToolTip("切换科目以维护该科目的板块与知识点")
-        self._section_subject_combo.currentIndexChanged.connect(self._on_section_subject_changed)
+        self._section_subject_combo.setToolTip("切换科目以查看该科目的板块与知识点")
+        self._section_subject_combo.currentIndexChanged.connect(self._render_sections)
         subject_row.addWidget(self._section_subject_combo, 1)
         subject_row.addStretch(1)
         layout.addLayout(subject_row)
 
-        # 左右并排：板块列表 ↔ 细分知识点列表
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        section_group = QGroupBox("知识板块")
-        section_layout = QVBoxLayout(section_group)
-        self._section_list = QListWidget()
-        self._section_list.currentItemChanged.connect(self._on_section_changed)
-        section_layout.addWidget(self._section_list)
+        # 只读 JSON 展示
+        self._sections_display = QPlainTextEdit()
+        self._sections_display.setReadOnly(True)
+        self._sections_display.setFont(QFont("Consolas", 9))
+        self._sections_display.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(self._sections_display)
 
-        section_edit_row = QHBoxLayout()
-        self._section_input = QLineEdit()
-        self._section_input.setPlaceholderText("输入新板块名称，如：代数")
-        section_add_button = QPushButton("添加")
-        section_add_button.clicked.connect(self._on_add_section)
-        section_remove_button = QPushButton("删除选中")
-        section_remove_button.clicked.connect(self._on_remove_section)
-        section_edit_row.addWidget(self._section_input, 1)
-        section_edit_row.addWidget(section_add_button)
-        section_edit_row.addWidget(section_remove_button)
-        section_layout.addLayout(section_edit_row)
-        splitter.addWidget(section_group)
-
-        group = QGroupBox("细分知识点（随选中板块变化）")
-        point_layout = QVBoxLayout(group)
-        self._point_list = QListWidget()
-        point_layout.addWidget(self._point_list)
-
-        point_edit_row = QHBoxLayout()
-        self._point_input = QLineEdit()
-        self._point_input.setPlaceholderText("输入细分知识点，如：一元二次方程")
-        point_add_button = QPushButton("添加")
-        point_add_button.clicked.connect(self._on_add_point)
-        point_remove_button = QPushButton("删除选中")
-        point_remove_button.clicked.connect(self._on_remove_point)
-        point_edit_row.addWidget(self._point_input, 1)
-        point_edit_row.addWidget(point_add_button)
-        point_edit_row.addWidget(point_remove_button)
-        point_layout.addLayout(point_edit_row)
-        splitter.addWidget(group)
-
-        splitter.setSizes([200, 300])
-        layout.addWidget(splitter)
-
+        # 操作按钮
         button_row = QHBoxLayout()
-        save_button = QPushButton("保存知识板块")
-        save_button.clicked.connect(self._on_save_sections)
-        default_button = QPushButton("恢复默认知识板块")
+        export_button = QPushButton("导出 JSON")
+        export_button.setToolTip("把全部科目的板块结构写出到 JSON 文件（默认 knowledge_sections.json）")
+        export_button.clicked.connect(self._on_export_sections)
+        edit_button = QPushButton("编辑 JSON")
+        edit_button.setToolTip("用系统默认编辑器打开 JSON 文件直接修改")
+        edit_button.clicked.connect(self._on_edit_sections)
+        import_button = QPushButton("导入 JSON")
+        import_button.setToolTip("读取 JSON 文件并写入系统（文件里有的科目会覆盖现有数据）")
+        import_button.clicked.connect(self._on_import_sections)
+        default_button = QPushButton("恢复默认")
+        default_button.setToolTip("恢复为程序内置的默认知识板块")
         default_button.clicked.connect(self._on_reset_sections)
-        button_row.addWidget(save_button)
+        button_row.addWidget(export_button)
+        button_row.addWidget(edit_button)
+        button_row.addWidget(import_button)
         button_row.addWidget(default_button)
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
         self._section_status = QLabel("")
         layout.addWidget(self._section_status)
-        self._point_status = QLabel("")
-        layout.addWidget(self._point_status)
         return page
 
     @staticmethod
@@ -421,24 +408,39 @@ class SettingsView(QWidget):
 
     # ------------------------------------------------------------- 知识板块
 
+    @staticmethod
+    def _default_sections_file() -> Path:
+        """JSON 文件的默认位置（与数据库同目录）。"""
+        return Path(DEFAULT_DB_PATH).parent / "knowledge_sections.json"
+
     def _load_sections(self) -> None:
         """读取科目与知识板块并渲染（需求：手动导入时提供板块与知识点细分）。"""
         subjects = ui_utils.safe_call(self._config_store.load_subjects, default=None) or list(
             DEFAULT_SUBJECTS
         )
         self._render_section_subjects(subjects)
-        self._on_section_subject_changed()
+        self._render_sections()
 
     @staticmethod
-    def _sections_to_dict(
-        sections: list[KnowledgeSection], subject: str | None = None
-    ) -> dict[str, list[str]]:
-        """``KnowledgeSection`` 列表 -> ``{板块: [细分知识点]}``，可按科目过滤。"""
-        return {
-            section.section: list(section.knowledge_points)
-            for section in sections
-            if subject is None or section.subject == subject
-        }
+    def _sections_to_mapped_dict(
+        sections: list[KnowledgeSection],
+    ) -> dict[str, dict[str, list[str]]]:
+        """``KnowledgeSection`` 列表 -> ``{科目: {板块: [细分知识点]}}``（跨科目的板块各自独立）。"""
+        mapped: dict[str, dict[str, list[str]]] = {}
+        for section in sections:
+            subject = str(section.subject).strip()
+            if not subject:
+                continue
+            subject_map = mapped.setdefault(subject, {})
+            section_name = str(section.section).strip()
+            if not section_name:
+                continue
+            if section_name in subject_map:
+                continue
+            subject_map[section_name] = [
+                str(p).strip() for p in section.knowledge_points if str(p).strip()
+            ]
+        return mapped
 
     @staticmethod
     def _dict_to_sections(mapped: dict[str, dict[str, list[str]]]) -> list[KnowledgeSection]:
@@ -460,152 +462,143 @@ class SettingsView(QWidget):
         self._section_subject_combo.setCurrentIndex(index if index >= 0 else 0)
         self._section_subject_combo.blockSignals(False)
 
-    def _on_section_subject_changed(self) -> None:
-        """切换科目时重建该科目的板块列表。"""
-        self._render_sections()
-
     def _render_sections(self) -> None:
-        """按当前科目渲染板块列表（同时渲染首个板块的知识点）。"""
+        """按当前科目渲染只读的 JSON 展示区。"""
         subject = self._section_subject_combo.currentText().strip()
-        sections = ui_utils.safe_call(
-            self._config_store.load_sections, default=None
-        ) or []
-        subject_sections = self._sections_to_dict(sections, subject)
-        self._section_list.clear()
-        for section in subject_sections:
-            self._section_list.addItem(section)
-        if subject_sections:
-            self._section_list.setCurrentRow(0)
-        self._section_status.setText(f"科目「{subject}」共 {len(subject_sections)} 个板块")
-        self._render_points()
+        sections = ui_utils.safe_call(self._config_store.load_sections, default=None) or []
+        mapped = self._sections_to_mapped_dict(sections)  # {科目: {板块: [细分知识点]}}
+        block = mapped.get(subject, {})
 
-    def _on_section_changed(self, current, previous) -> None:
-        """切换选中板块时渲染该板块的细分知识点。"""
-        self._render_points()
+        self._sections_display.setPlainText(
+            json.dumps({subject: block}, ensure_ascii=False, indent=2) if subject else "{}"
+        )
 
-    def _render_points(self) -> None:
-        """渲染当前选中板块的细分知识点列表。"""
-        section = self._current_section()
-        subject = self._section_subject_combo.currentText().strip()
-        sections = ui_utils.safe_call(
-            self._config_store.load_sections, default=None
-        ) or []
-        points = self._sections_to_dict(sections, subject).get(section, [])
-        self._point_list.clear()
-        for point in points:
-            self._point_list.addItem(point)
-        self._point_status_hint(section, len(points))
+        total_sections = sum(len(v) for v in mapped.values())
+        total_points = sum(len(points) for v in mapped.values() for points in v.values())
+        self._section_status.setText(
+            f"共 {len(mapped)} 个科目、{total_sections} 个板块、{total_points} 个细分知识点；"
+            f"当前查看「{subject}」{len(block)} 个板块"
+        )
 
-    def _current_section(self) -> str:
-        """返回当前选中的板块名称，未选中时返回空串。"""
-        item = self._section_list.currentItem()
-        return item.text() if item is not None else ""
+    def _on_export_sections(self) -> None:
+        """把全部科目的板块结构导出为 JSON 文件。"""
+        sections = ui_utils.safe_call(self._config_store.load_sections, default=None) or []
+        mapped = self._sections_to_mapped_dict(sections)
 
-    def _current_points(self) -> list[str]:
-        """返回当前板块列表控件中的知识点列表。"""
-        return [
-            self._point_list.item(index).text()
-            for index in range(self._point_list.count())
-        ]
+        default_path = self._default_sections_file()
+        default_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _point_status_hint(self, section: str, count: int) -> None:
-        """更新知识点状态提示。"""
-        if section:
-            self._point_status.setText(f"板块「{section}」共 {count} 个细分知识点")
-        else:
-            self._point_status.setText("请先在左侧选择一个板块")
-
-    def _on_add_section(self) -> None:
-        """添加一个板块（未保存前仅作用于界面）。"""
-        name = self._section_input.text().strip()
-        if not name:
-            ui_utils.info(self, "请输入板块名称。")
+        path, ok = QFileDialog.getSaveFileName(
+            self, "导出知识板块", str(default_path), "JSON 文件 (*.json)"
+        )
+        if not ok or not path:
             return
-        if name in self._current_sections():
-            ui_utils.info(self, f"板块「{name}」已存在。")
+        try:
+            Path(path).write_text(
+                json.dumps(mapped, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            ui_utils.critical(self, f"写入文件失败：{exc}", title="导出失败")
             return
-        self._section_list.addItem(name)
-        self._section_input.clear()
-        self._section_status.setText("板块已添加，请点击「保存知识板块」生效")
+        ui_utils.info(self, f"知识板块已导出至\n{path}", title="导出成功")
 
-    def _on_remove_section(self) -> None:
-        """删除选中的板块及其知识点。"""
-        row = self._section_list.currentRow()
-        if row < 0:
-            ui_utils.info(self, "请先在板块列表中选择要删除的板块。")
-            return
-        self._section_list.takeItem(row)
-        self._point_list.clear()
-        self._section_status.setText("板块已删除，请点击「保存知识板块」生效")
+    def _on_edit_sections(self) -> None:
+        """用系统默认编辑器打开 JSON 文件。"""
+        path = self._default_sections_file()
+        if not path.exists():
+            if not ui_utils.confirm(
+                self, f"文件 {path} 不存在，是否先导出？", title="文件不存在"
+            ):
+                return
+            self._on_export_sections()
+            if not path.exists():
+                return
+        try:
+            os.startfile(str(path), "open")
+        except OSError:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
-    def _on_add_point(self) -> None:
-        """为当前板块添加一个细分知识点（未保存前仅作用于界面）。"""
-        if not self._current_section():
-            ui_utils.info(self, "请先在左侧选择一个板块。")
+    def _on_import_sections(self) -> None:
+        """从 JSON 文件读入知识板块并写入系统。"""
+        path, ok = QFileDialog.getOpenFileName(
+            self, "导入知识板块", str(self._default_sections_file()), "JSON 文件 (*.json)"
+        )
+        if not ok or not path:
             return
-        name = self._point_input.text().strip()
-        if not name:
-            ui_utils.info(self, "请输入细分知识点名称。")
+        try:
+            raw = Path(path).read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except OSError as exc:
+            ui_utils.critical(self, f"读取文件失败：{exc}", title="导入失败")
             return
-        if name in self._current_points():
-            ui_utils.info(self, f"知识点「{name}」已存在。")
+        except (TypeError, ValueError) as exc:
+            ui_utils.critical(
+                self,
+                f"JSON 格式非法：{exc}\n\n请用文本编辑器修正后重新导入。",
+                title="导入失败",
+            )
             return
-        self._point_list.addItem(name)
-        self._point_input.clear()
-        self._point_status.setText("知识点已添加，请点击「保存知识板块」生效")
 
-    def _on_remove_point(self) -> None:
-        """删除当前板块选中的细分知识点。"""
-        row = self._point_list.currentRow()
-        if row < 0:
-            ui_utils.info(self, "请先在知识点列表中选择要删除的知识点。")
+        if not isinstance(data, dict):
+            ui_utils.critical(
+                self, "JSON 顶层应为 {科目: {板块: [细分知识点]}} 对象。", title="导入失败"
+            )
             return
-        self._point_list.takeItem(row)
-        self._point_status.setText("知识点已删除，请点击「保存知识板块」生效")
 
-    def _on_reset_sections(self) -> None:
-        """恢复默认知识板块（未保存前仅作用于界面）。"""
-        subject = self._section_subject_combo.currentText().strip()
-        self._section_list.clear()
-        for section in DEFAULT_KNOWLEDGE_SECTIONS.get(subject, {}):
-            self._section_list.addItem(section)
-        if DEFAULT_KNOWLEDGE_SECTIONS.get(subject):
-            self._section_list.setCurrentRow(0)
-        self._render_points()
-        self._section_status.setText("已恢复默认知识板块，请点击「保存知识板块」生效")
+        problems = []
+        for subject, subject_data in data.items():
+            if not isinstance(subject, str) or not subject.strip():
+                problems.append(f"科目名非法：{subject!r}")
+                continue
+            if not isinstance(subject_data, dict):
+                problems.append(
+                    f"科目「{subject}」的值应为 {{板块: [细分知识点]}} 对象"
+                )
+                continue
+            for section, points in subject_data.items():
+                if not isinstance(section, str) or not section.strip():
+                    problems.append(f"板块名非法：{section!r}（科目 {subject}）")
+                if not isinstance(points, list) or not all(
+                    isinstance(p, str) and p.strip() for p in points
+                ):
+                    problems.append(
+                        f"板块「{section}」的知识点必须是字符串列表（科目 {subject}）"
+                    )
+        if problems:
+            ui_utils.warning(
+                self,
+                "JSON 存在以下问题，未导入任何数据：\n\n- " + "\n- ".join(problems[:20]),
+                title="导入失败",
+            )
+            return
 
-    def _on_save_sections(self) -> None:
-        """保存知识板块映射并通知主窗口刷新各视图下拉框。"""
-        subject = self._section_subject_combo.currentText().strip()
-        sections = ui_utils.safe_call(
-            self._config_store.load_sections, default=None
-        ) or []
-        mapped = self._sections_to_dict(sections)
-        mapped.setdefault(subject, {})
-        mapped[subject] = {
-            self._section_list.item(index).text(): [
-                self._point_list.item(p).text()
-                for p in range(self._point_list.count())
-            ]
-            for index in range(self._section_list.count())
-        }
         ok, _ = ui_utils.run_guarded(
             self,
             self._config_store.save_sections,
-            self._dict_to_sections(mapped),
-            success_message="知识板块已保存，录入页下拉框已更新",
+            self._dict_to_sections(data),
+            success_message="知识板块已导入，录入页下拉框已更新",
         )
         if ok:
             self._render_sections()
-            self._render_points()
             self.config_changed.emit()
 
-    def _current_sections(self) -> list[str]:
-        """返回当前科目列表控件中的板块列表。"""
-        return [
-            self._section_list.item(index).text()
-            for index in range(self._section_list.count())
-        ]
+    def _on_reset_sections(self) -> None:
+        """恢复默认知识板块并保存。"""
+        if not ui_utils.confirm(
+            self,
+            "将把全部科目的知识板块恢复为程序内置默认值，现有自定义板块将丢失。是否继续？",
+            title="恢复默认",
+        ):
+            return
+        ok, _ = ui_utils.run_guarded(
+            self,
+            self._config_store.save_sections,
+            self._dict_to_sections(DEFAULT_KNOWLEDGE_SECTIONS),
+            success_message="已恢复默认知识板块，录入页下拉框已更新",
+        )
+        if ok:
+            self._render_sections()
+            self.config_changed.emit()
 
     # --------------------------------------------------------------- AI 配置
 

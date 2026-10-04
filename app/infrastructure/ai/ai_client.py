@@ -45,7 +45,7 @@ class OpenAICompatibleAIClient(AIClient):
                 return self._parse(content, response_schema)
             except AIServiceError as exc:
                 last_error = exc
-            except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last_error = AIServiceError(f"AI 服务调用失败：{exc}")
         raise AIServiceError(f"AI 服务调用失败（已重试）：{last_error}")
 
@@ -60,9 +60,8 @@ class OpenAICompatibleAIClient(AIClient):
         if not config.is_configured():
             raise AIConfigMissingError("AI 服务未配置，请先在设置中填写 API 信息")
 
-    @staticmethod
     def _request(
-        config: AIConfig, prompt: str, response_schema: dict | None
+        self, config: AIConfig, prompt: str, response_schema: dict | None
     ) -> str:
         """发起一次 HTTP 请求，返回模型回复的文本内容。
 
@@ -135,7 +134,13 @@ class OpenAICompatibleAIClient(AIClient):
                 pass
             raise AIServiceError(f"AI 响应体读取超时（{timeout:g}s），请检查 AI 服务可用性")
         if "error" in container:
-            raise AIServiceError(f"AI 响应体读取失败：{container['error']}")
+            exc = container["error"]
+            # 读取阶段被 socket 自身超时打断，同样属于 body 未在时限内到达。
+            if isinstance(exc, TimeoutError):
+                raise AIServiceError(
+                    f"AI 响应体读取超时（{timeout:g}s），请检查 AI 服务可用性"
+                ) from exc
+            raise AIServiceError(f"AI 响应体读取失败：{exc}")
         return container["body"]  # type: ignore[no-any-return]
 
     @staticmethod

@@ -25,14 +25,16 @@ _READ_TIMEOUT_UPPER_BOUND = 6.0
 
 
 class HangingHandler(BaseHTTPRequestHandler):
-    """接受连接后休眠，永不返回 body（模拟 AI 服务读取阶段卡死）。"""
+    """接受请求后立即返回 status / headers，但永不返回 body（模拟 AI 服务读取阶段卡死）。"""
 
     def do_POST(self) -> None:
-        time.sleep(10)
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)  # 耗尽请求体，避免客户端连接被重置
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"choices": [{"message": {"content": "too late"}}]}')
+        # 服务端已接受连接却挂起，不写 body：这正是 urlopen(timeout=...) 无法覆盖的阶段
+        time.sleep(10)
 
     def log_message(self, *args) -> None:
         pass

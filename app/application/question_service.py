@@ -97,12 +97,9 @@ MODULE_SCHEMAS: dict[RecognizeModule, dict] = {
     RecognizeModule.SOLUTION: {"type": "string"},
 }
 
-#: 保存前必须齐全的模块（题干与选项另由界面校验，AI 不负责生成）
-REQUIRED_MODULES: tuple[RecognizeModule, ...] = (
-    RecognizeModule.SUBJECT,
-    RecognizeModule.KNOWLEDGE_POINTS,
-    RecognizeModule.ANSWER,
-)
+# 必填模块（科目 / 知识点 / 答案）的规范定义见 QuestionService.REQUIRED_MODULES；
+# 此处为兼容旧导入名的别名，类定义结束后赋值。
+REQUIRED_MODULES: tuple[RecognizeModule, ...]
 
 
 def recognize_schema(modules: list[RecognizeModule] | tuple[RecognizeModule, ...]) -> dict:
@@ -194,6 +191,13 @@ class RecognitionReport:
 
 class QuestionService:
     """题目服务：题库维护的统一入口。"""
+
+    #: 保存前必须齐全的模块（题干与选项另由界面校验，AI 不负责生成）
+    REQUIRED_MODULES: tuple[RecognizeModule, ...] = (
+        RecognizeModule.SUBJECT,
+        RecognizeModule.KNOWLEDGE_POINTS,
+        RecognizeModule.ANSWER,
+    )
 
     def __init__(
         self,
@@ -567,7 +571,7 @@ class QuestionService:
         return [
             module
             for module in cls.missing_modules(question)
-            if module in REQUIRED_MODULES
+            if module in cls.REQUIRED_MODULES
         ]
 
     @staticmethod
@@ -990,3 +994,7 @@ class QuestionService:
             result["solution"] = str(solution).strip() if solution else ""
 
         return RecognitionReport(fields=result, issues=issues)
+
+
+# 兼容旧导入名：指向 QuestionService 上的规范定义
+REQUIRED_MODULES = QuestionService.REQUIRED_MODULES

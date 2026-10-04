@@ -14,6 +14,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 
 from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
+from app.domain.entities.knowledge_section import KnowledgeSection
 from app.domain.entities.question import Question, QuestionFilter
 from app.domain.entities.question_op import QuestionOpRecord
 from app.domain.entities.task import GenerationTask
@@ -133,7 +134,7 @@ class QuestionOpRepository(ABC):
 
 
 class ConfigStore(ABC):
-    """配置存储接口：AI 配置、评分配置、提示词与科目列表的持久化（需求 R15）。
+    """配置存储接口：AI 配置、评分配置、提示词、科目与知识板块的持久化（需求 R15）。
 
     密钥仅保存在本机（需求 R18），实现方不得外传。
 
@@ -172,3 +173,11 @@ class ConfigStore(ABC):
     @abstractmethod
     def save_subjects(self, subjects: list[str]) -> None:
         """保存可选科目列表（科目改为选择式录入后由设置界面维护）。"""
+
+    @abstractmethod
+    def load_sections(self) -> list[KnowledgeSection]:
+        """读取知识板块列表；无配置时返回默认值。"""
+
+    @abstractmethod
+    def save_sections(self, sections: list[KnowledgeSection]) -> None:
+        """保存知识板块映射（科目改为选择式录入后由设置界面维护）。"""

@@ -14,7 +14,7 @@
 依赖（构造注入，全部为抽象）：
 - app.interfaces.repositories.QuestionRepository
 - app.interfaces.repositories.QuestionOpRepository（可选，操作台账）
-- app.interfaces.repositories.ConfigStore（可选，科目列表与提示词）
+- app.interfaces.repositories.ConfigStore（可选，科目列表、知识板块与提示词）
 - app.interfaces.ai_client.AIClient（可选，AI 辨识）
 - app.domain.validators.question_validator.QuestionValidator
 - app.application.difficulty_service.DifficultyService
@@ -28,7 +28,13 @@ from dataclasses import dataclass, field
 
 from app.application.difficulty_service import DifficultyService
 from app.application.prompt_utils import load_prompt_config, render
-from app.config.settings import DEFAULT_MODULE_PROMPTS, DEFAULT_PROMPT_CONFIG, DEFAULT_SUBJECTS
+from app.config.settings import (
+    DEFAULT_KNOWLEDGE_SECTIONS,
+    DEFAULT_MODULE_PROMPTS,
+    DEFAULT_PROMPT_CONFIG,
+    DEFAULT_SUBJECTS,
+)
+from app.domain.entities.knowledge_section import KnowledgeSection
 from app.domain.entities.question import Option, Question, QuestionFilter
 from app.domain.entities.question_op import QuestionOpRecord
 from app.domain.enums import (
@@ -63,12 +69,14 @@ RECOGNIZE_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "subject": {"type": "string"},
-        "knowledge_points": {"type": "array", "items": {"type": "string"}},
+        "knowledge_points": {"type": "object"},
         "question_type": {"type": "string"},
         "difficulty": {"type": "string"},
         "quality_flag": {"type": "string"},
         "answer": {"type": "array", "items": {"type": "string"}},
         "solution": {"type": "string"},
+        "stem": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "object"}},
     },
 }
 
@@ -89,12 +97,14 @@ RECOGNIZE_MODULES: tuple[RecognizeModule, ...] = tuple(RecognizeModule)
 #: 模块 -> 期望的 JSON 结构片段：只把被勾选模块写入一次调用的期望结构
 MODULE_SCHEMAS: dict[RecognizeModule, dict] = {
     RecognizeModule.SUBJECT: {"type": "string"},
-    RecognizeModule.KNOWLEDGE_POINTS: {"type": "array", "items": {"type": "string"}},
+    RecognizeModule.KNOWLEDGE_POINTS: {"type": "object"},
     RecognizeModule.QUESTION_TYPE: {"type": "string"},
     RecognizeModule.DIFFICULTY: {"type": "string"},
     RecognizeModule.QUALITY_FLAG: {"type": "string"},
     RecognizeModule.ANSWER: {"type": "array", "items": {"type": "string"}},
     RecognizeModule.SOLUTION: {"type": "string"},
+    RecognizeModule.STEM: {"type": "string"},
+    RecognizeModule.OPTIONS: {"type": "array", "items": {"type": "object"}},
 }
 
 # 必填模块（科目 / 知识点 / 答案）的规范定义见 QuestionService.REQUIRED_MODULES；
@@ -469,7 +479,8 @@ class QuestionService:
         subjects = self.list_subjects()
         prompts = load_prompt_config(self._config_store)
         template = prompts.recognize_prompt or DEFAULT_PROMPT_CONFIG.recognize_prompt
-        blocks = self._render_module_prompts(prompts, effective, subjects)
+        sections_text = self._format_sections_for_prompt()
+        blocks = self._render_module_prompts(prompts, effective, subjects, sections_text)
         prompt = render(
             template,
             DEFAULT_PROMPT_CONFIG.recognize_prompt,
@@ -485,6 +496,7 @@ class QuestionService:
                 prompts,
                 [m for m in effective if not self._template_mentions(template, m)],
                 subjects,
+                sections_text,
             )
             if extra:
                 prompt = f"{prompt}\n{extra}"
@@ -500,6 +512,40 @@ class QuestionService:
     def _template_mentions(template: str, module: RecognizeModule) -> bool:
         """总述模板里是否已经写了该字段的输出要求（避免追加时重复）。"""
         return f"{module.value}：" in template or f"{module.value}:" in template
+
+    def _format_sections_for_prompt(self) -> str:
+        """把"科目-板块-知识点"扁平为提示词可读的"板块：细分知识点"清单。
+
+        供知识点模块的分级提示词使用；无配置时返回空串，由提示词兜底文本兜底。
+        """
+        try:
+            sections = self._config_store.load_sections() if self._config_store else []
+        except Exception:  # noqa: BLE001 - 非关键路径，降级为默认值
+            sections = []
+        items = sections or [
+            KnowledgeSection(subject=subject, section=section, knowledge_points=list(points))
+            for subject, groups in DEFAULT_KNOWLEDGE_SECTIONS.items()
+            for section, points in groups.items()
+        ]
+        lines = [f"  - {item.section}：" + "、".join(item.knowledge_points) for item in items]
+        return "\n".join(lines) if lines else ""
+
+    @staticmethod
+    def _flatten_sectioned_points(sectioned: dict) -> tuple[list[str], str]:
+        """把分级输出 {板块: [细分知识点, ...]} 扁平为列表与板块名。
+
+        一道题可涉及多个板块，板块名用"、"拼接；每个板块的细分知识点按顺序收集。
+        """
+        points: list[str] = []
+        sections: list[str] = []
+        for section, items in sectioned.items():
+            name = str(section).strip()
+            if name:
+                sections.append(name)
+            if not isinstance(items, list):
+                continue
+            points.extend(str(item).strip() for item in items if str(item).strip())
+        return points, "、".join(sections)
 
     @staticmethod
     def _resolve_modules(
@@ -522,7 +568,7 @@ class QuestionService:
         return requested
 
     @staticmethod
-    def _render_module_prompts(prompts, requested, subjects: list[str]) -> str:
+    def _render_module_prompts(prompts, requested, subjects: list[str], sections: str = "") -> str:
         """把被勾选模块的输出提示词拼装为一段文本（按需给出，一次返回）。"""
         subject_text = "、".join(subjects)
         blocks: list[str] = []
@@ -531,7 +577,9 @@ class QuestionService:
             fragment = prompts.module_prompts.get(module.value) or default
             if not fragment:
                 continue
-            blocks.append(render(fragment, default, subjects=subject_text))
+            blocks.append(
+                render(fragment, default, subjects=subject_text, sections=sections)
+            )
         return "\n".join(blocks)
 
     @staticmethod
@@ -539,7 +587,7 @@ class QuestionService:
         """逐项检查题目各模块是否已填写（用户需求：保存 / 导入前逐项检查）。
 
         :return: ``[(模块, 是否已填写)]``，顺序与 :data:`RECOGNIZE_MODULES` 一致；
-            题干与选项不在其中（必须由出题者填写，AI 不负责生成）
+            题干与选项同样纳入检查，原文残缺时可由 AI 补全
         """
         states: list[tuple[RecognizeModule, bool]] = []
         for module in RECOGNIZE_MODULES:
@@ -555,6 +603,10 @@ class QuestionService:
                 filled = question.quality_flag is not None
             elif module is RecognizeModule.ANSWER:
                 filled = bool([item for item in question.answer if str(item).strip()])
+            elif module is RecognizeModule.STEM:
+                filled = bool((question.stem or "").strip())
+            elif module is RecognizeModule.OPTIONS:
+                filled = bool(question.options)
             else:
                 filled = bool((question.solution or "").strip())
             states.append((module, filled))
@@ -581,14 +633,27 @@ class QuestionService:
         """把 AI 辨识结果写回题目草稿（仅覆盖结果中出现的字段）。
 
         供批量导入场景把 AI 填充结果落到候选题上；表单场景由界面把结果写回控件。
+        分级知识点（{板块: [细分知识点]}）会被扁平为知识点列表，同时回填所属板块。
         """
         subject = str(result.get("subject", "")).strip()
         if subject:
             question.subject = subject
 
+        section = str(result.get("section", "")).strip()
+        if section:
+            question.section = section
+
         points = result.get("knowledge_points")
         if points:
             question.knowledge_points = [str(item).strip() for item in points if str(item).strip()]
+
+        stem = result.get("stem")
+        if stem:
+            question.stem = str(stem).strip()
+
+        options = result.get("options")
+        if options:
+            question.options = options
 
         if result.get("question_type") is not None:
             question.type = QuestionType(result["question_type"])
@@ -628,6 +693,34 @@ class QuestionService:
             return list(self._repository.list_knowledge_points(subject))
         except Exception:  # noqa: BLE001 - 补全数据非关键路径
             return []
+
+    def list_sections(self, subject: str | None = None) -> dict[str, list[str]]:
+        """返回知识板块与细分知识点（可按科目过滤），格式 ``{板块: [细分知识点, ...]}``。
+
+        无配置或读取失败时返回默认值；``subject`` 为空时合并全部科目，
+        供"选择板块后给出该板块知识点"的联动场景使用。
+        """
+        try:
+            all_sections = (
+                self._config_store.load_sections() if self._config_store else []
+            )
+        except Exception:  # noqa: BLE001 - 联动数据非关键路径
+            all_sections = []
+        sections = [
+            KnowledgeSection(subject=s.subject, section=s.section, knowledge_points=list(s.knowledge_points))
+            for s in (all_sections or [])
+        ] or [
+            KnowledgeSection(subject=subject, section=section, knowledge_points=list(points))
+            for subject, groups in DEFAULT_KNOWLEDGE_SECTIONS.items()
+            for section, points in groups.items()
+        ]
+        if subject is None:
+            return {section.section: section.knowledge_points for section in sections}
+        return {
+            section.section: section.knowledge_points
+            for section in sections
+            if section.subject == subject
+        }
 
     def statistics(self) -> dict[str, int]:
         """题库概览：总题数与各题型题量（用户需求：完成题库相关内容）。
@@ -911,13 +1004,19 @@ class QuestionService:
 
         if RecognizeModule.KNOWLEDGE_POINTS in wanted:
             points = data.get("knowledge_points") or data.get("knowledge") or []
+            section = ""
             if isinstance(points, str):
                 points = self._split_knowledge(points)
-            if not isinstance(points, list):
+            elif isinstance(points, dict):
+                # 分级输出（先板块、再细分知识点），支持一道题涉及多个板块
+                points, section = self._flatten_sectioned_points(points)
+            else:
                 points = []
             cleaned = [str(item).strip() for item in points if str(item).strip()]
             if cleaned:
                 result["knowledge_points"] = cleaned
+                if section:
+                    result["section"] = section
             else:
                 issues.append("AI 未返回知识点（knowledge_points）")
 
@@ -988,6 +1087,30 @@ class QuestionService:
                 issues.append("AI 未返回答案（answer）")
             else:
                 issues.append("AI 返回的答案为空白")
+
+        if RecognizeModule.STEM in wanted:
+            stem = str(data.get("stem", "")).strip()
+            if stem:
+                result["stem"] = stem
+            else:
+                issues.append("AI 未返回题干（stem）")
+
+        if RecognizeModule.OPTIONS in wanted:
+            raw_options = data.get("options")
+            if isinstance(raw_options, list):
+                options = [
+                    Option(key=str(item.get("key", "")).strip(), text=str(item.get("text", "")).strip())
+                    for item in raw_options
+                    if isinstance(item, dict)
+                    and str(item.get("key", "")).strip()
+                    and str(item.get("text", "")).strip()
+                ]
+                if options:
+                    result["options"] = options
+                else:
+                    issues.append("AI 返回的选项缺少有效内容（options）")
+            else:
+                issues.append("AI 未返回有效选项（options）")
 
         if RecognizeModule.SOLUTION in wanted:
             solution = data.get("solution")

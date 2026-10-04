@@ -81,13 +81,15 @@ class ConfigStore(ABC):
     def save_prompt_config(self, config: PromptConfig) -> None
     def load_subjects(self) -> list[str]              # 科目列表（选择式录入）
     def save_subjects(self, subjects: list[str]) -> None
+    def load_sections(self) -> list[KnowledgeSection]   # 知识板块列表（无配置时回退默认）
+    def save_sections(self, sections: list[KnowledgeSection]) -> None
 ```
 
 | 项 | 说明 |
 |----|------|
 | 实现 | `infrastructure/config_store.py::SQLiteConfigStore`（settings 键值表，JSON 值） |
 | 调用方 | `app/container.py`（装配）、`presentation/views/settings_view`、`application/{question_service,difficulty_service}`（提示词与科目） |
-| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；提示词为空时逐项回退默认模板；`PromptConfig.module_prompts` 按模块逐项合并（只改了部分模块时，其余模块仍用默认片段）；科目列表去重且保序，为空时回退默认科目 |
+| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；提示词为空时逐项回退默认模板；`PromptConfig.module_prompts` 按模块逐项合并（只改了部分模块时，其余模块仍用默认片段）；科目列表去重且保序，为空时回退默认科目；知识板块映射按科目逐板块去重保序，无配置时回退默认板块 |
 | 隐私 | API Key 仅存本机 settings 表，禁止外传或写日志 (R18) |
 
 ### 1.5 QuestionOpRepository —— 题库操作台账（用户需求）
@@ -231,6 +233,9 @@ def count_available(self, subject: str, difficulty: Difficulty, question_type: Q
 def list_subjects(self) -> list[str]                     # 可选科目（设置中维护）
 def list_knowledge_points(self, subject: str | None = None) -> list[str]
         # 知识点字典，供录入 / 检索自动补全与组卷指定知识点
+def list_sections(self, subject: str | None = None) -> dict[str, list[str]]
+        # {板块 -> 细分知识点列表}，subject 为空时合并全部科目；
+        # 录入页按科目联动板块、按板块过滤知识点候选
 def statistics(self) -> dict[str, int]                   # 题库概览：总题数与各题型题量
 def delete_questions(self, question_ids: list[str]) -> int       # 批量删除
 def set_quality_flag_many(self, question_ids: list[str], flag: QualityFlag) -> int
@@ -269,6 +274,15 @@ def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
 界面上勾选模块 -> 一次 AI 调用 -> 只回填勾选的字段。
 自定义总述未使用 `{modules}` 时，服务层只追加"总述里还没提到"的模块要求，
 避免同一字段（如难度）在提示词里出现两次。
+
+**知识板块分级提示词（用户需求）**：`module_prompts["knowledge_points"]` 不再笼统要求
+"知识点数组"，而是要求 AI 先判断题目涉及哪些知识板块（只从
+`DEFAULT_KNOWLEDGE_SECTIONS` / 用户配置的板块列表里选，可涉及多个板块），
+再对每个板块细化到细分知识点，输出 `{"板块名": ["细分知识点", ...]}` 对象。
+服务层 `_format_sections_for_prompt()` 把"科目-板块-知识点"扁平为
+"板块名：细分知识点"清单填入 `{sections}`；`_flatten_sectioned_points()` 把
+AI 返回的分级结构扁平为知识点列表并提取所属板块（多板块用"、"拼接），
+写入 `Question.section` 与 `Question.knowledge_points`。
 
 **难度提示词只维护一处（用户需求）**：`PromptConfig` 不再有 `difficulty_prompt` 字段
 （旧配置里的该键在读取时被忽略）。`module_prompts["difficulty"]` 既用于 AI 辨识的难度
@@ -491,7 +505,7 @@ PaperGenerationView
 
 | 表 | 读写接口 | 说明 |
 |----|----------|------|
-| questions | QuestionRepository | 题目主表 |
+| questions | QuestionRepository | 题目主表（section 列为后加字段，旧库自动补列） |
 | knowledge_points | QuestionRepository（save/update 同步） | 知识点字典 |
 | question_usage | UsageRepository | 使用记录（R13） |
 | generation_tasks | TaskRepository | 组卷任务 |

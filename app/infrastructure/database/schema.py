@@ -24,6 +24,7 @@ QUESTIONS_TABLE = """
     CREATE TABLE IF NOT EXISTS questions (
         id                TEXT PRIMARY KEY,
         subject           TEXT NOT NULL,
+        section           TEXT NOT NULL DEFAULT '',
         knowledge_points  TEXT NOT NULL DEFAULT '[]',
         type              TEXT NOT NULL CHECK (type IN ('single', 'multiple', 'fill', 'solution')),
         stem              TEXT NOT NULL,
@@ -44,6 +45,7 @@ QUESTIONS_TABLE = """
 QUESTION_COLUMNS: tuple[str, ...] = (
     "id",
     "subject",
+    "section",
     "knowledge_points",
     "type",
     "stem",
@@ -125,6 +127,8 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
 COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 题目图片列为后加字段，旧库需补列（用户需求：题目图片导入）
     ("questions", "image_path", "TEXT"),
+    # 知识板块列为后加字段，旧库需补列
+    ("questions", "section", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -160,7 +164,11 @@ def _migrate_question_type_check(conn: sqlite3.Connection) -> None:
     if row is None or "'fill'" in (row[0] or ""):
         return
 
-    columns = ", ".join(QUESTION_COLUMNS)
+    # 取旧表实际存在的列（后加的 section 等列可能尚未迁入），
+    # 避免 SELECT 阶段报 "no such column"。
+    columns = ", ".join(
+        r[1] for r in conn.execute("PRAGMA table_info(questions)")
+    )
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
         conn.execute(QUESTIONS_TABLE.replace("IF NOT EXISTS questions", "questions_rebuilt"))

@@ -127,6 +127,8 @@ class RecognizeModule(str, Enum):
     - ``QUALITY_FLAG`` 质量标记（选填，默认"普通"）
     - ``ANSWER`` 答案 / 参考答案（必填）
     - ``SOLUTION`` 解析（选填，可要求不生成）
+    - ``STEM`` 题干（选填，原文残缺时可要求 AI 补全）
+    - ``OPTIONS`` 选项（选填，不足 2 项时可要求 AI 补充）
     """
 
     SUBJECT = "subject"
@@ -136,3 +138,5 @@ class RecognizeModule(str, Enum):
     QUALITY_FLAG = "quality_flag"
     ANSWER = "answer"
     SOLUTION = "solution"
+    STEM = "stem"
+    OPTIONS = "options"

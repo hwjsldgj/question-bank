@@ -41,10 +41,10 @@ class SQLiteQuestionRepository(QuestionRepository):
         question.updated_at = now
         with self._db.transaction() as conn:
             conn.execute(
-                "INSERT INTO questions (id, subject, knowledge_points, type, stem, options, "
-                "answer, solution, difficulty, difficulty_source, quality_flag, source, "
-                "image_path, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO questions (id, subject, section, knowledge_points, type, stem, "
+                "options, answer, solution, difficulty, difficulty_source, quality_flag, "
+                "source, image_path, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._to_row(question),
             )
             self._sync_knowledge_points(conn, question)
@@ -55,11 +55,13 @@ class SQLiteQuestionRepository(QuestionRepository):
         question.updated_at = datetime.now()
         with self._db.transaction() as conn:
             conn.execute(
-                "UPDATE questions SET subject = ?, knowledge_points = ?, type = ?, stem = ?, "
-                "options = ?, answer = ?, solution = ?, difficulty = ?, difficulty_source = ?, "
-                "quality_flag = ?, source = ?, image_path = ?, updated_at = ? WHERE id = ?",
+                "UPDATE questions SET subject = ?, section = ?, knowledge_points = ?, type = ?, "
+                "stem = ?, options = ?, answer = ?, solution = ?, difficulty = ?, "
+                "difficulty_source = ?, quality_flag = ?, source = ?, image_path = ?, "
+                "updated_at = ? WHERE id = ?",
                 (
                     question.subject,
+                    question.section,
                     self._dump_json(question.knowledge_points),
                     question.type.value,
                     question.stem,
@@ -101,6 +103,9 @@ class SQLiteQuestionRepository(QuestionRepository):
         if question_filter.subject:
             clauses.append("subject = ?")
             params.append(question_filter.subject)
+        if question_filter.section:
+            clauses.append("section = ?")
+            params.append(question_filter.section)
         if question_filter.knowledge_point:
             clauses.append("knowledge_points LIKE ?")
             params.append(f"%{question_filter.knowledge_point}%")
@@ -193,6 +198,7 @@ class SQLiteQuestionRepository(QuestionRepository):
         return (
             question.id,
             question.subject,
+            question.section,
             self._dump_json(question.knowledge_points),
             self._enum_value(question.type, QuestionType),
             question.stem,
@@ -236,6 +242,7 @@ class SQLiteQuestionRepository(QuestionRepository):
         return Question(
             id=row["id"],
             subject=row["subject"],
+            section=row.get("section", ""),
             knowledge_points=SQLiteQuestionRepository._load_json(row["knowledge_points"], []),
             type=QuestionType(row["type"]),
             stem=row["stem"],

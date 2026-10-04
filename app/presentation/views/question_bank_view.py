@@ -2,8 +2,9 @@
 
 界面结构（内嵌三个子页签）：
 
-- 录入 / 编辑：结构化表单（科目下拉选择 / 知识点 / 题型 / 选项 / 答案 / 解析 /
-  难度 / 质量标记 / 题目图片），题型为解答题时切换为"参考答案"输入
+- 录入 / 编辑：结构化表单（科目下拉选择 / 知识板块 / 知识点 / 题型 / 选项 / 答案 / 解析 /
+  难度 / 质量标记 / 题目图片），题型为解答题时切换为"参考答案"输入；
+  选中科目后联动其知识板块，选中板块后只补全该板块的细分知识点
 - 批量粘贴：粘贴多题文本 -> 解析预览（"待修正"行标红）-> 确认批量入库
 - 检索：按科目（下拉）/ 知识点 / 难度 / 题型过滤，结果展示使用次数与最近使用时间，
   并可对选中题目执行编辑 / 删除 / 质量标记
@@ -27,12 +28,13 @@
 
 import re
 
-from PySide6.QtCore import Qt, QStringListModel, Signal
+from PySide6.QtCore import Qt, QStringListModel, QModelIndex, Signal
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QCompleter,
+    QDialog,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.application.question_service import RECOGNIZE_MODULES, QuestionService
+from app.config.settings import DEFAULT_SUBJECTS
 from app.domain.entities.question import Option, Question, QuestionFilter
 from app.domain.enums import (
     Difficulty,
@@ -63,6 +66,203 @@ from app.presentation import ui_utils
 
 #: 图片预览的最大尺寸（像素）
 PREVIEW_SIZE = (220, 160)
+
+
+class _PasteDraftEditor(QDialog):
+    """批量粘贴预览中双击一行后弹出的候选题编辑器。
+
+    修改 / 删除仅作用于内存中的候选题草稿，不触及已入库题目；
+    取消（关闭窗口）则丢弃本次改动。
+    """
+
+    def __init__(
+        self,
+        parent: QWidget,
+        draft: Question,
+        index: int,
+        service: QuestionService,
+        subjects: list[str],
+    ) -> None:
+        super().__init__(parent)
+        self._service = service
+        self._draft = draft
+        self._index = index
+        self._deleted = False
+
+        self.setWindowTitle(f"编辑第 {index} 道候选题")
+        self.setMinimumWidth(560)
+        self._build_ui()
+        self._fill(draft)
+
+    # ------------------------------------------------------------------ 构建
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self._subject_combo = QComboBox()
+        self._subject_combo.setMinimumWidth(120)
+        self._subject_combo.currentIndexChanged.connect(self._reload_sections)
+        self._section_combo = QComboBox()
+        self._section_combo.setMinimumWidth(120)
+        self._section_combo.currentIndexChanged.connect(self._reload_knowledge_completer)
+        self._knowledge_edit = QLineEdit()
+        self._knowledge_edit.setPlaceholderText("多个知识点用逗号分隔")
+        self._knowledge_completer = QCompleter(
+            QStringListModel([], self._knowledge_edit), self._knowledge_edit
+        )
+        self._knowledge_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._knowledge_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._knowledge_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._knowledge_edit.setCompleter(self._knowledge_completer)
+
+        self._type_combo = QComboBox()
+        for question_type in (
+            QuestionType.SINGLE,
+            QuestionType.MULTIPLE,
+            QuestionType.FILL,
+            QuestionType.SOLUTION,
+        ):
+            self._type_combo.addItem(
+                ui_utils.QUESTION_TYPE_LABELS[question_type], question_type
+            )
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+
+        self._stem_edit = QPlainTextEdit()
+        self._stem_edit.setFixedHeight(80)
+
+        self._options_container = self._build_options_group()
+        self._answer_edit = QLineEdit()
+        self._answer_edit.setPlaceholderText("选择题填 A,B；填空 / 解答填参考答案")
+        self._solution_edit = QPlainTextEdit()
+        self._solution_edit.setPlaceholderText("选填：解析")
+        self._solution_edit.setFixedHeight(60)
+
+        form.addRow("科目 *", self._subject_combo)
+        form.addRow("知识板块", self._section_combo)
+        form.addRow("知识点", self._knowledge_edit)
+        form.addRow("题型 *", self._type_combo)
+        form.addRow("题干 *", self._stem_edit)
+        form.addRow(self._options_container)
+        form.addRow("答案 *", self._answer_edit)
+        form.addRow("解析", self._solution_edit)
+        root.addLayout(form)
+
+        button_row = QHBoxLayout()
+        save_button = QPushButton("保存修改")
+        save_button.clicked.connect(self.accept)
+        delete_button = QPushButton("删除本题")
+        delete_button.clicked.connect(self._on_delete)
+        cancel_button = QPushButton("取消")
+        cancel_button.clicked.connect(self.reject)
+        button_row.addWidget(save_button)
+        button_row.addWidget(delete_button)
+        button_row.addStretch(1)
+        button_row.addWidget(cancel_button)
+        root.addLayout(button_row)
+
+    def _build_options_group(self) -> QGroupBox:
+        """构建选择题选项编辑器（标号 + 内容，可增删行）。"""
+        group = QGroupBox("选项（选择题，至少 2 项）")
+        layout = QVBoxLayout(group)
+
+        self._options_table = QTableWidget(0, 2)
+        self._options_table.setHorizontalHeaderLabels(["标号", "内容"])
+        self._options_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        layout.addWidget(self._options_table)
+
+        option_row = QHBoxLayout()
+        self._add_option_button = QPushButton("添加选项")
+        self._add_option_button.clicked.connect(self._add_option_row)
+        self._remove_option_button = QPushButton("删除选中")
+        self._remove_option_button.clicked.connect(self._remove_option_row)
+        option_row.addWidget(self._add_option_button)
+        option_row.addWidget(self._remove_option_button)
+        option_row.addStretch(1)
+        layout.addLayout(option_row)
+        return group
+
+    def _add_option_row(self, key: str = "", text: str = "") -> None:
+        row = self._options_table.rowCount()
+        self._options_table.insertRow(row)
+        self._options_table.setItem(row, 0, QTableWidgetItem(key or self._next_option_key()))
+        self._options_table.setItem(row, 1, QTableWidgetItem(text))
+        self._options_table.setCurrentCell(row, 1)
+
+    def _remove_option_row(self) -> None:
+        row = self._options_table.currentRow()
+        if row < 0:
+            ui_utils.info(self, "请先在选项表中选择要删除的行。")
+            return
+        if self._options_table.rowCount() <= 2:
+            ui_utils.info(self, "选择题至少保留 2 个选项。")
+            return
+        self._options_table.removeRow(row)
+
+    def _next_option_key(self) -> str:
+        """按 A/B/C… 自动分配下一个选项标号。"""
+        return chr(ord("A") + self._options_table.rowCount())
+
+    def _reload_sections(self) -> None:
+        """按当前科目重建板块下拉框。"""
+        subject = self._subject_combo.currentText().strip()
+        sections = self._service.list_sections(subject)
+        current = self._section_combo.currentData()
+        self._section_combo.blockSignals(True)
+        self._section_combo.clear()
+        self._section_combo.addItem("全部板块", "")
+        for section in sections:
+            self._section_combo.addItem(section, section)
+        index = self._section_combo.findData(current)
+        self._section_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._section_combo.blockSignals(False)
+        self._reload_knowledge_completer()
+
+    def _reload_knowledge_completer(self) -> None:
+        """按当前板块刷新知识点补全；未选板块则补全科目的全部知识点。"""
+        section = self._section_combo.currentData() or ""
+        points = self._service.list_sections(self._subject_combo.currentText().strip())
+        candidates = points.get(section) if section else [
+            p for group in points.values() for p in group
+        ]
+        self._knowledge_completer.setModel(QStringModel(list(candidates or []), self._knowledge_edit))
+
+    def _on_type_changed(self) -> None:
+        """题型切换时在"选项 + 答案"与"参考答案"之间切换。"""
+        needs_options = self._type_combo.currentData() in (QuestionType.SINGLE, QuestionType.MULTIPLE)
+        self._options_container.setVisible(needs_options)
+
+    def _fill(self, question: Question) -> None:
+        """把候选题写入表单控件。"""
+        index = self._subject_combo.findText(question.subject)
+        if index < 0 and question.subject:
+            self._subject_combo.addItem(question.subject, question.subject)
+            index = self._subject_combo.findText(question.subject)
+        if index >= 0:
+            self._subject_combo.setCurrentIndex(index)
+            self._reload_sections()
+        ui_utils.select_combo_data(self._section_combo, question.section)
+        self._knowledge_edit.setText("，".join(question.knowledge_points))
+        ui_utils.select_combo_data(self._type_combo, question.type)
+        self._stem_edit.setPlainText(question.stem)
+        self._options_table.setRowCount(0)
+        for option in question.options:
+            self._add_option_row(option.key, option.text)
+        self._answer_edit.setText(
+            ",".join(question.answer) if question.is_choice else "；".join(question.answer)
+        )
+        self._solution_edit.setPlainText(question.solution or "")
+
+    def was_deleted(self) -> bool:
+        """用户是否点了"删除本题"。"""
+        return self._deleted
+
+    def _on_delete(self) -> None:
+        if ui_utils.confirm(self, f"确定要删除第 {self._index} 道候选题吗？"):
+            self._deleted = True
+            self.reject()
 
 
 class QuestionBankView(QWidget):
@@ -108,8 +308,22 @@ class QuestionBankView(QWidget):
         self._subject_combo = QComboBox()
         self._subject_combo.setMinimumWidth(140)
         self._subject_combo.setToolTip("科目只能从列表中选择；新增科目请到「设置 -> 科目管理」")
+        self._subject_combo.currentIndexChanged.connect(self._on_subject_changed)
+
+        self._section_combo = QComboBox()
+        self._section_combo.setMinimumWidth(140)
+        self._section_combo.setToolTip(
+            "按所选科目列出知识板块与细分知识点；新增板块请到「设置 -> 知识板块」"
+        )
+        self._section_combo.currentIndexChanged.connect(self._on_section_changed)
+
         self._knowledge_edit = QLineEdit()
         self._knowledge_edit.setPlaceholderText("多个知识点用逗号分隔，如：一元二次方程,因式分解")
+        self._knowledge_completer = QCompleter(QStringModel([], self._knowledge_edit), self._knowledge_edit)
+        self._knowledge_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._knowledge_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._knowledge_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._knowledge_edit.setCompleter(self._knowledge_completer)
 
         self._type_combo = QComboBox()
         for question_type in (
@@ -151,6 +365,7 @@ class QuestionBankView(QWidget):
         self._solution_edit.setFixedHeight(70)
 
         form.addRow("科目 *", self._subject_combo)
+        form.addRow("知识板块", self._section_combo)
         form.addRow("知识点", self._knowledge_edit)
         form.addRow("题型 *", self._type_combo)
         form.addRow("难度", self._difficulty_combo)
@@ -326,9 +541,13 @@ class QuestionBankView(QWidget):
         self._preview_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
+        self._preview_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
         self._preview_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.Stretch
         )
+        self._preview_table.doubleClicked.connect(self._on_preview_double_clicked)
         layout.addWidget(self._preview_table)
 
         self._paste_status = QLabel("尚未解析")
@@ -516,6 +735,7 @@ class QuestionBankView(QWidget):
         return Question(
             id=self._editing_id or "",
             subject=self._subject_combo.currentText().strip(),
+            section=self._section_combo.currentData() or "",
             knowledge_points=self._parse_knowledge(),
             type=question_type,
             stem=self._stem_edit.toPlainText().strip(),
@@ -540,6 +760,7 @@ class QuestionBankView(QWidget):
         """把草稿转换为 QuestionService.update_question 所需的补丁字典。"""
         return {
             "subject": draft.subject,
+            "section": draft.section,
             "knowledge_points": draft.knowledge_points,
             "type": draft.type,
             "stem": draft.stem,
@@ -562,6 +783,8 @@ class QuestionBankView(QWidget):
         self._solution_edit.clear()
         if self._subject_combo.count():
             self._subject_combo.setCurrentIndex(0)
+        self._reload_sections()
+        self._reload_knowledge_completer()
         ui_utils.select_combo_data(self._type_combo, QuestionType.SINGLE)
         ui_utils.select_combo_data(self._difficulty_combo, Difficulty.PENDING)
         ui_utils.select_combo_data(self._quality_combo, QualityFlag.NORMAL)
@@ -577,6 +800,45 @@ class QuestionBankView(QWidget):
         if self._editing_id:
             self.show_status("已取消编辑，表单已清空")
         self._reset_form()
+
+    def _on_subject_changed(self) -> None:
+        """切换科目时刷新板块下拉与知识点补全（用户需求：选科后联动板块与知识点）。"""
+        self._reload_sections()
+        self._reload_knowledge_completer()
+
+    def _on_section_changed(self) -> None:
+        """切换板块时刷新该板块的知识点补全候选。"""
+        self._reload_knowledge_completer()
+
+    def _reload_sections(self) -> None:
+        """按当前科目重建板块下拉框（空值"全部板块"始终保留）。"""
+        subject = self._subject_combo.currentText().strip()
+        current = self._section_combo.currentData()
+        sections = ui_utils.safe_call(
+            self._question_service.list_sections, subject, default=None
+        ) or {}
+        self._section_combo.blockSignals(True)
+        self._section_combo.clear()
+        self._section_combo.addItem("全部板块", "")
+        for section, points in sections.items():
+            self._section_combo.addItem(section, section)
+        index = self._section_combo.findData(current)
+        self._section_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._section_combo.blockSignals(False)
+
+    def _reload_knowledge_completer(self) -> None:
+        """按当前板块刷新知识点的自动补全候选；未选板块则补全科目的全部知识点。"""
+        section = self._section_combo.currentData() or ""
+        points = ui_utils.safe_call(
+            self._question_service.list_sections,
+            self._subject_combo.currentText().strip(),
+            default=None,
+        ) or {}
+        candidates = points.get(section) if section else [
+            p for group in points.values() for p in group
+        ]
+        model = QStringListModel(list(candidates or []), self._knowledge_edit)
+        self._knowledge_completer.setModel(model)
 
     def _on_type_changed(self) -> None:
         """题型切换时在"选项 + 答案"与"参考答案"之间切换。"""
@@ -598,6 +860,8 @@ class QuestionBankView(QWidget):
             index = self._subject_combo.findText(question.subject)
         if index >= 0:
             self._subject_combo.setCurrentIndex(index)
+            self._reload_sections()
+        ui_utils.select_combo_data(self._section_combo, question.section)
         self._knowledge_edit.setText("，".join(question.knowledge_points))
         self._stem_edit.setPlainText(question.stem)
         ui_utils.select_combo_data(self._type_combo, question.type)
@@ -764,7 +1028,17 @@ class QuestionBankView(QWidget):
         index = self._subject_combo.findText(subject)
         if index >= 0 and subject:
             self._subject_combo.setCurrentIndex(index)
+            self._reload_sections()
             notes.append(f"科目：{subject}")
+
+        section = result.get("section")
+        if section:
+            primary = section.split("、", 1)[0]
+            index = self._section_combo.findData(primary)
+            if index >= 0:
+                self._section_combo.setCurrentIndex(index)
+                self._reload_knowledge_completer()
+            notes.append(f"知识板块：{section}")
 
         points = result.get("knowledge_points") or []
         if points:
@@ -835,7 +1109,7 @@ class QuestionBankView(QWidget):
 
     @classmethod
     def _missing_labels(cls, question: Question) -> list[str]:
-        """列出逐项检查中尚未填写的模块名称（可由 AI 填充，题干 / 选项除外）。"""
+        """列出逐项检查中尚未填写的模块名称（可由 AI 填充，含题干与选项）。"""
         return [
             cls._module_label(question, module)
             for module in QuestionService.missing_modules(question)
@@ -854,18 +1128,18 @@ class QuestionBankView(QWidget):
         """逐项检查文本（弹窗展示：每项当前取值与是否缺失）。
 
         用户需求：导入或修改时逐项检查弹窗提示。题干与选项也在检查之列，
-        但它们必须由出题者填写，AI 不负责生成。
+        原文残缺时可由 AI 补全。
         """
         lines: list[str] = []
         stem_ok = bool((question.stem or "").strip())
-        lines.append(f"题干：{'已填写' if stem_ok else '缺失'}（必须人工填写，AI 不生成）")
+        lines.append(f"题干：{'已填写' if stem_ok else '缺失'}（可由 AI 补全）")
         if question.type in (QuestionType.SINGLE, QuestionType.MULTIPLE):
             valid_options = [
                 option
                 for option in question.options
                 if option.key.strip() and option.text.strip()
             ]
-            lines.append(f"选项：{len(valid_options)} 项（至少 2 项，必须人工填写）")
+            lines.append(f"选项：{len(valid_options)} 项（至少 2 项，可由 AI 补全）")
         for module, filled in QuestionService.module_states(question):
             label = cls._module_label(question, module)
             if filled:
@@ -1127,9 +1401,9 @@ class QuestionBankView(QWidget):
             lines.append(f"第 {index} 题：缺 " + "、".join(labels) + tag)
         return (
             f"导入前逐项检查：共 {len(self._paste_drafts)} 道候选题，"
-            f"其中 {len(problems)} 道非题干信息不完整。\n\n"
+            f"其中 {len(problems)} 道信息不完整。\n\n"
             + "\n".join(lines)
-            + "\n\n题干与选项必须人工填写。是否让 AI 填充上述缺失项？"
+            + "\n\n是否让 AI 填充上述缺失项（题干与选项也由 AI 补全）？"
             f"（共需调用 AI {len(problems)} 次，逐题一次返回；结果仅供参考）"
         )
 
@@ -1252,6 +1526,29 @@ class QuestionBankView(QWidget):
         self._render_paste_preview(self._paste_drafts)
         return True
 
+    def _on_preview_double_clicked(self, index: QModelIndex) -> None:
+        """双击预览行时打开该候选题的编辑对话框。"""
+        row = index.row()
+        if 0 <= row < len(self._paste_drafts):
+            self._edit_paste_draft(row)
+
+    def _edit_paste_draft(self, index: int) -> None:
+        """在弹窗中编辑指定序号的候选题（修改/删除仅作用于内存草稿）。"""
+        subjects = ui_utils.safe_call(self._question_service.list_subjects, default=None) or list(
+            DEFAULT_SUBJECTS
+        )
+        dialog = _PasteDraftEditor(
+            self, self._paste_drafts[index], index + 1, self._question_service, subjects
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            if dialog.was_deleted():
+                del self._paste_drafts[index]
+                self._paste_status.setText(f"已删除第 {index + 1} 道候选题")
+            return
+        dialog.read()
+        self._render_paste_preview(self._paste_drafts)
+        self._paste_status.setText(f"第 {index + 1} 道候选题已修改")
+
     def _render_paste_preview(self, drafts: list[Question]) -> None:
         """渲染候选题预览，待修正行标红（需求 R2 第 4 条）。"""
         self._preview_table.setRowCount(0)
@@ -1335,6 +1632,9 @@ class QuestionBankView(QWidget):
             completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             completer.setFilterMode(Qt.MatchFlag.MatchContains)
             edit.setCompleter(completer)
+        # 录入页按当前科目重新联动板块与知识点（科目下拉刷新后需重建）
+        self._reload_sections()
+        self._reload_knowledge_completer()
 
     def reload_questions(self) -> None:
         """静默重新检索（初始化与跨视图刷新使用，不弹窗）。"""

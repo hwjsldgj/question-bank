@@ -92,6 +92,8 @@ RECOGNIZE_MODULE_LABELS: dict[RecognizeModule, str] = {
     RecognizeModule.QUALITY_FLAG: "质量标记",
     RecognizeModule.ANSWER: "答案",
     RecognizeModule.SOLUTION: "解析",
+    RecognizeModule.STEM: "题干",
+    RecognizeModule.OPTIONS: "选项",
 }
 
 

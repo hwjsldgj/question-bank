@@ -49,6 +49,9 @@ class Question:
     subject: str
     """科目，组卷筛选的一级维度。"""
 
+    section: str = ""
+    """所属知识板块（科目的二级分组），录入时由出题者选中板块后确定。"""
+
     knowledge_points: list[str] = field(default_factory=list)
     """关联知识点列表，用于选题覆盖度计算与 AI 补题。"""
 
@@ -122,6 +125,9 @@ class QuestionFilter:
 
     subject: str | None = None
     """精确匹配的科目；None 表示不限。"""
+
+    section: str | None = None
+    """精确匹配的知识板块；None 表示不限。"""
 
     knowledge_point: str | None = None
     """知识点（命中题目的 knowledge_points 列表即可）；None 表示不限。"""

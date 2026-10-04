@@ -17,12 +17,14 @@ import sqlite3
 
 from app.config.settings import (
     DEFAULT_AI_CONFIG,
+    DEFAULT_KNOWLEDGE_SECTIONS,
     DEFAULT_MODULE_PROMPTS,
     DEFAULT_PROMPT_CONFIG,
     DEFAULT_SCORING_CONFIG,
     DEFAULT_SUBJECTS,
 )
 from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
+from app.domain.entities.knowledge_section import KnowledgeSection
 from app.infrastructure.database.connection import DatabaseConnection
 from app.interfaces.repositories import ConfigStore
 
@@ -34,6 +36,7 @@ class SQLiteConfigStore(ConfigStore):
     KEY_SCORING = "scoring_config"
     KEY_PROMPT = "prompt_config"
     KEY_SUBJECTS = "subjects"
+    KEY_SECTIONS = "knowledge_sections"
 
     def __init__(self, db: DatabaseConnection) -> None:
         """注入数据库连接管理器。"""
@@ -132,6 +135,77 @@ class SQLiteConfigStore(ConfigStore):
             if name and name not in cleaned:
                 cleaned.append(name)
         self._write_key(self.KEY_SUBJECTS, json.dumps(cleaned, ensure_ascii=False))
+
+    def load_sections(self) -> list[KnowledgeSection]:
+        """读取知识板块列表；无记录或格式非法时返回默认值。
+
+        返回按科目、板块顺序排列的 ``KnowledgeSection`` 列表，调用方按需按科目过滤。
+        """
+        raw = self._read_key(self.KEY_SECTIONS)
+        if raw is None:
+            return self._default_sections()
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return self._default_sections()
+        if not isinstance(data, dict):
+            return self._default_sections()
+        sections: list[KnowledgeSection] = []
+        seen = set()
+        for subject, subject_data in data.items():
+            if not isinstance(subject_data, dict):
+                continue
+            subject_name = str(subject).strip()
+            if not subject_name:
+                continue
+            for name, points in subject_data.items():
+                if not isinstance(points, list):
+                    continue
+                section_name = str(name).strip()
+                if not section_name:
+                    continue
+                key = (subject_name, section_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                section = KnowledgeSection(subject=subject_name, section=section_name)
+                for point in points:
+                    point_name = str(point).strip()
+                    if point_name and point_name not in section.knowledge_points:
+                        section.knowledge_points.append(point_name)
+                sections.append(section)
+        return sections or self._default_sections()
+
+    def save_sections(self, sections: list[KnowledgeSection]) -> None:
+        """保存知识板块映射（科目 -> 板块 -> 细分知识点，去重并保持顺序）。"""
+        normalized: dict[str, dict[str, list[str]]] = {}
+        for section in sections:
+            if not isinstance(section, KnowledgeSection):
+                continue
+            subject_name = str(section.subject).strip()
+            section_name = str(section.section).strip()
+            if not subject_name or not section_name:
+                continue
+            subject_map = normalized.setdefault(subject_name, {})
+            deduped: list[str] = []
+            for point in section.knowledge_points:
+                point_name = str(point).strip()
+                if point_name and point_name not in deduped:
+                    deduped.append(point_name)
+            if deduped:
+                subject_map[section_name] = deduped
+        self._write_key(
+            self.KEY_SECTIONS, json.dumps(normalized, ensure_ascii=False)
+        )
+
+    @staticmethod
+    def _default_sections() -> list[KnowledgeSection]:
+        """默认知识板块列表（无持久化配置时的兜底）。"""
+        return [
+            KnowledgeSection(subject=subject, section=section, knowledge_points=list(points))
+            for subject, groups in DEFAULT_KNOWLEDGE_SECTIONS.items()
+            for section, points in groups.items()
+        ]
 
     def _read_key(self, key: str) -> str | None:
         """读取单个配置键；表未创建时返回 None（启动早期容错）。"""

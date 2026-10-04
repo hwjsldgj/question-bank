@@ -72,6 +72,7 @@ class DifficultyService:
             DIFFICULTY_ANALYSIS_FRAME,
             DIFFICULTY_ANALYSIS_FRAME,
             module=fragment,
+            knowledge_points="，".join(question.knowledge_points) or "未标注",
             type=_QUESTION_TYPE_TEXT.get(question.type, ""),
             stem=question.stem,
             options="；".join(f"{o.key}. {o.text}" for o in question.options) or "无",

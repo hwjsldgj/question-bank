@@ -75,16 +75,28 @@ DEFAULT_MODULE_PROMPTS: dict[str, str] = {
 #: 其中 ``{module}`` 由用户可编辑的「难度」模块提示词片段填充（用户需求：
 #: 提示词里难度不再重复出现两次，难度只维护一处）。
 DIFFICULTY_ANALYSIS_FRAME = (
-    "你是教辅难度评估专家。请判断下面这道题的难度，只输出难度等级，"
+    "你是教辅难度评估专家。请依据题目内容判断难度，只输出难度等级，"
     "不要输出其他内容。\n"
+    "难度分级依据（请严格按下列标准，结合题目所涉及的知识点与思维要求判断）：\n"
+    "  - 易（easy）：只涉及单一基础知识点，直接套用定义或公式即可，"
+    "无需变形与推理，一步可得答案；\n"
+    "  - 中（medium）：涉及 1-2 个知识点的简单组合，需要一次变形或"
+    "两步以内推理，属于常规训练题；\n"
+    "  - 难（hard）：涉及 2 个以上知识点的综合运用，需要多步推理、"
+    "分类讨论、构造辅助或非常规思路。\n"
+    "注意：所依据的知识点必须出现在题目内容（题干、选项、答案）中，"
+    "不得自行补充题目未给出的知识点；若题目内容不足以判断难度，"
+    "请返回 medium。\n"
     "输出要求：{module}\n"
+    "关联知识点：{knowledge_points}\n"
     "题型：{type}\n题干：{stem}\n选项：{options}\n答案：{answer}\n"
 )
 
 #: 默认 AI 提示词模板（用户可在"设置 -> AI 设置"中修改后持久化）
 #: 占位符：辨识总述用 {subjects} / {stem} / {options} / {modules}；
-#: 难度模块片段用 {subjects}（同时用于难度分析的输出要求）；
-#: 补题用 {subject} / {knowledge_points} / {type} / {difficulty} / {count}
+#: 难度模块片段用 {subjects}（AI 辨识场景）；
+#: 补题用 {subject} / {knowledge_points} / {type} / {difficulty} / {count}；
+#: 难度分析框架额外使用 {knowledge_points}，由 DifficultyService 传入
 DEFAULT_PROMPT_CONFIG = PromptConfig(
     recognize_prompt=(
         "你是资深出题与审题专家。请阅读下面的题目内容，按下列模块化要求识别字段，"

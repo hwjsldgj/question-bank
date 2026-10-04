@@ -66,3 +66,9 @@ Entries discovered by the Agent during task execution should follow this format:
   - 临时验证目录放在工作区内的 `_tmp_*` 子目录并在脚本结束时删除，不要用系统 %TEMP%
   - 删除工作区内的临时目录可能需要一次完全权限（danger-full-access）批准，工作区根上的
     Everyone 拒绝项是沙箱预期设置，不要手工改 ACL
+  - 表现层离屏测试里凡是会走到 `ui_utils.info` / `ui_utils.warning` 的路径（例如保存提示词、
+    逐项检查弹窗），必须先用 monkeypatch 把这些函数换成空实现，否则 `QMessageBox.exec()`
+    会一直阻塞、测试挂死
+  - 难度提示词只维护一处：`PromptConfig.module_prompts["difficulty"]`（AI 辨识与难度分析共用，
+    分析时套 `config/settings.py::DIFFICULTY_ANALYSIS_FRAME` 框架）；旧的 `difficulty_prompt`
+    字段已删除，历史配置里的该键在读取时被忽略

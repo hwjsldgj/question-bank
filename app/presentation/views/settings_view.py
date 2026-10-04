@@ -115,13 +115,12 @@ class SettingsView(QWidget):
         layout.addWidget(
             QLabel(
                 "提示词修改（可用占位符：辨识总述 {subjects} {stem} {options} {modules}；"
-                "模块提示词 {subjects}；难度 {type} {stem} {options} {answer}；"
-                "补题 {subject} {knowledge_points} {type} {difficulty} {count}）"
+                "模块提示词 {subjects}；补题 {subject} {knowledge_points} {type} "
+                "{difficulty} {count}）"
             )
         )
 
         self._recognize_prompt = self._new_prompt_edit()
-        self._difficulty_prompt = self._new_prompt_edit()
         self._supplement_prompt = self._new_prompt_edit()
         prompt_form = QFormLayout()
         prompt_form.addRow("AI 辨识总述提示词", self._recognize_prompt)
@@ -134,11 +133,16 @@ class SettingsView(QWidget):
             edit = self._new_prompt_edit(height=64)
             self._module_prompts[module.value] = edit
             modules_form.addRow(ui_utils.RECOGNIZE_MODULE_LABELS[module], edit)
+        modules_note = QLabel(
+            "「难度」模块提示词同时用于 AI 辨识与入库后的难度分析（含批量重析），"
+            "难度只在此处维护一处，不再单独设置难度提示词。"
+        )
+        modules_note.setWordWrap(True)
+        modules_form.addRow(modules_note)
         layout.addLayout(prompt_form)
         layout.addWidget(modules_group)
 
         other_form = QFormLayout()
-        other_form.addRow("难度分析提示词", self._difficulty_prompt)
         other_form.addRow("AI 补题提示词", self._supplement_prompt)
         layout.addLayout(other_form)
 
@@ -382,7 +386,6 @@ class SettingsView(QWidget):
     def _fill_prompt_form(self, config: PromptConfig) -> None:
         """把提示词写入编辑框（模块提示词缺失时补默认片段）。"""
         self._recognize_prompt.setPlainText(config.recognize_prompt)
-        self._difficulty_prompt.setPlainText(config.difficulty_prompt)
         self._supplement_prompt.setPlainText(config.supplement_prompt)
         for module in RecognizeModule:
             edit = self._module_prompts.get(module.value)
@@ -394,7 +397,10 @@ class SettingsView(QWidget):
             edit.setPlainText(text)
 
     def _on_save_prompt(self) -> None:
-        """保存提示词配置，后续 AI 调用立即使用新提示词。"""
+        """保存提示词配置，后续 AI 调用立即使用新提示词。
+
+        难度只在模块提示词里维护一处（用户需求），保存后 AI 辨识与难度分析同时生效。
+        """
         config = PromptConfig(
             recognize_prompt=self._recognize_prompt.toPlainText().strip(),
             module_prompts={
@@ -402,7 +408,6 @@ class SettingsView(QWidget):
                 for module in RecognizeModule
                 if module.value in self._module_prompts
             },
-            difficulty_prompt=self._difficulty_prompt.toPlainText().strip(),
             supplement_prompt=self._supplement_prompt.toPlainText().strip(),
         )
         ok, _ = ui_utils.run_guarded(

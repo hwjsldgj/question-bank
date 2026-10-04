@@ -245,6 +245,11 @@ def recognize_draft(self, stem: str, options: list[Option],
         # 未请求的字段不出现在结果里；include_solution=False 时提示词与期望结构
         # 均不含解析且结果 solution 恒为空串（用户需求：按需给出、一次返回）
         # 返回键仅含被请求模块对应的键
+def recognize_draft_report(self, stem, options, include_solution=True,
+                           confirmed=False, modules=None) -> RecognitionReport
+        # 同 recognize_draft，但额外返回"AI 返回内容的问题清单"：
+        # RecognitionReport(fields: dict, issues: list[str])（用户需求：返回信息有问题
+        # 时弹窗提示）；无法识别的字段不写入 fields，避免静默套用默认值
 @staticmethod module_states(question) -> list[tuple[RecognizeModule, bool]]
         # 逐项检查各模块是否已填写（题干与选项不在其中，须人工填写）
 @classmethod missing_modules(question) -> list[RecognizeModule]
@@ -262,10 +267,25 @@ def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
 提示词，用户可在「设置 -> AI 设置」中逐模块修改（`PromptConfig.module_prompts`），
 总述模板 `PromptConfig.recognize_prompt` 用 `{modules}` 占位符接收被勾选模块的拼装结果。
 界面上勾选模块 -> 一次 AI 调用 -> 只回填勾选的字段。
+自定义总述未使用 `{modules}` 时，服务层只追加"总述里还没提到"的模块要求，
+避免同一字段（如难度）在提示词里出现两次。
+
+**难度提示词只维护一处（用户需求）**：`PromptConfig` 不再有 `difficulty_prompt` 字段
+（旧配置里的该键在读取时被忽略）。`module_prompts["difficulty"]` 既用于 AI 辨识的难度
+字段，也由 `DifficultyService.analyze` 作为难度分析的输出要求——框架常量
+`app/config/settings.py::DIFFICULTY_ANALYSIS_FRAME` 负责补上 `{type} {stem} {options}
+{answer}` 等题目信息，因此设置界面只有一个「难度」提示词编辑框。
+
+**AI 返回内容问题的弹窗约定（用户需求）**：`recognize_draft_report().issues` 收集
+"AI 未返回 X"、"AI 返回的难度无法识别：'…'"、"AI 建议的科目不在科目列表中"等问题，
+界面统一弹窗提示（批量导入时按题汇总为一次弹窗）；无法识别的取值不会写回表单。
+`DifficultyService` 遇到无法识别的难度抛 `AIServiceError`（经 `run_guarded` 弹窗提示）。
 
 **逐项检查约定（用户需求）**：保存题目与批量导入前，界面用
 `QuestionService.module_states()` 逐项列出各模块的填写状态，弹窗询问是否让 AI 填充
 缺失项（「AI 填充缺失项 / 手动补齐（跳过 AI）/ 取消」）；题干与选项必须由出题者填写。
+批量粘贴在「解析预览」时先行检查并可当场让 AI 填充（`_import_checked` 记录已询问过，
+「确认提交」只在必填项仍缺失时阻断）；保存题目则在点击保存时检查。
 科目 / 知识点 / 答案为必填模块（`REQUIRED_MODULES`），难度 / 解析 / 质量标记缺失时允许
 直接保存。
 
@@ -276,6 +296,7 @@ create_question(draft, analyze_difficulty=False)      # True 才调用 AI 分析
 update_question(id, patch, analyze_difficulty=False)
 batch_commit(drafts, analyze_difficulty=False)
 recognize_draft(stem, options, include_solution=True, confirmed=False, modules=None)  # True 才调用 AI
+recognize_draft_report(同左, ...)                     # 同上，并返回问题清单供弹窗
 reanalyze_difficulties(ids, confirmed=False)                             # True 才调用 AI
 PaperComposer.generate(criteria, allow_ai_supplement=False)               # True 才允许 AI 补题
 QuestionGenerator.generate_questions(..., allow_ai=False)                 # True 才调用 AI

@@ -12,7 +12,7 @@
 被使用：app.application.question_service（入库触发）、app.container
 """
 
-from app.config.settings import DEFAULT_PROMPT_CONFIG
+from app.config.settings import DEFAULT_MODULE_PROMPTS, DIFFICULTY_ANALYSIS_FRAME
 from app.domain.entities.question import Question
 from app.domain.enums import Difficulty, DifficultySource, QuestionType
 from app.domain.errors import AIServiceError
@@ -56,12 +56,22 @@ class DifficultyService:
     def analyze(self, question: Question) -> Difficulty:
         """分析单道题目的难度（需求 R4 第 1 条）。
 
+        提示词 = 固定分析框架 + 用户可编辑的「难度」模块提示词片段：难度只维护
+        一处提示词，AI 辨识与难度分析（含批量重析）共用同一段输出要求
+        （用户需求：AI 的提示词中难度不要重复）。
+
         :raises app.domain.errors.AIServiceError: 调用失败或结果非法
         """
         prompts = load_prompt_config(self._config_store)
+        default_fragment = DEFAULT_MODULE_PROMPTS.get("difficulty", "")
+        fragment = render(
+            prompts.module_prompts.get("difficulty") or default_fragment,
+            default_fragment,
+        )
         prompt = render(
-            prompts.difficulty_prompt,
-            DEFAULT_PROMPT_CONFIG.difficulty_prompt,
+            DIFFICULTY_ANALYSIS_FRAME,
+            DIFFICULTY_ANALYSIS_FRAME,
+            module=fragment,
             type=_QUESTION_TYPE_TEXT.get(question.type, ""),
             stem=question.stem,
             options="；".join(f"{o.key}. {o.text}" for o in question.options) or "无",
@@ -114,11 +124,21 @@ class DifficultyService:
 
     @staticmethod
     def _to_difficulty(data: dict) -> Difficulty:
-        """把 AI 返回的 JSON 转换为难度枚举（非法结果抛 AIServiceError）。"""
-        raw = str(data.get("difficulty", "")).strip().lower()
+        """把 AI 返回结果转换为难度枚举（非法结果抛 AIServiceError）。
+
+        同时接受三种常见形态（用户需求：AI 返回信息出现问题时要有可读提示）：
+        ``{"difficulty": "hard"}``、纯文本 `` {"text": "hard"} ``、
+        以及 "difficulty：hard" 这类带字段名的文本；无法识别时抛
+        :class:`AIServiceError`，由界面弹窗提示而不是静默降级。
+        """
+        raw = str(data.get("difficulty") or data.get("text") or "").strip().lower()
+        if not raw:
+            raise AIServiceError(
+                f"AI 返回内容里没有难度信息：{str(data)[:200]}"
+            )
         if raw in _DIFFICULTY_WORDS:
             return _DIFFICULTY_WORDS[raw]
         for word, difficulty in _DIFFICULTY_WORDS.items():
             if word in raw:
                 return difficulty
-        raise AIServiceError(f"AI 返回的难度无法识别：{data.get('difficulty')!r}")
+        raise AIServiceError(f"AI 返回的难度无法识别：{raw[:60]!r}")

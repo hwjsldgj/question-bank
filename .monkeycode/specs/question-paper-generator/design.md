@@ -278,9 +278,13 @@ PromptConfig
                                   # 键取 RecognizeModule：subject / knowledge_points /
                                   # question_type / difficulty / quality_flag / answer / solution
                                   # 只改部分模块时，其余模块回退默认片段
-  difficulty_prompt: string       # 难度分析模板
   supplement_prompt: string       # AI 补题模板
 ```
+
+难度提示词只有一处（用户需求：提示词中难度不要重复）：不再有 `difficulty_prompt` 字段，
+`module_prompts["difficulty"]` 同时用于 AI 辨识的难度字段与入库后的难度分析——分析时由
+固定框架（`DIFFICULTY_ANALYSIS_FRAME`，含 `{type} {stem} {options} {answer}`）包住该片段作为
+「输出要求」。旧配置里的 `difficulty_prompt` 键在读取时被忽略。
 
 模块化 AI 辨识契约（用户需求：按需给出、一次返回）：
 
@@ -290,7 +294,14 @@ recognize_draft(stem, options, include_solution=True, confirmed=False, modules=N
   # 一次 AIClient.complete 调用返回全部所需字段；
   # 结果只含被请求模块的键，未请求字段既不生成也不覆盖表单；
   # include_solution=False 时提示词与期望结构都不含解析，结果 solution 恒为 ""。
+
+recognize_draft_report(同上) -> RecognitionReport
+  fields: dict        # 只含"确实识别出来"的字段，无法识别的取值不写入（不静默套默认值）
+  issues: list[str]   # "AI 未返回 X" / "AI 返回的难度无法识别：'…'" 等，供界面弹窗提示
 ```
+
+自定义总述若未写 `{modules}`，服务层只追加总述里尚未提到的模块要求，避免同一字段
+（如难度）在提示词中出现两次。
 
 ### Paper
 
@@ -417,6 +428,20 @@ flowchart TD
 约束：题干与选择题选项必须由出题者填写，AI 不生成；必填模块为科目 / 知识点 / 答案
 （`REQUIRED_MODULES`），难度 / 解析 / 质量标记为选填，缺失时允许直接保存。
 所有 AI 调用仍需用户在上述弹窗中显式确认。
+批量粘贴在「解析预览」时就执行同一套检查（用户需求：导入时非题干信息不完整要弹窗提示
+并询问是否 AI 填充），确认提交时只作为兜底。
+
+### AI 返回内容异常的处理（用户需求：要有弹窗提示）
+
+```text
+AIClient.complete -> 非 JSON / 非对象      -> AIServiceError（界面弹窗）
+                  -> 缺字段 / 取值无法识别  -> RecognitionReport.issues（界面弹窗列清单）
+                        · 未返回 X（科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案）
+                        · 无法识别的取值（题型 / 难度 / 质量标记）
+                        · 建议科目不在科目列表中
+难度分析返回无法识别                      -> AIServiceError（AIServiceError 经 run_guarded 弹窗）
+无法识别的字段一律不写回表单（保持原值，不静默套用默认值），其余字段照常回填。
+```
 
 ## Correctness Properties
 
@@ -440,6 +465,10 @@ flowchart TD
     （`AIServiceError`）且不发起任何请求（用户需求：所有使用 AI 的内容都需手动确认）。
 15. **知识点过滤**：`knowledge_points` 非空时，命中量与组卷选题涉及的题目均至少包含
     其中一个指定知识点（用户需求：组卷环节可指定知识点）。
+16. **AI 返回问题必被提示**：AI 返回内容缺少被请求字段或取值无法识别时，问题清单非空
+    并由界面弹窗展示；无法识别的字段不写入表单（不静默套用默认值）。
+17. **难度提示词唯一**：提示词配置中难度只有一处（`module_prompts["difficulty"]`）；
+    AI 辨识与分析共用它，任何一次 AI 提示词里同一字段的要求只出现一次。
 
 ## Error Handling
 

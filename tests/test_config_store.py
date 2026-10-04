@@ -35,12 +35,38 @@ def test_prompt_config_roundtrip_and_fallback(tmp_path) -> None:
         )
 
         store.save_prompt_config(
-            PromptConfig(recognize_prompt="自定义辨识 {stem}", difficulty_prompt="")
+            PromptConfig(recognize_prompt="自定义辨识 {stem}", supplement_prompt="")
         )
         loaded = store.load_prompt_config()
         assert loaded.recognize_prompt == "自定义辨识 {stem}"
         # 空模板回退默认值，避免 AI 调用失去上下文
-        assert loaded.difficulty_prompt == DEFAULT_PROMPT_CONFIG.difficulty_prompt
+        assert loaded.supplement_prompt == DEFAULT_PROMPT_CONFIG.supplement_prompt
+    finally:
+        container.db.close()
+
+
+def test_legacy_difficulty_prompt_is_dropped(tmp_path) -> None:
+    """旧的难度分析提示词配置被忽略：难度只在模块提示词里维护一处（用户需求）。"""
+    import json
+
+    container = _container(tmp_path)
+    try:
+        store = container.config_store
+        store._write_key(
+            store.KEY_PROMPT,
+            json.dumps(
+                {
+                    "recognize_prompt": "旧总述 {stem}",
+                    "difficulty_prompt": "旧的难度分析提示词",
+                    "module_prompts": {"difficulty": "difficulty：只给 easy/medium/hard"},
+                },
+                ensure_ascii=False,
+            ),
+        )
+        loaded = store.load_prompt_config()
+        assert not hasattr(loaded, "difficulty_prompt")
+        assert loaded.recognize_prompt == "旧总述 {stem}"
+        assert loaded.module_prompts["difficulty"] == "difficulty：只给 easy/medium/hard"
     finally:
         container.db.close()
 

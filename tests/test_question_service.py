@@ -616,7 +616,6 @@ def test_recognize_draft_normalizes_and_uses_prompt(container) -> None:
     container.config_store.save_prompt_config(
         PromptConfig(
             recognize_prompt="自定义辨识 {subjects} :: {stem}",
-            difficulty_prompt="",
             supplement_prompt="",
         )
     )
@@ -649,3 +648,130 @@ def test_recognize_without_ai_raises(container) -> None:
     assert service.ai_configured() is False
     with pytest.raises(AIConfigMissingError):
         service.recognize_draft("题干", [], confirmed=True)
+
+
+def _service_with(container, fake) -> QuestionService:
+    """构造注入了指定假 AI 客户端的题目服务。"""
+    return QuestionService(
+        container.question_repository,
+        QuestionValidator(),
+        DifficultyService(fake, container.config_store),
+        op_repository=container.question_op_repository,
+        config_store=container.config_store,
+        ai_client=fake,
+    )
+
+
+def test_recognition_reports_missing_ai_fields(container) -> None:
+    """AI 返回内容缺字段时给出可读问题清单，且不把缺项静默套成默认值（用户需求）。"""
+    fake = FakeAIClient({})
+    service = _service_with(container, fake)
+
+    report = service.recognize_draft_report("题干", [], confirmed=True)
+    assert report.ok is False
+    joined = "；".join(report.issues)
+    assert "未返回科目" in joined
+    assert "未返回知识点" in joined
+    assert "未返回" in joined and "题型" in joined
+    assert "未返回难度" in joined
+    # 未返回的字段不写入结果（不会静默变成 SINGLE / PENDING / NORMAL）
+    assert "difficulty" not in report.fields
+    assert "question_type" not in report.fields
+    assert "quality_flag" not in report.fields
+    assert "subject" not in report.fields
+    # recognize_draft 仍只返回字段字典（向后兼容）
+    assert service.recognize_draft("题干", [], confirmed=True) == report.fields
+
+
+def test_recognition_flags_unrecognized_ai_values(container) -> None:
+    """AI 返回了无法识别的取值时同样报问题，可识别字段照常回填（用户需求）。"""
+    fake = FakeAIClient(
+        {
+            "subject": "天文学",
+            "knowledge_points": ["集合"],
+            "question_type": "判断题",
+            "difficulty": "一般",
+            "quality_flag": "略低",
+            "answer": ["A"],
+            "solution": "解析",
+        }
+    )
+    service = _service_with(container, fake)
+    report = service.recognize_draft_report("题干", [], confirmed=True)
+
+    assert report.fields["knowledge_points"] == ["集合"]
+    assert report.fields["answer"] == ["A"]
+    assert report.fields["solution"] == "解析"
+    assert "difficulty" not in report.fields
+    assert "quality_flag" not in report.fields
+    issues = "；".join(report.issues)
+    assert "题型无法识别" in issues
+    assert "难度无法识别" in issues
+    assert "质量标记无法识别" in issues
+    assert "不在科目列表" in issues
+
+    # 正常返回时没有问题
+    good = FakeAIClient(
+        {
+            "subject": "数学",
+            "knowledge_points": ["集合"],
+            "question_type": "single",
+            "difficulty": "easy",
+            "quality_flag": "normal",
+            "answer": ["A"],
+            "solution": "",
+        }
+    )
+    ok_report = _service_with(container, good).recognize_draft_report(
+        "题干", [], confirmed=True
+    )
+    assert ok_report.ok is True and ok_report.issues == []
+
+
+def test_recognition_prompt_keeps_one_requirement_per_field(container) -> None:
+    """自定义总述已写明某字段时不再追加该模块要求（用户需求：提示词里难度不重复）。"""
+    fake = FakeAIClient({"difficulty": "hard"})
+    service = _service_with(container, fake)
+    container.config_store.save_prompt_config(
+        PromptConfig(
+            recognize_prompt=(
+                "自定义总述\n"
+                "subject：科目\n"
+                "knowledge_points：知识点\n"
+                "difficulty：easy、medium 或 hard\n"
+                "题干：{stem}\n"
+            ),
+            supplement_prompt="",
+        )
+    )
+    service.recognize_draft("题干", [], confirmed=True)
+    prompt = fake.prompts[0]
+    assert prompt.count("difficulty") == 1
+    assert prompt.count("subject：") == 1
+    assert prompt.count("knowledge_points") == 1
+    # 总述里没提到的模块仍会补上输出要求
+    assert "quality_flag" in prompt
+    assert "answer：" in prompt
+
+
+def test_difficulty_analysis_reuses_module_prompt(container) -> None:
+    """难度只维护一处提示词：难度分析复用「难度」模块片段，并接受纯文本返回。"""
+    fake = FakeAIClient({"text": "medium"})
+    container.config_store.save_prompt_config(
+        PromptConfig(
+            module_prompts={"difficulty": "difficulty：只给 easy/medium/hard"},
+            supplement_prompt="",
+        )
+    )
+    service = DifficultyService(fake, container.config_store)
+    assert service.analyze(_single_question()) is Difficulty.MEDIUM
+    prompt = fake.prompts[0]
+    assert "只给 easy/medium/hard" in prompt
+    assert "输出要求" in prompt
+    assert "题干：" in prompt
+
+    # 无法识别时抛出可读异常（界面据此弹窗），而不是静默降级
+    from app.domain.errors import AIServiceError
+
+    with pytest.raises(AIServiceError, match="难度"):
+        DifficultyService(FakeAIClient({"text": "说不清"})).analyze(_single_question())

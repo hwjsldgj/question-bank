@@ -125,20 +125,25 @@ PaperGenerationView -> PaperExporter.export
 ```text
 QuestionBankView（勾选辨识模块）
     -> [弹窗确认]                          所有 AI 调用均需用户手动确认
-    -> QuestionService.recognize_draft(stem, options, include_solution, confirmed=True,
-                                       modules=[...])
+    -> QuestionService.recognize_draft_report(stem, options, include_solution,
+                                              confirmed=True, modules=[...])
         -> _render_module_prompts          只拼装被勾选模块的输出提示词
             -> ConfigStore.load_prompt_config  PromptConfig.module_prompts（用户可逐模块改）
         -> recognize_schema(modules)        期望结构只含被勾选模块
         -> AIClient.complete(prompt, schema)  一次调用返回全部所需字段
-        -> _normalize_recognition(data, modules)  结果只保留被请求的模块
+        -> _normalize_recognition(...)      返回 RecognitionReport(fields, issues)
+             · 无法识别的取值不写入 fields（不静默套默认值）
+             · 缺字段 / 无法识别 / 科目不在列表 -> issues
     -> _apply_recognition                  按模块回填表单（未勾选字段不覆盖）；结果仅供参考
+    -> [弹窗：AI 返回内容有问题]             issues 非空时列出清单（用户需求）
 
 保存 / 批量导入前：
     -> QuestionService.module_states(draft)        逐项检查各模块填写状态
     -> [弹窗：AI 填充缺失项 / 手动补齐（跳过 AI）/ 取消]
-    -> recognize_draft(..., modules=缺失模块)       只请求缺失的模块，一次调用
-    -> QuestionService.apply_recognition(draft, result)   批量导入场景写回候选题
+        · 批量粘贴在「解析预览」时先检查一次，确认提交只作兜底
+    -> recognize_draft_report(..., modules=缺失模块)  只请求缺失的模块，一次调用
+    -> QuestionService.apply_recognition(draft, fields)   批量导入场景写回候选题
+    -> [弹窗：AI 返回内容有问题]                    按题汇总问题清单
 ```
 
 ## 4. 关键设计决策
@@ -160,6 +165,12 @@ QuestionBankView（勾选辨识模块）
 7. **AI 使用全部需用户确认 + 逐项检查**：所有 AI 入口默认拒绝（`confirmed=False` /
    `analyze_difficulty=False` / `allow_ai*=False`）；保存与批量导入前用
    `module_states()` 逐项检查填写情况并弹窗询问是否 AI 填充，题干与选项始终由出题者填写。
+8. **AI 返回内容必被解释**：辨识统一走 `recognize_draft_report`，缺字段 / 取值无法识别 /
+   科目不在列表都会进入 `issues` 并弹窗；无法识别的取值不写回表单，避免把"识别失败"
+   悄悄变成合法默认值（用户需求：AI 返回信息有问题要有弹窗提示）。
+9. **难度提示词单一来源**：`PromptConfig` 只有 `module_prompts["difficulty"]` 一处难度
+   提示词，AI 辨识与难度分析（`DIFFICULTY_ANALYSIS_FRAME` 框架）共用，设置界面不再出现
+   第二个难度提示词编辑框（用户需求：提示词中难度不要重复）。
 
 ## 5. 框架完成度说明
 

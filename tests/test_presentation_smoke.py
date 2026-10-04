@@ -384,18 +384,26 @@ def test_reuse_signal_routed_to_paper_view(window) -> None:
     assert window.centralWidget().currentIndex() == TAB_TITLES.index("组卷")
 
 
-def test_settings_has_prompt_and_subject_editors(window) -> None:
+def test_settings_has_prompt_and_subject_editors(window, monkeypatch) -> None:
     """设置视图提供提示词（含模块化输出提示词）编辑与科目管理（用户需求）。"""
     from app.domain.enums import RecognizeModule
+    from app.presentation import ui_utils
+
+    # 保存提示词会弹成功提示；离屏测试里屏蔽所有弹窗，避免阻塞
+    monkeypatch.setattr(ui_utils, "info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ui_utils, "warning", lambda *args, **kwargs: None)
 
     settings = window.settings_view
     assert settings._recognize_prompt.toPlainText()
-    assert settings._difficulty_prompt.toPlainText()
     assert settings._supplement_prompt.toPlainText()
     assert set(settings._module_prompts) == {module.value for module in RecognizeModule}
     for module in RecognizeModule:
         assert settings._module_prompts[module.value].toPlainText()
     assert settings._subject_list.count() > 0
+
+    # 难度提示词只保留一处：不再有独立的「难度分析提示词」编辑框（用户需求）
+    assert not hasattr(settings, "_difficulty_prompt")
+    assert RecognizeModule.DIFFICULTY.value in settings._module_prompts
 
     # 保存模块提示词后能读回（每个模块独立可改）
     settings._module_prompts["answer"].setPlainText("answer：只给标号")
@@ -403,6 +411,72 @@ def test_settings_has_prompt_and_subject_editors(window) -> None:
     loaded = window._container.config_store.load_prompt_config()
     assert loaded.module_prompts["answer"] == "answer：只给标号"
     assert loaded.module_prompts["subject"]
+
+
+def test_import_check_text_lists_missing_items(window) -> None:
+    """导入前逐项检查文案列出每题缺失项与必填 / 选填标记（用户需求）。"""
+    from app.domain.entities.question import Option, Question
+
+    bank = window.question_bank_view
+    draft = Question(
+        id="",
+        subject="",
+        knowledge_points=[],
+        type=QuestionType.SINGLE,
+        stem="题干",
+        options=[Option("A", "1"), Option("B", "2")],
+        answer=[],
+    )
+    bank._paste_drafts = [draft]
+    problems = bank._incomplete_drafts()
+    assert [index for index, _ in problems] == [1]
+
+    text = bank._import_check_text(problems)
+    assert "非题干信息不完整" in text
+    assert "第 1 题" in text
+    assert "（必填）" in text
+    assert "是否让 AI 填充" in text
+
+    # 信息齐全时不进入逐项检查
+    complete = Question(
+        id="",
+        subject="数学",
+        knowledge_points=["集合"],
+        type=QuestionType.SINGLE,
+        stem="题干",
+        options=[Option("A", "1"), Option("B", "2")],
+        answer=["A"],
+        difficulty=Difficulty.EASY,
+        solution="解析",
+    )
+    bank._paste_drafts = [complete]
+    assert bank._incomplete_drafts() == []
+    assert bank._ensure_drafts_before_import() is True
+    bank._paste_drafts = []
+
+
+def test_ai_response_issues_are_reported(window, monkeypatch) -> None:
+    """AI 返回内容有问题时弹窗提示，无问题时静默（用户需求）。"""
+    from app.presentation import ui_utils
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        ui_utils,
+        "warning",
+        lambda parent, text, title="无法继续": calls.append((title, text)),
+    )
+
+    bank = window.question_bank_view
+    bank._show_ai_issues([])
+    assert calls == []
+
+    bank._show_ai_issues(
+        ["AI 未返回知识点（knowledge_points）", "AI 返回的难度无法识别：'一般'"]
+    )
+    assert len(calls) == 1
+    title, text = calls[0]
+    assert "AI 返回内容有问题" == title
+    assert "AI 未返回知识点" in text and "无法识别" in text
 
 
 def test_config_changed_does_not_crash(window) -> None:

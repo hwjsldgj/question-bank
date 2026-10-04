@@ -71,9 +71,19 @@ DEFAULT_MODULE_PROMPTS: dict[str, str] = {
     "solution": "solution：解析文本，可为空字符串",
 }
 
+#: 难度分析框架（不可编辑部分）：入库后的难度分析、批量重析难度都复用它，
+#: 其中 ``{module}`` 由用户可编辑的「难度」模块提示词片段填充（用户需求：
+#: 提示词里难度不再重复出现两次，难度只维护一处）。
+DIFFICULTY_ANALYSIS_FRAME = (
+    "你是教辅难度评估专家。请判断下面这道题的难度，只输出难度等级，"
+    "不要输出其他内容。\n"
+    "输出要求：{module}\n"
+    "题型：{type}\n题干：{stem}\n选项：{options}\n答案：{answer}\n"
+)
+
 #: 默认 AI 提示词模板（用户可在"设置 -> AI 设置"中修改后持久化）
 #: 占位符：辨识总述用 {subjects} / {stem} / {options} / {modules}；
-#: 难度用 {type} / {stem} / {options} / {answer}；
+#: 难度模块片段用 {subjects}（同时用于难度分析的输出要求）；
 #: 补题用 {subject} / {knowledge_points} / {type} / {difficulty} / {count}
 DEFAULT_PROMPT_CONFIG = PromptConfig(
     recognize_prompt=(
@@ -86,11 +96,6 @@ DEFAULT_PROMPT_CONFIG = PromptConfig(
         "注意：识别结果仅供参考，最终以出题者人工确认为准。"
     ),
     module_prompts=dict(DEFAULT_MODULE_PROMPTS),
-    difficulty_prompt=(
-        "你是教辅难度评估专家。请判断下面这道题的难度，"
-        "只回答 easy、medium 或 hard 三个词之一，不要输出其他内容。\n"
-        "题型：{type}\n题干：{stem}\n选项：{options}\n答案：{answer}\n"
-    ),
     supplement_prompt=(
         "你是出题专家。请依据以下要求生成题目，输出 JSON 数组，"
         "每道题包含 subject、knowledge_points、type、stem、options、answer、solution 字段。\n"

@@ -24,7 +24,8 @@ class QuestionRepository(ABC):
     def update(self, question: Question) -> Question
     def delete(self, question_id: str) -> None
     def search(self, question_filter: QuestionFilter) -> list[Question]
-    def count_available(self, subject: str, difficulty: str, question_type: str) -> int
+    def count_available(self, subject: str, difficulty: str, question_type: str,
+                        knowledge_points: list[str] | None = None) -> int
     def list_knowledge_points(self, subject: str | None = None) -> list[str]
     def count_by_type(self) -> dict[str, int]
     def count_by_image(self, image_path: str) -> int
@@ -34,7 +35,7 @@ class QuestionRepository(ABC):
 |----|------|
 | 实现 | `infrastructure/repositories/question_repository.py::SQLiteQuestionRepository` |
 | 调用方 | `application/question_service`、`application/paper_composer`、`application/question_generator` |
-| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6) |
+| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6)；count_available 的 `knowledge_points` 非空时按"命中任一指定知识点"统计（用户需求：组卷可指定知识点） |
 | 异常 | `sqlite3.Error` 由仓储向上传播，服务层转译为界面提示 |
 
 ### 1.2 UsageRepository —— 使用记录仓储
@@ -76,7 +77,7 @@ class ConfigStore(ABC):
     def save_ai_config(self, config: AIConfig) -> None
     def load_scoring_config(self) -> ScoringConfig
     def save_scoring_config(self, config: ScoringConfig) -> None
-    def load_prompt_config(self) -> PromptConfig      # AI 提示词（用户可改）
+    def load_prompt_config(self) -> PromptConfig      # AI 提示词（总述 + 各模块，用户可改）
     def save_prompt_config(self, config: PromptConfig) -> None
     def load_subjects(self) -> list[str]              # 科目列表（选择式录入）
     def save_subjects(self, subjects: list[str]) -> None
@@ -86,7 +87,7 @@ class ConfigStore(ABC):
 |----|------|
 | 实现 | `infrastructure/config_store.py::SQLiteConfigStore`（settings 键值表，JSON 值） |
 | 调用方 | `app/container.py`（装配）、`presentation/views/settings_view`、`application/{question_service,difficulty_service}`（提示词与科目） |
-| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；提示词为空时逐项回退默认模板；科目列表去重且保序，为空时回退默认科目 |
+| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；提示词为空时逐项回退默认模板；`PromptConfig.module_prompts` 按模块逐项合并（只改了部分模块时，其余模块仍用默认片段）；科目列表去重且保序，为空时回退默认科目 |
 | 隐私 | API Key 仅存本机 settings 表，禁止外传或写日志 (R18) |
 
 ### 1.5 QuestionOpRepository —— 题库操作台账（用户需求）
@@ -150,6 +151,33 @@ class LocalImageStore:                      # infrastructure/image_store.py
 - 异常：`ImageImportError`（文件不存在 / 格式不支持）；支持 png / jpg / jpeg / bmp / gif / webp。
 - 调用方：`presentation/views/question_bank_view`（选择图片、预览）；由容器持有具体实现。
 
+### 1.9 组卷条件值对象（R7 / 用户需求）
+
+```python
+@dataclass
+class TypeRequirement:              # domain/entities/criteria.py
+    question_type: QuestionType
+    subject: str
+    difficulty: Difficulty
+    count: int
+    knowledge_points: list[str] = field(default_factory=list)   # 组卷指定知识点
+
+@dataclass
+class PaperCriteria:
+    choice_enabled: bool
+    solution_enabled: bool
+    fill_enabled: bool
+    choice_items: list[TypeRequirement]
+    fill_item: TypeRequirement | None
+    solution_item: TypeRequirement | None
+    def enabled_requirements(self) -> list[TypeRequirement]     # 顺序：选择 -> 填空 -> 解答
+```
+
+- `knowledge_points` 为空表示不限；非空时命中其中任一知识点的题目才计入命中量与选题
+  （用户需求：组卷环节可指定知识点）。
+- 界面按题型各自维护一个可编辑的知识点选择框（下拉选择已有知识点，也可手写多个，
+  以逗号 / 顿号分隔）；`paper_generation_view.parse_knowledge` 负责拆分。
+
 ## 2. 领域校验器
 
 ### 2.1 QuestionValidator（R3）
@@ -196,24 +224,50 @@ def set_quality_flag(self, question_id: str, flag: QualityFlag) -> None
 def batch_parse(self, raw_text: str) -> list[Question]           # 粘贴文本 -> 候选题（含"待修正"标记）
 def batch_commit(self, drafts: list[Question]) -> list[Question]
 def search(self, question_filter: QuestionFilter) -> list[Question]
-def count_available(self, subject: str, difficulty: Difficulty, question_type: QuestionType) -> int
+def count_available(self, subject: str, difficulty: Difficulty, question_type: QuestionType,
+                    knowledge_points: list[str] | None = None) -> int
+        # knowledge_points 非空时只统计命中其中任一知识点的题目（用户需求：组卷可指定知识点）
 # 用户需求追加：
 def list_subjects(self) -> list[str]                     # 可选科目（设置中维护）
 def list_knowledge_points(self, subject: str | None = None) -> list[str]
-        # 知识点字典，供录入 / 检索自动补全
+        # 知识点字典，供录入 / 检索自动补全与组卷指定知识点
 def statistics(self) -> dict[str, int]                   # 题库概览：总题数与各题型题量
 def delete_questions(self, question_ids: list[str]) -> int       # 批量删除
 def set_quality_flag_many(self, question_ids: list[str], flag: QualityFlag) -> int
-def reanalyze_difficulties(self, question_ids: list[str]) -> dict  # 批量重析难度
+def reanalyze_difficulties(self, question_ids: list[str], confirmed: bool = False) -> dict
 def all_question_ids(self) -> list[str]
 def ai_configured(self) -> bool                          # AI 是否已配置（决定按钮可用性）
 def recognize_draft(self, stem: str, options: list[Option],
-                    include_solution: bool = True) -> dict
-        # AI 辨识科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析；结果仅供参考，
-        # include_solution=False 时要求 AI 不输出解析（用户需求）
+                    include_solution: bool = True, confirmed: bool = False,
+                    modules: list[RecognizeModule] | list[str] | None = None) -> dict
+        # 模块化输出：只把 modules 指明的模块（科目 / 知识点 / 题型 / 难度 / 质量 /
+        # 答案 / 解析）拼进提示词与期望结构，一次调用返回全部所需字段；
+        # 未请求的字段不出现在结果里；include_solution=False 时提示词与期望结构
+        # 均不含解析且结果 solution 恒为空串（用户需求：按需给出、一次返回）
+        # 返回键仅含被请求模块对应的键
+@staticmethod module_states(question) -> list[tuple[RecognizeModule, bool]]
+        # 逐项检查各模块是否已填写（题干与选项不在其中，须人工填写）
+@classmethod missing_modules(question) -> list[RecognizeModule]
+@classmethod required_missing_modules(question) -> list[RecognizeModule]   # 科目 / 知识点 / 答案
+@staticmethod apply_recognition(question, result, include_solution=True) -> Question
+        # 把 AI 结果写回题目草稿（批量导入场景）
+        # 保存 / 导入前的逐项检查与 AI 填充均基于以上方法（用户需求）
 def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
         # 导入历史 / 编辑历史台账
 ```
+
+**模块化 AI 辨识（用户需求）**：`RecognizeModule`（`app/domain/enums.py`）定义
+`subject / knowledge_points / question_type / difficulty / quality_flag / answer / solution`
+七个模块；`app/config/settings.py` 的 `DEFAULT_MODULE_PROMPTS` 为每个模块提供一段默认输出
+提示词，用户可在「设置 -> AI 设置」中逐模块修改（`PromptConfig.module_prompts`），
+总述模板 `PromptConfig.recognize_prompt` 用 `{modules}` 占位符接收被勾选模块的拼装结果。
+界面上勾选模块 -> 一次 AI 调用 -> 只回填勾选的字段。
+
+**逐项检查约定（用户需求）**：保存题目与批量导入前，界面用
+`QuestionService.module_states()` 逐项列出各模块的填写状态，弹窗询问是否让 AI 填充
+缺失项（「AI 填充缺失项 / 手动补齐（跳过 AI）/ 取消」）；题干与选项必须由出题者填写。
+科目 / 知识点 / 答案为必填模块（`REQUIRED_MODULES`），难度 / 解析 / 质量标记缺失时允许
+直接保存。
 
 **AI 确认约定（用户需求）**：所有会调用 AI 的方法都必须显式确认，未确认时拒绝执行：
 
@@ -221,14 +275,15 @@ def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
 create_question(draft, analyze_difficulty=False)      # True 才调用 AI 分析难度
 update_question(id, patch, analyze_difficulty=False)
 batch_commit(drafts, analyze_difficulty=False)
-recognize_draft(stem, options, include_solution=True, confirmed=False)   # True 才调用 AI
+recognize_draft(stem, options, include_solution=True, confirmed=False, modules=None)  # True 才调用 AI
 reanalyze_difficulties(ids, confirmed=False)                             # True 才调用 AI
 PaperComposer.generate(criteria, allow_ai_supplement=False)               # True 才允许 AI 补题
 QuestionGenerator.generate_questions(..., allow_ai=False)                 # True 才调用 AI
 ```
 
-界面在每次 AI 动作前弹出确认框（「AI 分析 / AI 辨识 / 允许 AI 补题 / 跳过」），
+界面在每次 AI 动作前弹出确认框（「AI 分析 / AI 辨识 / AI 填充缺失项 / 允许 AI 补题 / 跳过」），
 用户确认后才传对应标志；拒绝时不发起任何 AI 请求。
+批量导入时逐题逐项检查后一次性确认，随后每题各调用一次 AI（每次只请求该题缺失的模块）。
 
 调用方：`presentation/views/question_bank_view`（录入 / 编辑 / 检索 / AI 辨识）、
 `presentation/views/history_view`（经 QuestionHistoryService 读取台账）。

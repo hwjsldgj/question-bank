@@ -258,10 +258,38 @@ UsageRecord
 PaperCriteria
   choice_enabled: bool
   solution_enabled: bool
-  choice_items: { type: "single"|"multiple", subject, difficulty, count }[]
-  solution_item: { subject, difficulty, count } | null
+  choice_items: { type: "single"|"multiple", subject, difficulty, count,
+                  knowledge_points: string[] }[]        # 指定知识点（用户需求，空=不限）
+  solution_item: { subject, difficulty, count, knowledge_points: string[] } | null
   fill_enabled: bool                                          # 填空题部分（用户新增）
-  fill_item: { subject, difficulty, count } | null
+  fill_item: { subject, difficulty, count, knowledge_points: string[] } | null
+```
+
+指定知识点语义：非空时只统计 / 选取命中其中任一知识点的题目（命中量实时展示）；
+组卷界面对每个题型各自提供一个可编辑的知识点选择框（下拉选已有知识点，也可手写多个）。
+
+### PromptConfig（AI 提示词，用户可改）
+
+```text
+PromptConfig
+  recognize_prompt: string        # 辨识总述模板，占位符 {subjects} {stem} {options} {modules}
+  module_prompts: map<string, string>
+                                  # 模块化输出提示词：模块键 -> 该字段的输出要求片段
+                                  # 键取 RecognizeModule：subject / knowledge_points /
+                                  # question_type / difficulty / quality_flag / answer / solution
+                                  # 只改部分模块时，其余模块回退默认片段
+  difficulty_prompt: string       # 难度分析模板
+  supplement_prompt: string       # AI 补题模板
+```
+
+模块化 AI 辨识契约（用户需求：按需给出、一次返回）：
+
+```text
+recognize_draft(stem, options, include_solution=True, confirmed=False, modules=None) -> dict
+  # 只拼装 modules 中模块的提示词片段与 JSON 期望结构；
+  # 一次 AIClient.complete 调用返回全部所需字段；
+  # 结果只含被请求模块的键，未请求字段既不生成也不覆盖表单；
+  # include_solution=False 时提示词与期望结构都不含解析，结果 solution 恒为 ""。
 ```
 
 ### Paper
@@ -366,6 +394,30 @@ flowchart LR
     F -->|失败| H["标注 待确认"]
 ```
 
+### 保存 / 导入前的逐项检查与 AI 填充（用户需求）
+
+```mermaid
+flowchart TD
+    A["出题者点击保存 / 确认导入"] --> B["逐项检查模块填写状态<br/>module_states()"]
+    B --> C{"有缺失项?"}
+    C -->|无| Z["直接保存 / 入库"]
+    C -->|有| D["列出每项状态<br/>（已填写 / 缺失·必填 / 缺失·选填）"]
+    D --> E["弹窗：AI 填充缺失项 / 手动补齐（跳过 AI）/ 取消"]
+    E -->|AI 填充| F["recognize_draft 只请求缺失模块<br/>一次调用返回"]
+    F --> G["apply_recognition 回填 / 写回草稿"]
+    G --> H{"必填项齐全?"}
+    H -->|是| Z
+    H -->|否| Y["提示手工补齐，不保存"]
+    E -->|手动补齐| I{"仅选填项缺失?"}
+    I -->|是| Z
+    I -->|否| Y2["提示必填项缺失，不保存"]
+    E -->|取消| Y3["放弃本次保存 / 导入"]
+```
+
+约束：题干与选择题选项必须由出题者填写，AI 不生成；必填模块为科目 / 知识点 / 答案
+（`REQUIRED_MODULES`），难度 / 解析 / 质量标记为选填，缺失时允许直接保存。
+所有 AI 调用仍需用户在上述弹窗中显式确认。
+
 ## Correctness Properties
 
 以下不变量在任何时刻都应成立，并作为测试断言的基础。
@@ -382,6 +434,12 @@ flowchart LR
 10. **使用记录准确**：入卷题目的 `use_count` 每次入卷递增 1，`last_used_at` 等于该次组卷时间。
 11. **冷却抑制生效**：在其他因子相同的前提下，冷却窗口内题目的评分低于窗口外同质题目。
 12. **答案完整**：导出试卷的答案页覆盖试卷中全部题目。
+13. **模块化输出**：AI 辨识结果的键集合恒等于本次被请求的模块集合；提示词与期望结构
+    只含被请求的模块，未请求的字段既不生成也不覆盖已有内容（用户需求：按需给出、一次返回）。
+14. **AI 确认前置**：任何 AI 调用之前都必有一次用户确认；未确认时服务层拒绝执行
+    （`AIServiceError`）且不发起任何请求（用户需求：所有使用 AI 的内容都需手动确认）。
+15. **知识点过滤**：`knowledge_points` 非空时，命中量与组卷选题涉及的题目均至少包含
+    其中一个指定知识点（用户需求：组卷环节可指定知识点）。
 
 ## Error Handling
 

@@ -110,3 +110,29 @@ class QuestionOpAction(str, Enum):
     UPDATE = "update"
     DELETE = "delete"
     IMPORT = "import"
+
+
+class RecognizeModule(str, Enum):
+    """AI 辨识模块：可"按需给出、一次返回"的字段单元（用户需求）。
+
+    每个模块对应题目实体的一个字段，并各自拥有一段可编辑的输出提示词
+    （见 app.config.settings.DEFAULT_MODULE_PROMPTS 与 PromptConfig.module_prompts）。
+    出题者只勾选需要的模块，服务层便只拼装这些模块的提示词与期望结构，
+    用一次 AI 调用返回全部所需字段，未请求的字段不会被生成。
+
+    - ``SUBJECT`` 科目（必填）
+    - ``KNOWLEDGE_POINTS`` 知识点（必填）
+    - ``QUESTION_TYPE`` 题型
+    - ``DIFFICULTY`` 难度（选填，未给出时保持"待确认"）
+    - ``QUALITY_FLAG`` 质量标记（选填，默认"普通"）
+    - ``ANSWER`` 答案 / 参考答案（必填）
+    - ``SOLUTION`` 解析（选填，可要求不生成）
+    """
+
+    SUBJECT = "subject"
+    KNOWLEDGE_POINTS = "knowledge_points"
+    QUESTION_TYPE = "question_type"
+    DIFFICULTY = "difficulty"
+    QUALITY_FLAG = "quality_flag"
+    ANSWER = "answer"
+    SOLUTION = "solution"

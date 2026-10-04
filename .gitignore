@@ -2,6 +2,7 @@
 .claude
 .gemini
 .opencode
+.dshwolf
 
 # IDE and Editors
 **/.idea/

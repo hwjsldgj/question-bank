@@ -5,8 +5,8 @@
 - 装配"题库管理 / 组卷 / 历史 / 设置"四个标签页（历史与设置已分开）
 - 菜单栏：刷新当前视图（F5）、退出（Ctrl+Q）、视图切换（Ctrl+1/2/3/4）、关于
 - 状态栏：常驻显示 AI 服务配置状态，并提供临时状态消息
-- 跨视图协调：题库变更 -> 组卷命中量刷新 + 历史视图刷新；
-  设置变更 -> 状态栏刷新、命中量刷新、各视图科目下拉框重建；
+- 跨视图协调：题库变更 -> 组卷命中量 / 知识点候选刷新 + 历史视图刷新；
+  设置变更 -> 状态栏刷新、命中量刷新、各视图科目与知识点候选重建；
   历史条件复用 -> 回填组卷表单并切换标签页（需求 R14 第 3 条）
 - 关闭窗口时释放本地数据库连接，保证写入落盘（需求 R16 第 1 条）
 
@@ -167,6 +167,8 @@ class MainWindow(QMainWindow):
             self.question_bank_view.reload_subjects()
             self.question_bank_view.reload_questions()
         elif current is self.paper_generation_view:
+            self.paper_generation_view.reload_subjects()
+            self.paper_generation_view.reload_knowledge_points()
             self.paper_generation_view.refresh_hit_counts()
         elif current is self.history_view:
             self.history_view.reload_tasks()
@@ -176,15 +178,18 @@ class MainWindow(QMainWindow):
         self.show_status("已刷新", 3000)
 
     def _on_questions_changed(self) -> None:
-        """题库变更：刷新组卷命中量与历史视图的题库操作台账。"""
+        """题库变更：刷新组卷命中量 / 知识点候选与历史视图的题库操作台账。"""
+        self.paper_generation_view.reload_knowledge_points()
         self.paper_generation_view.refresh_hit_counts()
         self.history_view.reload_question_history()
 
     def _on_config_changed(self) -> None:
-        """设置保存后：刷新 AI 状态、命中量与各视图的科目下拉框。"""
+        """设置保存后：刷新 AI 状态、命中量与各视图的科目 / 知识点下拉框。"""
         self.refresh_ai_status()
         self.question_bank_view.reload_subjects()
+        self.question_bank_view.reload_knowledge_points()
         self.paper_generation_view.reload_subjects()
+        self.paper_generation_view.reload_knowledge_points()
         self.show_status("设置已保存，应用于后续操作", 5000)
 
     def _on_reuse_criteria(self, criteria: PaperCriteria) -> None:

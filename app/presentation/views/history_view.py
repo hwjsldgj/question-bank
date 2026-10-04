@@ -259,27 +259,35 @@ class HistoryView(QWidget):
             self.reuse_criteria_requested.emit(criteria)
 
     @staticmethod
+    def _requirement_summary(label: str, item) -> str:
+        """把单个题型要求渲染为一段摘要（含用户指定的知识点）。"""
+        text = (
+            f"{label}×{item.count}（{item.subject}/"
+            f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}"
+        )
+        points = list(getattr(item, "knowledge_points", None) or [])
+        if points:
+            text += "/知识点：" + "、".join(points)
+        return text + "）"
+
+    @staticmethod
     def _criteria_summary(criteria: PaperCriteria) -> str:
         """把组卷条件渲染为一行摘要。"""
         parts: list[str] = []
         if criteria.choice_enabled:
             for item in criteria.choice_items:
                 parts.append(
-                    f"{ui_utils.QUESTION_TYPE_LABELS.get(item.question_type, '')}"
-                    f"×{item.count}（{item.subject}/"
-                    f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}）"
+                    HistoryView._requirement_summary(
+                        ui_utils.QUESTION_TYPE_LABELS.get(item.question_type, ""), item
+                    )
                 )
         if criteria.fill_enabled and criteria.fill_item is not None:
-            item = criteria.fill_item
             parts.append(
-                f"填空题×{item.count}（{item.subject}/"
-                f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}）"
+                HistoryView._requirement_summary("填空题", criteria.fill_item)
             )
         if criteria.solution_enabled and criteria.solution_item is not None:
-            item = criteria.solution_item
             parts.append(
-                f"解答题×{item.count}（{item.subject}/"
-                f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}）"
+                HistoryView._requirement_summary("解答题", criteria.solution_item)
             )
         return "；".join(parts) if parts else "—"
 

@@ -102,11 +102,11 @@ QuestionBankView -> QuestionService.create_question
 ```text
 PaperGenerationView -> PaperComposer.generate
     -> _validate_criteria                  条件校验（至少一个部分启用，R7）
-    -> QuestionRepository.search           命中题候选集合
+    -> QuestionRepository.search           命中题候选集合（含指定知识点过滤，用户需求）
     -> SelectionScorer.score               评分决策（难度匹配 / 知识点覆盖 / 质量 / 频次 / 近期）
         -> CooldownPolicy                  冷却窗口惩罚（R13）
     -> WeightedSampler.sample              加权随机抽样、同卷去重（R9）
-    -> [候选不足] QuestionGenerator.generate_questions   AI API 补题（R10）
+    -> [候选不足] QuestionGenerator.generate_questions   AI API 补题（R10，需用户确认）
     -> UsageRepository.record_usage        使用记录更新（R13）
     -> ScoreCalculator.total_score         分值与总分汇总（R11）
     -> TaskHistoryService.save_task        任务记录（R14）
@@ -118,6 +118,27 @@ PaperGenerationView -> PaperComposer.generate
 PaperGenerationView -> PaperExporter.export
     -> ScoreValidator.validate             分值完整性校验（缺分值阻止导出）
     -> TxtExporter / PdfExporter           按格式渲染（两部分 / 分区小计 / 总分 / 答案页）
+```
+
+### 3.4 AI 辨识链（用户需求：模块化输出、按需给出、一次返回）
+
+```text
+QuestionBankView（勾选辨识模块）
+    -> [弹窗确认]                          所有 AI 调用均需用户手动确认
+    -> QuestionService.recognize_draft(stem, options, include_solution, confirmed=True,
+                                       modules=[...])
+        -> _render_module_prompts          只拼装被勾选模块的输出提示词
+            -> ConfigStore.load_prompt_config  PromptConfig.module_prompts（用户可逐模块改）
+        -> recognize_schema(modules)        期望结构只含被勾选模块
+        -> AIClient.complete(prompt, schema)  一次调用返回全部所需字段
+        -> _normalize_recognition(data, modules)  结果只保留被请求的模块
+    -> _apply_recognition                  按模块回填表单（未勾选字段不覆盖）；结果仅供参考
+
+保存 / 批量导入前：
+    -> QuestionService.module_states(draft)        逐项检查各模块填写状态
+    -> [弹窗：AI 填充缺失项 / 手动补齐（跳过 AI）/ 取消]
+    -> recognize_draft(..., modules=缺失模块)       只请求缺失的模块，一次调用
+    -> QuestionService.apply_recognition(draft, result)   批量导入场景写回候选题
 ```
 
 ## 4. 关键设计决策
@@ -132,6 +153,13 @@ PaperGenerationView -> PaperExporter.export
    难度分析失败置 PENDING，补题失败重试后上报实际数量（R4 / R10 / R15）。
 5. **组合根唯一装配点**：`container.build_container()` 是唯一构造具体实现的
    位置，测试可用临时库构建完整对象图（见 tests/test_smoke.py）。
+6. **AI 提示词模块化 + 一次调用**：辨识的每个字段（科目 / 知识点 / 题型 / 难度 /
+   质量标记 / 答案 / 解析）是一个可勾选模块，各自持有一段可编辑的输出提示词；
+   服务层只拼装被勾选模块的提示词与期望结构，用一次调用返回全部所需字段，
+   未勾选的字段既不生成也不覆盖（用户需求：按需给出、一次返回）。
+7. **AI 使用全部需用户确认 + 逐项检查**：所有 AI 入口默认拒绝（`confirmed=False` /
+   `analyze_difficulty=False` / `allow_ai*=False`）；保存与批量导入前用
+   `module_states()` 逐项检查填写情况并弹窗询问是否 AI 填充，题干与选项始终由出题者填写。
 
 ## 5. 框架完成度说明
 

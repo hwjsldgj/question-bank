@@ -10,7 +10,7 @@
         app.application.weighted_sampler、app.infrastructure.ai.ai_client
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.domain.enums import CooldownMode, ExportFormat
 
@@ -79,17 +79,24 @@ class AIConfig:
 class PromptConfig:
     """AI 提示词配置（用户需求：AI 设置中可修改提示词）。
 
-    三个可编辑模板分别用于：
+    可编辑模板分三类：
 
-    - ``recognize_prompt``：AI 辨识（科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析）
-    - ``difficulty_prompt``：入库后的难度分析
-    - ``supplement_prompt``：题库不足时的 AI 补题
+    - ``recognize_prompt``：AI 辨识总述模板（占位符 ``{subjects}`` / ``{stem}`` /
+      ``{options}`` / ``{modules}``，其中 ``{modules}`` 由被勾选的模块提示词拼装）
+    - ``module_prompts``：模块化输出提示词，键为
+      :class:`app.domain.enums.RecognizeModule` 取值（科目 / 知识点 / 题型 / 难度 /
+      质量标记 / 答案 / 解析）；出题者按需勾选模块，服务层只拼装被勾选的部分，
+      一次 AI 调用即返回全部所需字段（用户需求：模块化输出、按需给出、一次返回）
+    - ``difficulty_prompt`` / ``supplement_prompt``：入库后的难度分析与 AI 补题
 
     模板中的 ``{name}`` 占位符由调用方填充；修改后立即用于后续 AI 调用。
     """
 
     recognize_prompt: str = ""
-    """AI 辨识提示词模板。"""
+    """AI 辨识总述提示词模板。"""
+
+    module_prompts: dict[str, str] = field(default_factory=dict)
+    """模块化输出提示词：模块键 -> 该字段的输出要求片段。"""
 
     difficulty_prompt: str = ""
     """难度分析提示词模板。"""

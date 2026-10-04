@@ -103,8 +103,8 @@ flowchart LR
 |------|------|----------|
 | `presentation/main_window.py` | `PySide6.QtGui`/`QtWidgets`、`app/container.Container`、`presentation/views/*`、`presentation/ui_utils`、`domain/entities/criteria`（复用信号载荷） | `main.py` |
 | `presentation/ui_utils.py` | `PySide6.QtCore`/`QtWidgets`、`domain/enums`（标签映射）、`domain/errors`（异常分类） | `presentation/main_window.py`、`presentation/views/*` |
-| `presentation/views/question_bank_view.py` | `PySide6.QtCore`/`QtGui`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/question`、`domain/enums`、`app/container.Container`（取 QuestionService、UsageRepository、image_store） | `presentation/main_window.py`（发出 `questions_changed`） |
-| `presentation/views/paper_generation_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/{criteria,paper,question,configs}`、`domain/enums`、`app/container.Container`（取 PaperComposer / ScoreCalculator / PaperExporter / QuestionService） | `presentation/main_window.py`（被 F5 与信号驱动刷新） |
+| `presentation/views/question_bank_view.py` | `PySide6.QtCore`/`QtGui`/`QtWidgets`、`presentation/ui_utils`、`application/question_service`（模块定义 / 逐项检查 / 按需辨识）、`domain/entities/question`、`domain/enums`、`app/container.Container`（取 QuestionService、UsageRepository、image_store） | `presentation/main_window.py`（发出 `questions_changed`） |
+| `presentation/views/paper_generation_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/{criteria,paper,question,configs}`、`domain/enums`、`app/container.Container`（取 PaperComposer / ScoreCalculator / PaperExporter / QuestionService） | `presentation/main_window.py`（被 F5 与信号驱动刷新，含知识点候选重建） |
 | `presentation/views/history_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/{criteria,task}`、`app/container.Container`（取 TaskHistoryService / QuestionHistoryService） | `presentation/main_window.py`（发出 `reuse_criteria_requested`） |
 | `presentation/views/settings_view.py` | `PySide6.QtCore`/`QtWidgets`、`presentation/ui_utils`、`domain/entities/configs`、`domain/enums`、`config/settings`（默认科目与提示词）、`app/container.Container`（取 ConfigStore） | `presentation/main_window.py`（发出 `config_changed`） |
 

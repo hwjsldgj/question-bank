@@ -2,13 +2,15 @@
 
 界面结构：
 
-- 选择题部分：启用开关 + 单选题 / 多选题各自的科目、难度、数量与命中量
-- 解答题部分：启用开关 + 科目、难度、数量与命中量
+- 选择题部分：启用开关 + 单选题 / 多选题各自的科目、**指定知识点**、
+  难度、数量与命中量
+- 填空题 / 解答题部分：同上（各题型独立启用）
 - 生成试卷：调用 PaperComposer 完成"评分决策 -> 加权随机 -> AI 兜底"
 - 试卷预览：分区 / 题型 / 题号 / 题干 / 难度 / 分值，支持按题型或逐题设置分值
 - 导出：选择 TXT / PDF 与目标目录，调用 PaperExporter
 
-命中量随条件输入实时刷新（需求 R6 第 2 / 3 条），使用 300ms 防抖定时器。
+命中量随条件输入实时刷新（需求 R6 第 2 / 3 条），使用 300ms 防抖定时器；
+指定的知识点参与命中统计与组卷条件（用户需求：组卷环节可指定知识点）。
 
 依赖：PySide6.QtCore / QtWidgets、app.container.Container、
       app.domain.entities.{criteria,paper,question}、app.domain.entities.configs、
@@ -18,12 +20,14 @@
 """
 
 import os
+import re
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QStringListModel, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -80,19 +84,22 @@ class PaperGenerationView(QWidget):
         root.addWidget(self._build_type_group(
             "单选题", "single", 5,
             {"enabled": "_single_enabled", "body": "_single_body",
-             "subject": "_single_subject", "difficulty": "_single_difficulty",
+             "subject": "_single_subject", "knowledge": "_single_knowledge",
+             "difficulty": "_single_difficulty",
              "count": "_single_count", "hit": "_single_hit"},
         ))
         root.addWidget(self._build_type_group(
             "多选题", "multiple", 3,
             {"enabled": "_multiple_enabled", "body": "_multiple_body",
-             "subject": "_multiple_subject", "difficulty": "_multiple_difficulty",
+             "subject": "_multiple_subject", "knowledge": "_multiple_knowledge",
+             "difficulty": "_multiple_difficulty",
              "count": "_multiple_count", "hit": "_multiple_hit"},
         ))
         root.addWidget(self._build_type_group(
             "填空题", "fill", 4,
             {"enabled": "_fill_enabled", "body": "_fill_body",
-             "subject": "_fill_subject", "difficulty": "_fill_difficulty",
+             "subject": "_fill_subject", "knowledge": "_fill_knowledge",
+             "difficulty": "_fill_difficulty",
              "count": "_fill_count", "hit": "_fill_hit"},
         ))
         root.addWidget(self._build_solution_group())
@@ -123,10 +130,32 @@ class PaperGenerationView(QWidget):
         combo.setMinimumWidth(120)
         return combo
 
+    @staticmethod
+    def _new_knowledge_combo() -> QComboBox:
+        """构建知识点选择框（用户需求：组卷环节可指定知识点）。
+
+        既可下拉选择已有知识点，也可直接输入；多个知识点用逗号 / 顿号分隔，
+        留空表示不限。命中统计与组卷条件都按"命中其中任一知识点"处理。
+        """
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setMinimumWidth(160)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        line_edit = combo.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText("不限（可多选，用逗号分隔）")
+        return combo
+
+    @staticmethod
+    def parse_knowledge(text: str) -> list[str]:
+        """把知识点输入文本拆分为知识点列表（支持中英文逗号、顿号与分号）。"""
+        parts = [part.strip() for part in re.split(r"[,，、;；\s]+", text or "")]
+        return [part for part in parts if part]
+
     def _build_type_group(
         self, title: str, prefix: str, default_count: int, attrs: dict
     ) -> QGroupBox:
-        """构建某一题型独立的条件组（启用开关 + 科目 / 难度 / 数量 / 命中量）。
+        """构建某一题型独立的条件组（启用开关 + 科目 / 知识点 / 难度 / 数量 / 命中量）。
 
         单选与多选各自独立启用（用户需求：组卷时单选多选分开）。
         """
@@ -140,12 +169,14 @@ class PaperGenerationView(QWidget):
         body = QWidget()
         form = QFormLayout(body)
         subject = self._new_subject_combo()
+        knowledge = self._new_knowledge_combo()
         difficulty = self._new_difficulty_combo()
         count = QSpinBox()
         count.setRange(1, 999)
         count.setValue(default_count)
         hit = QLabel("命中：—")
         form.addRow("科目", subject)
+        form.addRow("指定知识点", knowledge)
         form.addRow("难度", difficulty)
         form.addRow("数量", count)
         form.addRow("", hit)
@@ -153,19 +184,21 @@ class PaperGenerationView(QWidget):
         body.setEnabled(enabled.isChecked())
 
         subject.currentIndexChanged.connect(self._on_conditions_changed)
+        knowledge.currentTextChanged.connect(self._on_conditions_changed)
         difficulty.currentIndexChanged.connect(self._on_conditions_changed)
         count.valueChanged.connect(self._on_conditions_changed)
 
         setattr(self, attrs["enabled"], enabled)
         setattr(self, attrs["body"], body)
         setattr(self, attrs["subject"], subject)
+        setattr(self, attrs["knowledge"], knowledge)
         setattr(self, attrs["difficulty"], difficulty)
         setattr(self, attrs["count"], count)
         setattr(self, attrs["hit"], hit)
         return group
 
     def _build_solution_group(self) -> QGroupBox:
-        """构建解答题部分条件组。"""
+        """构建解答题部分条件组（含指定知识点）。"""
         group = QGroupBox("解答题部分")
         outer = QVBoxLayout(group)
 
@@ -176,12 +209,14 @@ class PaperGenerationView(QWidget):
         body = QWidget()
         form = QFormLayout(body)
         self._solution_subject = self._new_subject_combo()
+        self._solution_knowledge = self._new_knowledge_combo()
         self._solution_difficulty = self._new_difficulty_combo()
         self._solution_count = QSpinBox()
         self._solution_count.setRange(1, 999)
         self._solution_count.setValue(2)
         self._solution_hit = QLabel("命中：—")
         form.addRow("解答题 · 科目", self._solution_subject)
+        form.addRow("解答题 · 指定知识点", self._solution_knowledge)
         form.addRow("解答题 · 难度", self._solution_difficulty)
         form.addRow("解答题 · 数量", self._solution_count)
         form.addRow("", self._solution_hit)
@@ -191,6 +226,7 @@ class PaperGenerationView(QWidget):
         body.setEnabled(self._solution_enabled.isChecked())
 
         self._solution_subject.currentIndexChanged.connect(self._on_conditions_changed)
+        self._solution_knowledge.currentTextChanged.connect(self._on_conditions_changed)
         self._solution_difficulty.currentIndexChanged.connect(
             self._on_conditions_changed
         )
@@ -296,7 +332,41 @@ class PaperGenerationView(QWidget):
             index = combo.findText(current)
             combo.setCurrentIndex(index if index >= 0 else 0)
             combo.blockSignals(False)
+        self.reload_knowledge_points()
         self.refresh_hit_counts()
+
+    def reload_knowledge_points(self) -> None:
+        """按题库已有知识点刷新四个指定知识点选择框（用户需求：组卷可指定知识点）。
+
+        保留用户当前输入（含手写但题库中还不存在的知识点），只更新候选列表与补全。
+        """
+        points = ui_utils.safe_call(
+            self._question_service.list_knowledge_points, default=None
+        ) or []
+        model = QStringListModel(list(points), self)
+        for combo in (
+            self._single_knowledge,
+            self._multiple_knowledge,
+            self._fill_knowledge,
+            self._solution_knowledge,
+        ):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(list(points))
+            combo.setCurrentIndex(-1)
+            combo.setEditText(current)
+            combo.blockSignals(False)
+            completer = QCompleter(model, combo)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            combo.setCompleter(completer)
+        self.refresh_hit_counts()
+
+    @staticmethod
+    def _knowledge_of(combo: QComboBox) -> list[str]:
+        """读取某条件组指定的知识点列表（空文本表示不限）。"""
+        return PaperGenerationView.parse_knowledge(combo.currentText())
 
     # ------------------------------------------------------------- 条件与命中量
 
@@ -312,24 +382,24 @@ class PaperGenerationView(QWidget):
         self._hit_timer.start()
 
     def refresh_hit_counts(self) -> None:
-        """实时更新四个题型的命中量（需求 R6 第 2 / 3 条）。"""
+        """实时更新四个题型的命中量（需求 R6 第 2 / 3 条，含指定知识点）。"""
         if self._single_subject.count() == 0:
             self.reload_subjects()
         self._update_hit(
             self._single_hit, self._single_subject, self._single_difficulty,
-            QuestionType.SINGLE,
+            QuestionType.SINGLE, self._single_knowledge,
         )
         self._update_hit(
             self._multiple_hit, self._multiple_subject, self._multiple_difficulty,
-            QuestionType.MULTIPLE,
+            QuestionType.MULTIPLE, self._multiple_knowledge,
         )
         self._update_hit(
             self._fill_hit, self._fill_subject, self._fill_difficulty,
-            QuestionType.FILL,
+            QuestionType.FILL, self._fill_knowledge,
         )
         self._update_hit(
             self._solution_hit, self._solution_subject, self._solution_difficulty,
-            QuestionType.SOLUTION,
+            QuestionType.SOLUTION, self._solution_knowledge,
         )
 
     def _update_hit(
@@ -338,24 +408,30 @@ class PaperGenerationView(QWidget):
         subject_edit: QComboBox,
         difficulty_combo: QComboBox,
         question_type: QuestionType,
+        knowledge_combo: QComboBox | None = None,
     ) -> None:
-        """查询某题型条件的命中题数量并写入标签。"""
+        """查询某题型条件的命中题数量并写入标签（含指定知识点过滤）。"""
         subject = subject_edit.currentText().strip()
         if not subject:
             label.setText("命中：—（请先在设置中维护科目）")
             return
         difficulty = difficulty_combo.currentData()
+        points = self._knowledge_of(knowledge_combo) if knowledge_combo else []
         count = ui_utils.safe_call(
             self._question_service.count_available,
             subject,
             difficulty,
             question_type,
+            points,
             default=None,
         )
-        label.setText("命中：—" if count is None else f"命中：{count} 道")
+        text = "命中：—" if count is None else f"命中：{count} 道"
+        if points:
+            text += f"（知识点：{'、'.join(points)}）"
+        label.setText(text)
 
     def _build_criteria(self) -> PaperCriteria:
-        """根据界面控件构建组卷条件（需求 R7；单选 / 多选 / 填空各自独立启用）。"""
+        """根据界面控件构建组卷条件（需求 R7；含指定知识点）。"""
         single_enabled = self._single_enabled.isChecked()
         multiple_enabled = self._multiple_enabled.isChecked()
         fill_enabled = self._fill_enabled.isChecked()
@@ -369,6 +445,7 @@ class PaperGenerationView(QWidget):
                     subject=self._single_subject.currentText().strip(),
                     difficulty=self._single_difficulty.currentData(),
                     count=self._single_count.value(),
+                    knowledge_points=self._knowledge_of(self._single_knowledge),
                 )
             )
         if multiple_enabled:
@@ -378,6 +455,7 @@ class PaperGenerationView(QWidget):
                     subject=self._multiple_subject.currentText().strip(),
                     difficulty=self._multiple_difficulty.currentData(),
                     count=self._multiple_count.value(),
+                    knowledge_points=self._knowledge_of(self._multiple_knowledge),
                 )
             )
 
@@ -388,6 +466,7 @@ class PaperGenerationView(QWidget):
                 subject=self._fill_subject.currentText().strip(),
                 difficulty=self._fill_difficulty.currentData(),
                 count=self._fill_count.value(),
+                knowledge_points=self._knowledge_of(self._fill_knowledge),
             )
 
         solution_item: TypeRequirement | None = None
@@ -397,6 +476,7 @@ class PaperGenerationView(QWidget):
                 subject=self._solution_subject.currentText().strip(),
                 difficulty=self._solution_difficulty.currentData(),
                 count=self._solution_count.value(),
+                knowledge_points=self._knowledge_of(self._solution_knowledge),
             )
 
         return PaperCriteria(
@@ -427,20 +507,25 @@ class PaperGenerationView(QWidget):
             criteria.solution_enabled and criteria.solution_item is not None
         )
 
-        for item, combo, difficulty, count in (
-            (single, self._single_subject, self._single_difficulty, self._single_count),
-            (multiple, self._multiple_subject, self._multiple_difficulty, self._multiple_count),
-            (criteria.fill_item, self._fill_subject, self._fill_difficulty, self._fill_count),
-            (criteria.solution_item, self._solution_subject, self._solution_difficulty, self._solution_count),
+        for item, combo, knowledge, difficulty, count in (
+            (single, self._single_subject, self._single_knowledge,
+             self._single_difficulty, self._single_count),
+            (multiple, self._multiple_subject, self._multiple_knowledge,
+             self._multiple_difficulty, self._multiple_count),
+            (criteria.fill_item, self._fill_subject, self._fill_knowledge,
+             self._fill_difficulty, self._fill_count),
+            (criteria.solution_item, self._solution_subject, self._solution_knowledge,
+             self._solution_difficulty, self._solution_count),
         ):
             if item is not None:
-                self._fill_requirement(combo, difficulty, count, item)
+                self._fill_requirement(combo, knowledge, difficulty, count, item)
         self._on_conditions_changed()
         self.refresh_hit_counts()
 
     @staticmethod
     def _fill_requirement(
         subject_combo: QComboBox,
+        knowledge_combo: QComboBox,
         difficulty_combo: QComboBox,
         count_spin: QSpinBox,
         requirement: TypeRequirement,
@@ -452,6 +537,7 @@ class PaperGenerationView(QWidget):
             index = subject_combo.findText(requirement.subject)
         if index >= 0:
             subject_combo.setCurrentIndex(index)
+        knowledge_combo.setEditText("，".join(requirement.knowledge_points or []))
         ui_utils.select_combo_data(difficulty_combo, requirement.difficulty)
         count_spin.setValue(max(1, int(requirement.count)))
 

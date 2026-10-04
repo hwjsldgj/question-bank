@@ -17,6 +17,7 @@ import sqlite3
 
 from app.config.settings import (
     DEFAULT_AI_CONFIG,
+    DEFAULT_MODULE_PROMPTS,
     DEFAULT_PROMPT_CONFIG,
     DEFAULT_SCORING_CONFIG,
     DEFAULT_SUBJECTS,
@@ -69,7 +70,11 @@ class SQLiteConfigStore(ConfigStore):
         self._write_key(self.KEY_SCORING, self._dump(config))
 
     def load_prompt_config(self) -> PromptConfig:
-        """读取 AI 提示词配置；无记录或解析失败时返回默认模板。"""
+        """读取 AI 提示词配置；无记录或解析失败时返回默认模板。
+
+        模块化输出提示词（``module_prompts``）按模块逐项合并：用户只覆盖了
+        部分模块时，其余模块仍使用默认片段，避免某个模块被清空后失去输出要求。
+        """
         raw = self._read_key(self.KEY_PROMPT)
         if raw is None:
             return DEFAULT_PROMPT_CONFIG
@@ -81,8 +86,25 @@ class SQLiteConfigStore(ConfigStore):
         saved = self._filter_fields(PromptConfig, data)
         # 空模板回退默认值，避免用户清空后 AI 调用失去上下文
         for key in list(merged):
+            if key == "module_prompts":
+                continue
             merged[key] = saved.get(key) or merged[key]
+        merged["module_prompts"] = self._merge_module_prompts(
+            saved.get("module_prompts")
+        )
         return PromptConfig(**merged)
+
+    @staticmethod
+    def _merge_module_prompts(saved) -> dict[str, str]:
+        """逐模块合并输出提示词：未保存或为空的模块使用默认片段。"""
+        merged = dict(DEFAULT_MODULE_PROMPTS)
+        if isinstance(saved, dict):
+            for key, value in saved.items():
+                name = str(key).strip()
+                text = "" if value is None else str(value).strip()
+                if name in merged and text:
+                    merged[name] = text
+        return merged
 
     def save_prompt_config(self, config: PromptConfig) -> None:
         """保存 AI 提示词配置（UPSERT），后续 AI 调用立即生效。"""

@@ -52,24 +52,40 @@ DEFAULT_AI_CONFIG = AIConfig(
 #: AI 补题在单次组卷请求内的重试上限（需求 R10 第 4 条）
 QUESTION_GENERATOR_MAX_RETRIES = 2
 
+#: 默认模块化输出提示词：模块键（见 RecognizeModule）-> 该字段的输出要求片段。
+#: 出题者按需勾选模块，服务层只拼装被勾选的片段，一次 AI 调用返回全部所需字段
+#: （用户需求：知识点 / 难度 / 答案 / 解析等提供模块化输出提示词，按需给出、一次返回）。
+DEFAULT_MODULE_PROMPTS: dict[str, str] = {
+    "subject": "subject：科目，必须从这些科目中选择最贴切的一个：{subjects}",
+    "knowledge_points": "knowledge_points：知识点数组，1-5 个",
+    "question_type": (
+        "question_type：single（单选）、multiple（多选）、fill（填空）"
+        "或 solution（解答题）"
+    ),
+    "difficulty": "difficulty：easy、medium 或 hard",
+    "quality_flag": "quality_flag：normal、quality 或 low",
+    "answer": (
+        "answer：选择题填正确选项标号数组（如 [\"A\"]）；"
+        "填空题与解答题填参考答案文本数组"
+    ),
+    "solution": "solution：解析文本，可为空字符串",
+}
+
 #: 默认 AI 提示词模板（用户可在"设置 -> AI 设置"中修改后持久化）
-#: 占位符：识别用 {subjects} / {stem} / {options}；难度用 {type} / {stem} / {options} / {answer}；
+#: 占位符：辨识总述用 {subjects} / {stem} / {options} / {modules}；
+#: 难度用 {type} / {stem} / {options} / {answer}；
 #: 补题用 {subject} / {knowledge_points} / {type} / {difficulty} / {count}
 DEFAULT_PROMPT_CONFIG = PromptConfig(
     recognize_prompt=(
-        "你是资深出题与审题专家。请阅读下面的题目内容，判断并识别以下字段，"
-        "只输出一个 JSON 对象，不要输出多余文字或代码块标记：\n"
-        "subject：科目，必须从这些科目中选择最贴切的一个：{subjects}\n"
-        "knowledge_points：知识点数组，1-5 个\n"
-        "question_type：single（单选）、multiple（多选）或 solution（解答题）\n"
-        "difficulty：easy、medium 或 hard\n"
-        "quality_flag：normal、quality 或 low\n"
-        "answer：选择题填正确选项标号数组（如 [\"A\"]）；解答题填参考答案文本数组\n"
-        "solution：解析文本，可为空字符串\n"
+        "你是资深出题与审题专家。请阅读下面的题目内容，按下列模块化要求识别字段，"
+        "只输出一个 JSON 对象，不要输出多余文字或代码块标记，"
+        "并且只包含下列要求中出现的字段：\n"
+        "{modules}\n"
         "题干：{stem}\n"
         "现有选项：{options}\n"
         "注意：识别结果仅供参考，最终以出题者人工确认为准。"
     ),
+    module_prompts=dict(DEFAULT_MODULE_PROMPTS),
     difficulty_prompt=(
         "你是教辅难度评估专家。请判断下面这道题的难度，"
         "只回答 easy、medium 或 hard 三个词之一，不要输出其他内容。\n"

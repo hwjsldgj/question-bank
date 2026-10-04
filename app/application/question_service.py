@@ -6,7 +6,9 @@
 - R2：批量粘贴录入（解析预览 -> 确认提交）
 - R5：难度、标签与质量人工修正
 - R6：题库检索与可用量统计
-- 用户需求：AI 辨识科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析（结果仅供参考）
+- 用户需求：AI 辨识科目 / 知识点 / 题型 / 难度 / 质量 / 答案 / 解析（结果仅供参考），
+  各字段为独立模块：按需勾选、只拼装所需提示词、一次调用返回（模块化输出）
+- 用户需求：保存 / 导入前逐项检查各模块填写情况，并可让 AI 填充缺失项（题干除外）
 - 用户需求：题库操作台账（导入历史 / 编辑历史）
 
 依赖（构造注入，全部为抽象）：
@@ -25,7 +27,7 @@ import uuid
 
 from app.application.difficulty_service import DifficultyService
 from app.application.prompt_utils import load_prompt_config, render
-from app.config.settings import DEFAULT_PROMPT_CONFIG, DEFAULT_SUBJECTS
+from app.config.settings import DEFAULT_MODULE_PROMPTS, DEFAULT_PROMPT_CONFIG, DEFAULT_SUBJECTS
 from app.domain.entities.question import Option, Question, QuestionFilter
 from app.domain.entities.question_op import QuestionOpRecord
 from app.domain.enums import (
@@ -35,6 +37,7 @@ from app.domain.enums import (
     QuestionOpAction,
     QuestionSource,
     QuestionType,
+    RecognizeModule,
 )
 from app.domain.errors import AIServiceError, QuestionValidationError
 from app.domain.validators.question_validator import QuestionValidator
@@ -67,6 +70,36 @@ RECOGNIZE_SCHEMA: dict = {
         "solution": {"type": "string"},
     },
 }
+
+#: 全部 AI 辨识模块（界面默认全选；顺序即表单与提示词的呈现顺序）
+RECOGNIZE_MODULES: tuple[RecognizeModule, ...] = tuple(RecognizeModule)
+
+#: 模块 -> 期望的 JSON 结构片段：只把被勾选模块写入一次调用的期望结构
+MODULE_SCHEMAS: dict[RecognizeModule, dict] = {
+    RecognizeModule.SUBJECT: {"type": "string"},
+    RecognizeModule.KNOWLEDGE_POINTS: {"type": "array", "items": {"type": "string"}},
+    RecognizeModule.QUESTION_TYPE: {"type": "string"},
+    RecognizeModule.DIFFICULTY: {"type": "string"},
+    RecognizeModule.QUALITY_FLAG: {"type": "string"},
+    RecognizeModule.ANSWER: {"type": "array", "items": {"type": "string"}},
+    RecognizeModule.SOLUTION: {"type": "string"},
+}
+
+#: 保存前必须齐全的模块（题干与选项另由界面校验，AI 不负责生成）
+REQUIRED_MODULES: tuple[RecognizeModule, ...] = (
+    RecognizeModule.SUBJECT,
+    RecognizeModule.KNOWLEDGE_POINTS,
+    RecognizeModule.ANSWER,
+)
+
+
+def recognize_schema(modules: list[RecognizeModule] | tuple[RecognizeModule, ...]) -> dict:
+    """按被勾选的模块生成期望结构（只包含所需字段，一次调用返回全部所需字段）。"""
+    return {
+        "type": "object",
+        "properties": {module.value: MODULE_SCHEMAS[module] for module in modules},
+    }
+
 
 _FIELD_ALIASES: dict[str, str] = {
     "科目": "subject",
@@ -316,10 +349,20 @@ class QuestionService:
         return self._repository.search(question_filter)
 
     def count_available(
-        self, subject: str, difficulty: Difficulty, question_type: QuestionType
+        self,
+        subject: str,
+        difficulty: Difficulty,
+        question_type: QuestionType,
+        knowledge_points: list[str] | None = None,
     ) -> int:
-        """统计某组卷条件的命中题数量（需求 R6 第 2 / 3 条）。"""
-        return self._repository.count_available(subject, difficulty, question_type)
+        """统计某组卷条件的命中题数量（需求 R6 第 2 / 3 条）。
+
+        :param knowledge_points: 指定知识点（用户需求：组卷时可指定知识点），
+            非空表示只统计命中其中任一知识点的题目
+        """
+        return self._repository.count_available(
+            subject, difficulty, question_type, knowledge_points
+        )
 
     # ------------------------------------------------------------- AI 辨识
 
@@ -333,41 +376,173 @@ class QuestionService:
         options: list[Option],
         include_solution: bool = True,
         confirmed: bool = False,
+        modules: list[RecognizeModule] | list[str] | None = None,
     ) -> dict:
         """调用 AI 辨识题目字段，结果仅供参考（用户需求）。
 
         用户需求：所有使用 AI 的内容都需手动确认，``confirmed=False`` 时拒绝调用；
         界面在用户点击「AI 辨识」按钮或确认补全对话框后传 ``confirmed=True``。
 
+        用户需求：模块化输出、按需给出、一次返回。只把 ``modules`` 中指明的模块
+        （科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案 / 解析）拼进提示词与期望
+        结构，用**一次** AI 调用返回全部所需字段；未请求的字段不会出现在结果里。
+
         :param stem: 题干文本
         :param options: 当前已填选项（可为空）
-        :param include_solution: 是否要求 AI 输出解析；为 False 时提示词明确
-            要求不输出解析，且返回结果的 solution 恒为空（用户需求）
+        :param include_solution: 是否允许输出解析；为 False 时提示词与期望结构中
+            都不包含解析，且结果的 solution 恒为空字符串
         :param confirmed: 用户是否已确认调用 AI
-        :return: 归一化后的字段字典，键包含 subject / knowledge_points /
-            question_type / difficulty / quality_flag / answer / solution
-        :raises app.domain.errors.AIServiceError: 未确认 / 未配置或调用失败
+        :param modules: 需要 AI 给出的模块（``RecognizeModule`` 或其取值）；
+            None 表示全部模块
+        :return: 归一化后的字段字典，仅含被请求模块对应的键
+        :raises app.domain.errors.AIServiceError: 未确认 / 未选模块 / 未配置或调用失败
         """
         if not confirmed:
             raise AIServiceError("AI 辨识会调用 AI，需要出题者确认后执行")
         if self._ai_client is None:
             raise AIServiceError("未接入 AI 客户端，无法进行 AI 辨识")
+        requested = self._resolve_modules(modules)
+        effective = [
+            module
+            for module in requested
+            if include_solution or module is not RecognizeModule.SOLUTION
+        ]
+        if not effective:
+            raise AIServiceError("要求不输出解析后没有其他模块需要 AI 辨识")
         subjects = self.list_subjects()
         prompts = load_prompt_config(self._config_store)
+        template = prompts.recognize_prompt or DEFAULT_PROMPT_CONFIG.recognize_prompt
+        blocks = self._render_module_prompts(prompts, effective, subjects)
         prompt = render(
-            prompts.recognize_prompt,
+            template,
             DEFAULT_PROMPT_CONFIG.recognize_prompt,
             subjects="、".join(subjects),
             stem=stem,
             options="；".join(f"{o.key}. {o.text}" for o in options) or "无",
+            modules=blocks,
         )
+        if "{modules}" not in template:
+            # 用户自定义总述未使用 {modules} 占位符时，仍补上模块化输出要求
+            prompt = f"{prompt}\n{blocks}"
         if not include_solution:
             prompt += "\n注意：本次不要输出解题解析，solution 请留空字符串。"
-        data = self._ai_client.complete(prompt, RECOGNIZE_SCHEMA)
-        result = self._normalize_recognition(data)
-        if not include_solution:
+        data = self._ai_client.complete(prompt, recognize_schema(effective))
+        result = self._normalize_recognition(data, effective, options)
+        if not include_solution and RecognizeModule.SOLUTION in requested:
             result["solution"] = ""
         return result
+
+    @staticmethod
+    def _resolve_modules(
+        modules: list[RecognizeModule] | list[str] | None,
+    ) -> list[RecognizeModule]:
+        """把外部传入的模块取值归一化为模块列表（去重并保持给定顺序）。"""
+        if modules is None:
+            requested = list(RECOGNIZE_MODULES)
+        else:
+            requested = []
+            for item in modules:
+                try:
+                    module = item if isinstance(item, RecognizeModule) else RecognizeModule(item)
+                except (TypeError, ValueError):
+                    continue
+                if module not in requested:
+                    requested.append(module)
+            if not requested:
+                raise AIServiceError("请至少选择一个需要 AI 辨识的模块")
+        return requested
+
+    @staticmethod
+    def _render_module_prompts(prompts, requested, subjects: list[str]) -> str:
+        """把被勾选模块的输出提示词拼装为一段文本（按需给出，一次返回）。"""
+        subject_text = "、".join(subjects)
+        blocks: list[str] = []
+        for module in requested:
+            default = DEFAULT_MODULE_PROMPTS.get(module.value, "")
+            fragment = prompts.module_prompts.get(module.value) or default
+            if not fragment:
+                continue
+            blocks.append(render(fragment, default, subjects=subject_text))
+        return "\n".join(blocks)
+
+    @staticmethod
+    def module_states(question: Question) -> list[tuple[RecognizeModule, bool]]:
+        """逐项检查题目各模块是否已填写（用户需求：保存 / 导入前逐项检查）。
+
+        :return: ``[(模块, 是否已填写)]``，顺序与 :data:`RECOGNIZE_MODULES` 一致；
+            题干与选项不在其中（必须由出题者填写，AI 不负责生成）
+        """
+        states: list[tuple[RecognizeModule, bool]] = []
+        for module in RECOGNIZE_MODULES:
+            if module is RecognizeModule.SUBJECT:
+                filled = bool((question.subject or "").strip())
+            elif module is RecognizeModule.KNOWLEDGE_POINTS:
+                filled = bool(question.knowledge_points)
+            elif module is RecognizeModule.QUESTION_TYPE:
+                filled = question.type is not None
+            elif module is RecognizeModule.DIFFICULTY:
+                filled = question.difficulty is not Difficulty.PENDING
+            elif module is RecognizeModule.QUALITY_FLAG:
+                filled = question.quality_flag is not None
+            elif module is RecognizeModule.ANSWER:
+                filled = bool([item for item in question.answer if str(item).strip()])
+            else:
+                filled = bool((question.solution or "").strip())
+            states.append((module, filled))
+        return states
+
+    @classmethod
+    def missing_modules(cls, question: Question) -> list[RecognizeModule]:
+        """返回尚未填写的模块列表（供"是否需要 AI 填充"弹窗逐项展示）。"""
+        return [module for module, filled in cls.module_states(question) if not filled]
+
+    @classmethod
+    def required_missing_modules(cls, question: Question) -> list[RecognizeModule]:
+        """返回尚未填写的必填模块（科目 / 知识点 / 答案，缺失时不许保存）。"""
+        return [
+            module
+            for module in cls.missing_modules(question)
+            if module in REQUIRED_MODULES
+        ]
+
+    @staticmethod
+    def apply_recognition(
+        question: Question, result: dict, include_solution: bool = True
+    ) -> Question:
+        """把 AI 辨识结果写回题目草稿（仅覆盖结果中出现的字段）。
+
+        供批量导入场景把 AI 填充结果落到候选题上；表单场景由界面把结果写回控件。
+        """
+        subject = str(result.get("subject", "")).strip()
+        if subject:
+            question.subject = subject
+
+        points = result.get("knowledge_points")
+        if points:
+            question.knowledge_points = [str(item).strip() for item in points if str(item).strip()]
+
+        if result.get("question_type") is not None:
+            question.type = QuestionType(result["question_type"])
+
+        if result.get("difficulty") is not None:
+            question.difficulty = Difficulty(result["difficulty"])
+            question.difficulty_source = DifficultySource.AI
+
+        if result.get("quality_flag") is not None:
+            question.quality_flag = QualityFlag(result["quality_flag"])
+
+        answer = [str(item).strip() for item in (result.get("answer") or []) if str(item).strip()]
+        if answer:
+            if question.type in (QuestionType.FILL, QuestionType.SOLUTION):
+                question.options = []
+                question.answer = answer
+            else:
+                question.answer = [item.upper() for item in answer]
+
+        solution = result.get("solution")
+        if include_solution and solution:
+            question.solution = str(solution).strip()
+        return question
 
     def list_subjects(self) -> list[str]:
         """返回可选科目列表（科目改为选择式录入，由设置界面维护）。"""
@@ -627,38 +802,63 @@ class QuestionService:
             if part.strip()
         ]
 
-    def _normalize_recognition(self, data: dict) -> dict:
-        """把 AI 返回结果归一化为界面可直接使用的字段字典。"""
-        subject = str(data.get("subject", "")).strip()
-        points = data.get("knowledge_points") or data.get("knowledge") or []
-        if isinstance(points, str):
-            points = self._split_knowledge(points)
-        if not isinstance(points, list):
-            points = []
+    def _normalize_recognition(
+        self,
+        data: dict,
+        requested: list[RecognizeModule] | None = None,
+        options: list[Option] | None = None,
+    ) -> dict:
+        """把 AI 返回结果归一化为界面可直接使用的字段字典。
+
+        只保留 ``requested`` 中列出的模块（按需给出、一次返回）：未请求的字段
+        不会出现在结果里，界面据此只回填用户勾选的内容。
+        """
+        wanted = list(requested) if requested is not None else list(RECOGNIZE_MODULES)
+        result: dict = {}
+
+        if RecognizeModule.SUBJECT in wanted:
+            result["subject"] = str(data.get("subject", "")).strip()
+
+        if RecognizeModule.KNOWLEDGE_POINTS in wanted:
+            points = data.get("knowledge_points") or data.get("knowledge") or []
+            if isinstance(points, str):
+                points = self._split_knowledge(points)
+            if not isinstance(points, list):
+                points = []
+            result["knowledge_points"] = [
+                str(item).strip() for item in points if str(item).strip()
+            ]
 
         type_raw = str(data.get("question_type", data.get("type", ""))).strip().lower()
-        question_type = next(
-            (value for word, value in _TYPE_WORDS.items() if word in type_raw),
-            QuestionType.SINGLE,
-        )
+        if RecognizeModule.QUESTION_TYPE in wanted:
+            result["question_type"] = next(
+                (value for word, value in _TYPE_WORDS.items() if word in type_raw),
+                QuestionType.SINGLE,
+            )
 
-        answer = data.get("answer", [])
-        if isinstance(answer, str):
-            answer = self._parse_answer(answer, question_type)
-        if not isinstance(answer, list):
-            answer = []
-
-        solution = data.get("solution")
-        return {
-            "subject": subject,
-            "knowledge_points": [str(item).strip() for item in points if str(item).strip()],
-            "question_type": question_type,
-            "difficulty": _DIFFICULTY_WORDS.get(
+        if RecognizeModule.DIFFICULTY in wanted:
+            result["difficulty"] = _DIFFICULTY_WORDS.get(
                 str(data.get("difficulty", "")).strip().lower(), Difficulty.PENDING
-            ),
-            "quality_flag": _QUALITY_WORDS.get(
+            )
+
+        if RecognizeModule.QUALITY_FLAG in wanted:
+            result["quality_flag"] = _QUALITY_WORDS.get(
                 str(data.get("quality_flag", "")).strip().lower(), QualityFlag.NORMAL
-            ),
-            "answer": [str(item).strip() for item in answer if str(item).strip()],
-            "solution": str(solution).strip() if solution else "",
-        }
+            )
+
+        if RecognizeModule.ANSWER in wanted:
+            answer = data.get("answer", [])
+            if isinstance(answer, str):
+                fallback_type = QuestionType(result.get("question_type") or QuestionType.SINGLE)
+                if not type_raw:
+                    fallback_type = self._parse_type("", list(options or []), answer)
+                answer = self._parse_answer(answer, fallback_type)
+            if not isinstance(answer, list):
+                answer = []
+            result["answer"] = [str(item).strip() for item in answer if str(item).strip()]
+
+        if RecognizeModule.SOLUTION in wanted:
+            solution = data.get("solution")
+            result["solution"] = str(solution).strip() if solution else ""
+
+        return result

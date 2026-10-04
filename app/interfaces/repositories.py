@@ -49,9 +49,17 @@ class QuestionRepository(ABC):
 
     @abstractmethod
     def count_available(
-        self, subject: str, difficulty: str, question_type: str
+        self,
+        subject: str,
+        difficulty: str,
+        question_type: str,
+        knowledge_points: list[str] | None = None,
     ) -> int:
-        """统计满足组卷条件的命中题数量（需求 R6 第 2 条）。"""
+        """统计满足组卷条件的命中题数量（需求 R6 第 2 条）。
+
+        :param knowledge_points: 指定知识点（用户需求：组卷可指定知识点）；
+            为空表示不限，非空表示命中其中任一知识点的题目才计入
+        """
 
     @abstractmethod
     def list_knowledge_points(self, subject: str | None = None) -> list[str]:

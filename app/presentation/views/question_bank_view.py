@@ -12,7 +12,8 @@
 
 - 科目改为下拉选择（列表在"设置 -> 科目管理"中维护）
 - 支持题目图片导入（复制到本地 images/ 目录并预览）
-- "AI 辨识"按钮调用 AI 识别科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案 / 解析，
+- "AI 辨识"按模块勾选（科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案 / 解析），
+  只把勾选的模块拼进一次 AI 调用并返回，未勾选的字段不会被覆盖；
   结果仅供参考，须由出题者人工确认后保存
 
 所有业务操作经 ``app.application.question_service.QuestionService`` 完成；
@@ -49,8 +50,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.application.question_service import RECOGNIZE_MODULES, QuestionService
 from app.domain.entities.question import Option, Question, QuestionFilter
-from app.domain.enums import Difficulty, DifficultySource, QualityFlag, QuestionType
+from app.domain.enums import (
+    Difficulty,
+    DifficultySource,
+    QualityFlag,
+    QuestionType,
+    RecognizeModule,
+)
 from app.presentation import ui_utils
 
 #: 图片预览的最大尺寸（像素）
@@ -152,26 +160,39 @@ class QuestionBankView(QWidget):
         form.addRow("解析（可选）", self._solution_edit)
         form.addRow(self._image_container)
 
-        self._recognize_button = QPushButton("AI 辨识（科目/知识点/题型/难度/质量/答案/解析）")
+        # AI 辨识模块：出题者按需勾选，只请求所需字段，一次调用返回（用户需求）
+        self._module_group = QGroupBox(
+            "AI 辨识模块（按需勾选，一次调用返回全部勾选字段）"
+        )
+        module_layout = QVBoxLayout(self._module_group)
+        module_row = QHBoxLayout()
+        self._module_checks: dict[RecognizeModule, QCheckBox] = {}
+        for module in RECOGNIZE_MODULES:
+            check = QCheckBox(ui_utils.RECOGNIZE_MODULE_LABELS[module])
+            check.setChecked(True)
+            check.setToolTip(
+                f"勾选后本次 AI 辨识会请求「{ui_utils.RECOGNIZE_MODULE_LABELS[module]}」，"
+                "所有勾选项由同一次调用返回"
+            )
+            self._module_checks[module] = check
+            module_row.addWidget(check)
+        module_row.addStretch(1)
+        module_layout.addLayout(module_row)
+
+        self._recognize_button = QPushButton("AI 辨识选中模块")
         self._recognize_button.setToolTip(
-            "调用已配置的 AI 服务识别题目字段并填入表单；结果仅供参考，请人工复核"
+            "调用已配置的 AI 服务识别勾选的模块并填入表单；结果仅供参考，请人工复核"
         )
         self._recognize_button.clicked.connect(self._on_recognize_clicked)
-        self._no_solution_check = QCheckBox("AI 不输出解析")
-        self._no_solution_check.setToolTip(
-            "勾选后要求 AI 只给出答案，不生成解析（用户需求）"
-        )
         self._recognize_note = QLabel(
             "AI 辨识结果仅供参考，必须人工复核后再保存。"
         )
         self._recognize_note.setWordWrap(True)
-        self._recognize_row = QHBoxLayout()
-        self._recognize_row.addWidget(self._recognize_button)
-        self._recognize_row.addWidget(self._no_solution_check)
-        self._recognize_row.addWidget(self._recognize_note, 1)
-        recognize_holder = QWidget()
-        recognize_holder.setLayout(self._recognize_row)
-        form.addRow(recognize_holder)
+        recognize_row = QHBoxLayout()
+        recognize_row.addWidget(self._recognize_button)
+        recognize_row.addWidget(self._recognize_note, 1)
+        module_layout.addLayout(recognize_row)
+        form.addRow(self._module_group)
 
         self._save_button = QPushButton("保存题目")
         self._save_button.clicked.connect(self._on_save_clicked)
@@ -650,11 +671,27 @@ class QuestionBankView(QWidget):
         """移除当前题目的图片引用（保留磁盘文件，避免误删历史图片）。"""
         self._set_image(None)
 
+    def _requested_modules(self) -> list[RecognizeModule]:
+        """返回被勾选的 AI 辨识模块（用户需求：按需给出、一次返回）。"""
+        return [
+            module
+            for module in RECOGNIZE_MODULES
+            if self._module_checks[module].isChecked()
+        ]
+
+    def _wants_solution(self) -> bool:
+        """是否要求 AI 给出解析（勾选了「解析」模块）。"""
+        return self._module_checks[RecognizeModule.SOLUTION].isChecked()
+
     def _on_recognize_clicked(self) -> None:
-        """调用 AI 辨识题目字段并回填表单（用户需求；结果仅供参考）。"""
+        """按勾选的模块调用 AI 辨识并回填表单（用户需求；结果仅供参考）。"""
         stem = self._stem_edit.toPlainText().strip()
         if not stem:
             ui_utils.info(self, "请先填写题干，再使用 AI 辨识。")
+            return
+        modules = self._requested_modules()
+        if not modules:
+            ui_utils.info(self, "请至少勾选一个需要 AI 辨识的模块。")
             return
         if not self._question_service.ai_configured():
             ui_utils.warning(
@@ -667,15 +704,19 @@ class QuestionBankView(QWidget):
             self._question_service.recognize_draft,
             stem,
             self._collect_options(),
-            not self._no_solution_check.isChecked(),
+            self._wants_solution(),
             True,
+            modules,
         )
         if not ok or not result:
             return
-        self._apply_recognition(result, include_solution=not self._no_solution_check.isChecked())
+        self._apply_recognition(result, include_solution=self._wants_solution())
 
     def _apply_recognition(self, result: dict, include_solution: bool = True) -> None:
-        """把 AI 辨识结果写入表单，并给出"仅供参考"的提示文字。"""
+        """把 AI 辨识结果写入表单，并给出"仅供参考"的提示文字。
+
+        只回填结果中出现的字段（未勾选的模块不会被覆盖）。
+        """
         notes = ["AI 辨识结果仅供参考，请人工复核后再保存。"]
         if not include_solution:
             notes.append("已按要求不生成解析。")
@@ -694,8 +735,12 @@ class QuestionBankView(QWidget):
         if points:
             self._knowledge_edit.setText("，".join(points))
 
-        question_type = result.get("question_type")
-        if question_type is not None:
+        question_type = (
+            result["question_type"]
+            if result.get("question_type") is not None
+            else self._type_combo.currentData()
+        )
+        if result.get("question_type") is not None:
             ui_utils.select_combo_data(self._type_combo, question_type)
             self._on_type_changed()
 
@@ -744,56 +789,150 @@ class QuestionBankView(QWidget):
         return None
 
     @staticmethod
-    def _missing_labels(question: Question) -> list[str]:
-        """列出除题干 / 选项之外缺失的必填信息（可由 AI 分析补全）。"""
-        missing: list[str] = []
-        if not question.subject:
-            missing.append("科目")
-        if not question.knowledge_points:
-            missing.append("知识点")
-        if not question.answer:
-            missing.append(
-                "参考答案"
-                if question.type in (QuestionType.FILL, QuestionType.SOLUTION)
-                else "答案"
-            )
-        if question.difficulty is Difficulty.PENDING:
-            missing.append("难度")
-        return missing
+    def _module_label(question: Question, module: RecognizeModule) -> str:
+        """模块在提示文案中的名称（填空题 / 解答题的 answer 称为"参考答案"）。"""
+        if module is RecognizeModule.ANSWER and question.type in (
+            QuestionType.FILL,
+            QuestionType.SOLUTION,
+        ):
+            return "参考答案"
+        return ui_utils.RECOGNIZE_MODULE_LABELS[module]
+
+    @classmethod
+    def _missing_labels(cls, question: Question) -> list[str]:
+        """列出逐项检查中尚未填写的模块名称（可由 AI 填充，题干 / 选项除外）。"""
+        return [
+            cls._module_label(question, module)
+            for module in QuestionService.missing_modules(question)
+        ]
+
+    @classmethod
+    def _required_missing_labels(cls, question: Question) -> list[str]:
+        """列出尚未填写的必填模块名称（科目 / 知识点 / 答案，缺失时不许保存）。"""
+        return [
+            cls._module_label(question, module)
+            for module in QuestionService.required_missing_modules(question)
+        ]
+
+    @classmethod
+    def _check_lines(cls, question: Question) -> list[str]:
+        """逐项检查文本（弹窗展示：每项当前取值与是否缺失）。
+
+        用户需求：导入或修改时逐项检查弹窗提示。题干与选项也在检查之列，
+        但它们必须由出题者填写，AI 不负责生成。
+        """
+        lines: list[str] = []
+        stem_ok = bool((question.stem or "").strip())
+        lines.append(f"题干：{'已填写' if stem_ok else '缺失'}（必须人工填写，AI 不生成）")
+        if question.type in (QuestionType.SINGLE, QuestionType.MULTIPLE):
+            valid_options = [
+                option
+                for option in question.options
+                if option.key.strip() and option.text.strip()
+            ]
+            lines.append(f"选项：{len(valid_options)} 项（至少 2 项，必须人工填写）")
+        for module, filled in QuestionService.module_states(question):
+            label = cls._module_label(question, module)
+            if filled:
+                lines.append(f"{label}：{cls._module_value(question, module)} ✓")
+            elif module in QuestionService.REQUIRED_MODULES:
+                lines.append(f"{label}：缺失 ✗（必填）")
+            else:
+                lines.append(f"{label}：缺失 ✗（选填）")
+        return lines
+
+    @staticmethod
+    def _module_value(question: Question, module: RecognizeModule) -> str:
+        """返回模块当前取值的可读文本（逐项检查展示用）。"""
+        if module is RecognizeModule.SUBJECT:
+            return question.subject
+        if module is RecognizeModule.KNOWLEDGE_POINTS:
+            return "，".join(question.knowledge_points)
+        if module is RecognizeModule.QUESTION_TYPE:
+            return ui_utils.QUESTION_TYPE_LABELS.get(question.type, str(question.type))
+        if module is RecognizeModule.DIFFICULTY:
+            return ui_utils.DIFFICULTY_LABELS.get(question.difficulty, "")
+        if module is RecognizeModule.QUALITY_FLAG:
+            return ui_utils.QUALITY_LABELS.get(question.quality_flag, "")
+        if module is RecognizeModule.ANSWER:
+            return "，".join(str(item) for item in question.answer)
+        solution = (question.solution or "").strip()
+        if len(solution) > 20:
+            solution = solution[:20] + "…"
+        return solution
+
+    def _check_text(self, question: Question, title: str) -> str:
+        """拼装逐项检查 + 询问文案。"""
+        lines = self._check_lines(question)
+        return (
+            f"{title}\n\n"
+            + "\n".join(lines)
+            + "\n\n是否让 AI 填充上述缺失项（题干与选项除外）？"
+            "AI 结果仅供参考，保存前请人工复核。"
+        )
 
     def _ensure_required_fields(self, draft: Question) -> bool:
-        """保存前检查必填信息；除题干 / 选项外信息不全时提供 AI 分析选项（用户需求）。
+        """保存前逐项检查各模块，并询问是否让 AI 填充缺失项（用户需求）。
 
-        :return: True 表示信息齐全（或已由 AI 补全）可继续保存
+        题干与选项必须由出题者填写（AI 不生成）；科目 / 知识点 / 答案缺失时
+        必须补齐后才能保存，难度 / 解析 / 质量标记缺失时允许直接保存。
+
+        :return: True 表示可以继续保存
         """
         problem = self._stem_or_options_problem(draft)
         if problem:
             ui_utils.warning(self, problem)
             return False
 
-        missing = self._missing_labels(draft)
+        missing = self._question_service.missing_modules(draft)
         if not missing:
             return True
 
+        required_labels = self._required_missing_labels(draft)
+        text = self._check_text(draft, "保存前逐项检查：")
         if not self._question_service.ai_configured():
+            if not required_labels:
+                return True
             ui_utils.warning(
                 self,
-                "以下信息不完整：" + "、".join(missing)
-                + "。\n\nAI 服务未配置，请手工补齐后保存，或先在「设置 -> AI 设置」中配置。",
+                f"{text}\n\nAI 服务未配置，请手工补齐后保存，"
+                "或先在「设置 -> AI 设置」中配置。",
             )
             return False
 
-        if not ui_utils.confirm_action(
+        choice = ui_utils.choose_action(
             self,
-            "以下信息不完整：" + "、".join(missing)
-            + "。\n\n是否使用 AI 分析补全这些字段？（结果仅供参考，保存前请人工复核）",
-            title="信息不完整",
-            accept_text="AI 分析",
-            reject_text="取消",
-        ):
-            return False
+            text,
+            title="逐项检查：信息不完整",
+            actions=[
+                ("fill", "AI 填充缺失项"),
+                ("manual", "手动补齐"),
+                ("cancel", "取消"),
+            ],
+        )
+        if choice == "fill":
+            return self._ai_fill_missing(draft)
+        if choice == "manual":
+            if required_labels:
+                ui_utils.warning(
+                    self,
+                    "以下必填项仍然缺失：" + "、".join(required_labels)
+                    + "，请手工补齐后再保存。",
+                )
+                return False
+            return True
+        return False
 
-        include_solution = not self._no_solution_check.isChecked()
+    def _ai_fill_missing(self, draft: Question) -> bool:
+        """用户确认后，按缺失模块调用一次 AI 并回填表单（结果仅供参考）。"""
+        include_solution = self._wants_solution()
+        modules = self._question_service.missing_modules(draft)
+        if not include_solution:
+            modules = [
+                module for module in modules if module is not RecognizeModule.SOLUTION
+            ]
+        if not modules:
+            return True
         ok, result = ui_utils.run_guarded(
             self,
             self._question_service.recognize_draft,
@@ -801,16 +940,18 @@ class QuestionBankView(QWidget):
             draft.options,
             include_solution,
             True,
+            modules,
         )
         if not ok or not result:
             return False
         self._apply_recognition(result, include_solution=include_solution)
 
-        remaining = self._missing_labels(self._build_draft())
+        remaining = self._required_missing_labels(self._build_draft())
         if remaining:
             ui_utils.warning(
                 self,
-                "AI 补全后仍缺少：" + "、".join(remaining) + "，请手工补齐后保存。",
+                "AI 填充后仍缺少必填项：" + "、".join(remaining)
+                + "，请手工补齐后保存。",
             )
             return False
         return True
@@ -836,11 +977,12 @@ class QuestionBankView(QWidget):
     def _on_save_clicked(self) -> None:
         """保存或更新题目（需求 R1）。
 
-        保存前检查必填信息（用户需求）：
+        保存前逐项检查（用户需求）：
         - 题干（选择题含选项）不全时直接提示，必须由出题者补齐；
-        - 其余信息（科目 / 知识点 / 答案 / 难度）不全时，弹出窗口提供
-          "AI 分析"选项，由 AI 辨识补全后再保存（结果仅供参考）。
-        所有 AI 调用（辨识补全、难度分析）都需用户在弹窗中确认。
+        - 其余模块（科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案 / 解析）逐项
+          列出填写状态，弹出窗口询问是否让 AI 填充缺失项（AI 填充 / 手动补齐 / 取消）；
+        - 难度仍为「待确认」时再询问一次是否调用 AI 分析难度。
+        所有 AI 调用都需用户在弹窗中确认。
         """
         draft = self._build_draft()
         if not self._ensure_required_fields(draft):
@@ -890,30 +1032,20 @@ class QuestionBankView(QWidget):
         self._paste_status.setText(f"解析出 {len(self._paste_drafts)} 道候选题目")
 
     def _on_commit_paste(self) -> None:
-        """批量写入确认后的候选题（需求 R2 第 3 条）。"""
+        """批量写入确认后的候选题（需求 R2 第 3 条）。
+
+        入库前逐项检查每道候选题（用户需求），缺失项由用户决定是否让 AI 填充；
+        题干与选项必须由出题者填写，AI 不生成。
+        """
         if not self._paste_drafts:
             ui_utils.info(self, "请先点击“解析预览”确认候选题。")
             return
-        pending = [
-            draft for draft in self._paste_drafts if draft.difficulty is Difficulty.PENDING
-        ]
-        analyze_difficulty = bool(
-            pending
-            and self._question_service.ai_configured()
-            and ui_utils.confirm_action(
-                self,
-                f"本次将入库 {len(self._paste_drafts)} 道题，其中 {len(pending)} 道难度为"
-                "「待确认」。\n\n是否调用 AI 分析这些题目的难度？（结果仅供参考）",
-                title="AI 难度分析",
-                accept_text="AI 分析难度",
-                reject_text="跳过",
-            )
-        )
+        if not self._ensure_drafts_before_import():
+            return
         ok, saved = ui_utils.run_guarded(
             self,
             self._question_service.batch_commit,
             self._paste_drafts,
-            analyze_difficulty,
             success_message="候选题目已批量入库",
         )
         if not ok:
@@ -925,6 +1057,122 @@ class QuestionBankView(QWidget):
         self.reload_questions()
         self.reload_knowledge_points()
         self.questions_changed.emit()
+
+    def _incomplete_drafts(self) -> list[tuple[int, Question]]:
+        """返回逐项检查中仍有缺失项的候选题 ``[(序号, 题目)]``。"""
+        return [
+            (index, draft)
+            for index, draft in enumerate(self._paste_drafts, start=1)
+            if self._question_service.missing_modules(draft)
+        ]
+
+    def _ensure_drafts_before_import(self) -> bool:
+        """导入前逐项检查候选题，并询问是否让 AI 填充缺失项（用户需求）。
+
+        :return: True 表示可以继续入库
+        """
+        problems = self._incomplete_drafts()
+        if not problems:
+            return True
+
+        lines: list[str] = []
+        for index, draft in problems:
+            labels = self._missing_labels(draft)
+            required = self._required_missing_labels(draft)
+            tag = "（必填）" if required else "（选填）"
+            lines.append(f"第 {index} 题：缺 " + "、".join(labels) + tag)
+        required_any = any(
+            self._question_service.required_missing_modules(draft)
+            for _, draft in problems
+        )
+        text = (
+            f"导入前逐项检查：共 {len(self._paste_drafts)} 道候选题，"
+            f"其中 {len(problems)} 道信息不完整。\n\n"
+            + "\n".join(lines)
+            + "\n\n题干与选项必须人工填写。是否让 AI 填充上述缺失项？"
+            f"（共需调用 AI {len(problems)} 次，逐题一次返回；结果仅供参考）"
+        )
+
+        if not self._question_service.ai_configured():
+            if not required_any:
+                return True
+            ui_utils.warning(
+                self,
+                f"{text}\n\nAI 服务未配置，请先在「录入 / 编辑」中手工修正后重新导入，"
+                "或到「设置 -> AI 设置」配置 AI。",
+            )
+            return False
+
+        choice = ui_utils.choose_action(
+            self,
+            text,
+            title="逐项检查：候选题信息不完整",
+            actions=[
+                ("fill", "AI 填充缺失项"),
+                ("manual", "跳过 AI"),
+                ("cancel", "取消"),
+            ],
+        )
+        if choice == "fill":
+            return self._ai_fill_drafts(problems)
+        if choice == "manual":
+            if required_any:
+                ui_utils.warning(
+                    self,
+                    "仍有候选题缺少必填项（科目 / 知识点 / 答案），"
+                    "请在「录入 / 编辑」中手工修正后重新解析预览再提交。",
+                )
+                return False
+            return True
+        return False
+
+    def _ai_fill_drafts(self, problems: list[tuple[int, Question]]) -> bool:
+        """用户确认后，逐题按缺失模块调用一次 AI 并回填候选题。"""
+        include_solution = self._wants_solution()
+        failures: list[str] = []
+        for index, draft in problems:
+            modules = self._question_service.missing_modules(draft)
+            if not include_solution:
+                modules = [
+                    module
+                    for module in modules
+                    if module is not RecognizeModule.SOLUTION
+                ]
+            if not modules:
+                continue
+            ok, result = ui_utils.run_guarded(
+                self,
+                self._question_service.recognize_draft,
+                draft.stem,
+                draft.options,
+                include_solution,
+                True,
+                modules,
+            )
+            if not ok or not result:
+                failures.append(f"第 {index} 题")
+                continue
+            self._question_service.apply_recognition(draft, result, include_solution)
+
+        remaining = [
+            f"第 {index} 题（缺 " + "、".join(self._required_missing_labels(draft)) + "）"
+            for index, draft in problems
+            if self._question_service.required_missing_modules(draft)
+        ]
+        if failures or remaining:
+            detail = ""
+            if failures:
+                detail += "\nAI 填充失败：" + "、".join(failures)
+            if remaining:
+                detail += "\n仍缺必填项：" + "；".join(remaining)
+            ui_utils.warning(
+                self,
+                "以下候选题需在「录入 / 编辑」中手工修正后重新解析预览再提交："
+                + detail,
+            )
+            return False
+        self._render_paste_preview(self._paste_drafts)
+        return True
 
     def _render_paste_preview(self, drafts: list[Question]) -> None:
         """渲染候选题预览，待修正行标红（需求 R2 第 4 条）。"""
@@ -952,14 +1200,20 @@ class QuestionBankView(QWidget):
         """把答案列表渲染为可读文本。"""
         return "，".join(question.answer)
 
-    @staticmethod
-    def _is_incomplete(question: Question) -> bool:
+    @classmethod
+    def _is_incomplete(cls, question: Question) -> bool:
         """判断候选题是否缺少必填字段（预览"待修正"依据，需求 R2 第 4 条）。"""
-        if not question.subject or not question.stem:
+        if not question.stem:
             return True
-        if question.type in (QuestionType.SOLUTION, QuestionType.FILL):
-            return not (question.answer and question.answer[0].strip())
-        return len(question.options) < 2 or not question.answer
+        if question.type in (QuestionType.SINGLE, QuestionType.MULTIPLE):
+            valid = [
+                option
+                for option in question.options
+                if option.key.strip() and option.text.strip()
+            ]
+            if len(valid) < 2:
+                return True
+        return bool(QuestionService.required_missing_modules(question))
 
     # --------------------------------------------------------------- 检索
 

@@ -76,23 +76,19 @@ def test_schema_covers_all_tables() -> None:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in joined
 
 
-def test_build_container_wires_layers() -> None:
+def test_build_container_wires_layers(tmp_path) -> None:
     """组合根能把基础设施实现装配进应用服务（临时库，落盘即删）。"""
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as tmp:
-        c = build_container(str(Path(tmp) / "smoke.db"))
-        assert isinstance(c, Container)
-        # 接口契约：仓储实例实现对应抽象接口
-        assert isinstance(c.question_repository, QuestionRepository)
-        assert isinstance(c.usage_repository, UsageRepository)
-        assert isinstance(c.task_repository, TaskRepository)
-        assert isinstance(c.config_store, ConfigStore)
-        assert isinstance(c.ai_client, AIClient)
-        # 装配关系：评分器持有冷却策略引用（依赖注入生效）
-        assert c.selection_scorer._cooldown_policy is c.cooldown_policy
-        c.db.close()
+    c = build_container(str(tmp_path / "smoke.db"))
+    assert isinstance(c, Container)
+    # 接口契约：仓储实例实现对应抽象接口
+    assert isinstance(c.question_repository, QuestionRepository)
+    assert isinstance(c.usage_repository, UsageRepository)
+    assert isinstance(c.task_repository, TaskRepository)
+    assert isinstance(c.config_store, ConfigStore)
+    assert isinstance(c.ai_client, AIClient)
+    # 装配关系：评分器持有冷却策略引用（依赖注入生效）
+    assert c.selection_scorer._cooldown_policy is c.cooldown_policy
+    c.db.close()
 
 
 def test_modules_importable() -> None:

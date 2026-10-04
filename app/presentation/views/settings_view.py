@@ -3,7 +3,9 @@
 用户需求：历史与设置界面分开后，本视图只承担配置职责：
 
 - AI 设置：base_url / api_key / model / 超时 / 重试（需求 R15），
-  以及 AI 提示词的查看与修改（辨识 / 难度分析 / AI 补题三个模板）
+  以及 AI 提示词的查看与修改：辨识总述 + 7 个模块化输出提示词
+  （科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案 / 解析，按需勾选、一次返回）
+  + 难度分析 + AI 补题
 - 评分与冷却：五项评分权重、冷却窗口计量方式与长度、抽样权重下限
   （需求 R8 第 7 条 / R13 第 4 条）
 - 科目管理：维护可选科目列表（科目改为选择式录入，提供默认科目）
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -34,9 +37,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config.settings import DEFAULT_PROMPT_CONFIG, DEFAULT_SUBJECTS
+from app.config.settings import (
+    DEFAULT_MODULE_PROMPTS,
+    DEFAULT_PROMPT_CONFIG,
+    DEFAULT_SUBJECTS,
+)
 from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
-from app.domain.enums import CooldownMode
+from app.domain.enums import CooldownMode, RecognizeModule
 from app.presentation import ui_utils
 
 
@@ -107,8 +114,8 @@ class SettingsView(QWidget):
 
         layout.addWidget(
             QLabel(
-                "提示词修改（可用占位符：辨识 {subjects} {stem} {options}；"
-                "难度 {type} {stem} {options} {answer}；"
+                "提示词修改（可用占位符：辨识总述 {subjects} {stem} {options} {modules}；"
+                "模块提示词 {subjects}；难度 {type} {stem} {options} {answer}；"
                 "补题 {subject} {knowledge_points} {type} {difficulty} {count}）"
             )
         )
@@ -117,10 +124,23 @@ class SettingsView(QWidget):
         self._difficulty_prompt = self._new_prompt_edit()
         self._supplement_prompt = self._new_prompt_edit()
         prompt_form = QFormLayout()
-        prompt_form.addRow("AI 辨识提示词", self._recognize_prompt)
-        prompt_form.addRow("难度分析提示词", self._difficulty_prompt)
-        prompt_form.addRow("AI 补题提示词", self._supplement_prompt)
+        prompt_form.addRow("AI 辨识总述提示词", self._recognize_prompt)
+
+        # 模块化输出提示词：每个字段一段，AI 辨识时只拼装被勾选的模块（用户需求）
+        modules_group = QGroupBox("AI 辨识模块提示词（按需勾选模块，一次调用返回）")
+        modules_form = QFormLayout(modules_group)
+        self._module_prompts: dict[str, QPlainTextEdit] = {}
+        for module in RecognizeModule:
+            edit = self._new_prompt_edit(height=64)
+            self._module_prompts[module.value] = edit
+            modules_form.addRow(ui_utils.RECOGNIZE_MODULE_LABELS[module], edit)
         layout.addLayout(prompt_form)
+        layout.addWidget(modules_group)
+
+        other_form = QFormLayout()
+        other_form.addRow("难度分析提示词", self._difficulty_prompt)
+        other_form.addRow("AI 补题提示词", self._supplement_prompt)
+        layout.addLayout(other_form)
 
         prompt_row = QHBoxLayout()
         save_prompt_button = QPushButton("保存提示词")
@@ -137,10 +157,10 @@ class SettingsView(QWidget):
         return page
 
     @staticmethod
-    def _new_prompt_edit() -> QPlainTextEdit:
+    def _new_prompt_edit(height: int = 90) -> QPlainTextEdit:
         """构建提示词编辑框。"""
         edit = QPlainTextEdit()
-        edit.setFixedHeight(90)
+        edit.setFixedHeight(height)
         edit.setPlaceholderText("在此修改提示词，保存后用于后续 AI 调用")
         return edit
 
@@ -360,15 +380,28 @@ class SettingsView(QWidget):
         self._fill_prompt_form(config or DEFAULT_PROMPT_CONFIG)
 
     def _fill_prompt_form(self, config: PromptConfig) -> None:
-        """把提示词写入编辑框。"""
+        """把提示词写入编辑框（模块提示词缺失时补默认片段）。"""
         self._recognize_prompt.setPlainText(config.recognize_prompt)
         self._difficulty_prompt.setPlainText(config.difficulty_prompt)
         self._supplement_prompt.setPlainText(config.supplement_prompt)
+        for module in RecognizeModule:
+            edit = self._module_prompts.get(module.value)
+            if edit is None:
+                continue
+            text = (config.module_prompts or {}).get(module.value) or DEFAULT_MODULE_PROMPTS.get(
+                module.value, ""
+            )
+            edit.setPlainText(text)
 
     def _on_save_prompt(self) -> None:
         """保存提示词配置，后续 AI 调用立即使用新提示词。"""
         config = PromptConfig(
             recognize_prompt=self._recognize_prompt.toPlainText().strip(),
+            module_prompts={
+                module.value: self._module_prompts[module.value].toPlainText().strip()
+                for module in RecognizeModule
+                if module.value in self._module_prompts
+            },
             difficulty_prompt=self._difficulty_prompt.toPlainText().strip(),
             supplement_prompt=self._supplement_prompt.toPlainText().strip(),
         )

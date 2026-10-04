@@ -18,16 +18,19 @@ from app.domain.enums import CooldownMode, Difficulty, QuestionType
 class TypeRequirement:
     """单个题型的出题要求值对象。
 
-    :param question_type: 题型（single / multiple / solution）
+    :param question_type: 题型（single / multiple / fill / solution）
     :param subject: 科目
     :param difficulty: 目标难度（易 / 中 / 难）
     :param count: 需要的题目数量（正整数）
+    :param knowledge_points: 指定知识点（用户需求：组卷时可指定知识点）；
+        空列表表示不限，非空表示只统计 / 选取命中其中任一知识点的题目
     """
 
     question_type: QuestionType
     subject: str
     difficulty: Difficulty
     count: int
+    knowledge_points: list[str] = field(default_factory=list)
 
 
 @dataclass

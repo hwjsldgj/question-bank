@@ -45,6 +45,39 @@ def test_prompt_config_roundtrip_and_fallback(tmp_path) -> None:
         container.db.close()
 
 
+def test_module_prompts_merge_per_module(tmp_path) -> None:
+    """模块化输出提示词：只覆盖部分模块时，其余模块仍用默认片段（按需给出）。"""
+    from app.config.settings import DEFAULT_MODULE_PROMPTS
+    from app.domain.enums import RecognizeModule
+
+    container = _container(tmp_path)
+    try:
+        store = container.config_store
+        loaded = store.load_prompt_config()
+        assert set(loaded.module_prompts) == set(DEFAULT_MODULE_PROMPTS)
+        for module in RecognizeModule:
+            assert loaded.module_prompts[module.value]
+
+        # 只改「答案」与「难度」两个模块，并把「解析」清空
+        store.save_prompt_config(
+            PromptConfig(
+                module_prompts={
+                    "answer": "answer：只给标号",
+                    "difficulty": "",
+                    "solution": "   ",
+                }
+            )
+        )
+        loaded = store.load_prompt_config()
+        assert loaded.module_prompts["answer"] == "answer：只给标号"
+        # 空片段回退默认
+        assert loaded.module_prompts["difficulty"] == DEFAULT_MODULE_PROMPTS["difficulty"]
+        assert loaded.module_prompts["solution"] == DEFAULT_MODULE_PROMPTS["solution"]
+        assert loaded.module_prompts["subject"] == DEFAULT_MODULE_PROMPTS["subject"]
+    finally:
+        container.db.close()
+
+
 def test_prompt_render_keeps_unknown_placeholders(tmp_path) -> None:
     """提示词填充：未知占位符原样保留，不抛异常。"""
     container = _container(tmp_path)

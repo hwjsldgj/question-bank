@@ -1,6 +1,7 @@
 """题目服务测试：科目列表、图片导入、CRUD、批量解析、AI 辨识与操作台账。
 
-覆盖用户需求：科目选择式录入、题目图片导入、AI 辨识（结果仅供参考）、
+覆盖用户需求：科目选择式录入、题目图片导入、AI 辨识（模块化输出、按需给出、
+一次返回，结果仅供参考）、逐项检查各模块填写情况、组卷按知识点统计、
 导入历史与编辑历史；同时覆盖需求 R1 / R2 / R6 / R13 的关键路径。
 """
 
@@ -19,6 +20,7 @@ from app.domain.enums import (
     QuestionOpAction,
     QualityFlag,
     QuestionType,
+    RecognizeModule,
 )
 from app.domain.validators.question_validator import QuestionValidator
 from app.infrastructure.database.schema import ensure_schema
@@ -32,14 +34,16 @@ PNG_BYTES = bytes.fromhex(
 
 
 class FakeAIClient(AIClient):
-    """测试用 AI 客户端：返回预置 JSON 并记录收到的提示词。"""
+    """测试用 AI 客户端：返回预置 JSON 并记录收到的提示词与期望结构。"""
 
     def __init__(self, payload: dict | None = None) -> None:
         self.payload = payload or {}
         self.prompts: list[str] = []
+        self.schemas: list[dict | None] = []
 
     def complete(self, prompt: str, response_schema: dict | None = None) -> dict:
         self.prompts.append(prompt)
+        self.schemas.append(response_schema)
         return dict(self.payload)
 
     def is_configured(self) -> bool:
@@ -57,7 +61,7 @@ def container(tmp_path):
 
 @pytest.fixture()
 def service(container) -> QuestionService:
-    """注入了假 AI 客户端的题目服务。"""
+    """注入了假 AI 客户端的题目服务（含图片存储，保证换图 / 删除时能清理文件）。"""
     return QuestionService(
         container.question_repository,
         QuestionValidator(),
@@ -65,6 +69,7 @@ def service(container) -> QuestionService:
         op_repository=container.question_op_repository,
         config_store=container.config_store,
         ai_client=FakeAIClient(),
+        image_store=container.image_store,
     )
 
 
@@ -368,6 +373,170 @@ def test_ai_actions_require_confirmation(container) -> None:
         local.recognize_draft("题干", [])
     with pytest.raises(AIServiceError, match="确认"):
         local.reanalyze_difficulties([analyzed.id])
+    # 确认了但一个模块都没勾选 -> 拒绝执行且不发起调用
+    calls = len(fake.prompts)
+    with pytest.raises(AIServiceError, match="模块"):
+        local.recognize_draft("题干", [], True, True, [])
+    assert len(fake.prompts) == calls
+
+
+def test_recognize_is_modular_and_single_call(container) -> None:
+    """模块化输出、按需给出、一次返回：只拼装勾选模块，一次调用返回全部所需字段。"""
+    fake = FakeAIClient(
+        {
+            "subject": "数学",
+            "knowledge_points": ["集合"],
+            "question_type": "多选",
+            "difficulty": "难",
+            "quality_flag": "优质",
+            "answer": ["A", "B"],
+            "solution": "解析",
+        }
+    )
+    service = QuestionService(
+        container.question_repository,
+        QuestionValidator(),
+        DifficultyService(fake, container.config_store),
+        config_store=container.config_store,
+        ai_client=fake,
+    )
+
+    result = service.recognize_draft(
+        "题干",
+        [Option("A", "1"), Option("B", "2")],
+        confirmed=True,
+        modules=[RecognizeModule.KNOWLEDGE_POINTS, RecognizeModule.ANSWER],
+    )
+    # 只返回被请求的模块
+    assert set(result) == {"knowledge_points", "answer"}
+    assert result["knowledge_points"] == ["集合"]
+    assert result["answer"] == ["A", "B"]
+    # 一次调用
+    assert len(fake.prompts) == 1
+    # 提示词只含被勾选模块的输出要求
+    prompt = fake.prompts[0]
+    assert "knowledge_points：" in prompt and "answer：" in prompt
+    assert "subject：" not in prompt
+    assert "quality_flag：" not in prompt
+    assert "difficulty：" not in prompt
+    # 期望结构也只含被勾选模块
+    schema = fake.schemas[0]
+    assert set(schema["properties"]) == {"knowledge_points", "answer"}
+
+    # 模块可以是字符串取值，重复项自动去重，非法值忽略
+    fake.prompts.clear()
+    fake.schemas.clear()
+    result = service.recognize_draft(
+        "题干",
+        [],
+        confirmed=True,
+        modules=["answer", RecognizeModule.ANSWER, "不存在的模块"],
+    )
+    assert set(result) == {"answer"}
+    assert len(fake.prompts) == 1
+
+
+def test_module_states_and_apply_recognition() -> None:
+    """逐项检查模块填写状态，并把 AI 结果回填到题目草稿。"""
+    draft = Question(
+        id="",
+        subject="",
+        knowledge_points=[],
+        type=QuestionType.SINGLE,
+        stem="题干",
+        options=[Option("A", "1"), Option("B", "2")],
+        answer=[],
+    )
+    states = dict(QuestionService.module_states(draft))
+    assert states[RecognizeModule.SUBJECT] is False
+    assert states[RecognizeModule.KNOWLEDGE_POINTS] is False
+    assert states[RecognizeModule.QUESTION_TYPE] is True  # 题型总有取值
+    assert states[RecognizeModule.QUALITY_FLAG] is True  # 质量标记默认"普通"
+    assert states[RecognizeModule.DIFFICULTY] is False
+    assert states[RecognizeModule.ANSWER] is False
+    assert states[RecognizeModule.SOLUTION] is False
+
+    # 必填模块：科目 / 知识点 / 答案
+    assert QuestionService.required_missing_modules(draft) == [
+        RecognizeModule.SUBJECT,
+        RecognizeModule.KNOWLEDGE_POINTS,
+        RecognizeModule.ANSWER,
+    ]
+    assert RecognizeModule.DIFFICULTY in QuestionService.missing_modules(draft)
+
+    QuestionService.apply_recognition(
+        draft,
+        {
+            "subject": "数学",
+            "knowledge_points": ["集合"],
+            "difficulty": Difficulty.HARD,
+            "answer": ["a"],
+            "solution": "解析内容",
+        },
+    )
+    assert draft.subject == "数学"
+    assert draft.knowledge_points == ["集合"]
+    assert draft.answer == ["A"]  # 选择题答案统一大写
+    assert draft.difficulty is Difficulty.HARD
+    assert draft.difficulty_source is DifficultySource.AI
+    assert draft.solution == "解析内容"
+    assert QuestionService.required_missing_modules(draft) == []
+
+    # 不允许解析时不写入解析；空结果不覆盖已有内容
+    untouched = Question(
+        id="",
+        subject="物理",
+        knowledge_points=["力学"],
+        type=QuestionType.SOLUTION,
+        stem="题干",
+        answer=["参考"],
+        solution="原有解析",
+    )
+    QuestionService.apply_recognition(
+        untouched, {"solution": "AI 解析"}, include_solution=False
+    )
+    assert untouched.solution == "原有解析"
+    QuestionService.apply_recognition(untouched, {"subject": "", "knowledge_points": []})
+    assert untouched.subject == "物理"
+    assert untouched.knowledge_points == ["力学"]
+
+
+def test_count_available_with_knowledge_points(container, service) -> None:
+    """组卷命中量支持指定知识点（用户需求：组卷环节可指定知识点）。"""
+    service.create_question(_single_question())  # 知识点：一元二次方程
+    other = _single_question()
+    other.knowledge_points = ["因式分解"]
+    service.create_question(other)
+    both = _single_question()
+    both.knowledge_points = ["一元二次方程", "因式分解"]
+    service.create_question(both)
+
+    assert service.count_available("数学", Difficulty.MEDIUM, QuestionType.SINGLE) == 3
+    assert (
+        service.count_available(
+            "数学", Difficulty.MEDIUM, QuestionType.SINGLE, ["一元二次方程"]
+        )
+        == 2
+    )
+    # 多个知识点按"命中任一"统计
+    assert (
+        service.count_available(
+            "数学", Difficulty.MEDIUM, QuestionType.SINGLE, ["因式分解"]
+        )
+        == 2
+    )
+    # 空列表等同不限
+    assert (
+        service.count_available("数学", Difficulty.MEDIUM, QuestionType.SINGLE, [])
+        == 3
+    )
+    # 不存在的知识点使命中量为 0
+    assert (
+        service.count_available(
+            "数学", Difficulty.MEDIUM, QuestionType.SINGLE, ["不存在的知识点"]
+        )
+        == 0
+    )
 
 
 def test_ai_supplement_requires_confirmation(container) -> None:
@@ -403,6 +572,9 @@ def test_recognize_can_skip_solution(container) -> None:
     result = service.recognize_draft("题干", [], include_solution=False, confirmed=True)
     assert result["solution"] == ""
     assert "不要输出解题解析" in fake.prompts[0]
+    # 不输出解析时，提示词与期望结构都不含解析模块
+    assert "solution：" not in fake.prompts[0]
+    assert "solution" not in fake.schemas[0]["properties"]
 
     with_solution = service.recognize_draft(
         "题干", [], include_solution=True, confirmed=True

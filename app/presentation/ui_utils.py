@@ -28,6 +28,7 @@ from app.domain.enums import (
     QuestionOpAction,
     QuestionSource,
     QuestionType,
+    RecognizeModule,
     SectionKind,
 )
 from app.domain.errors import DomainError
@@ -82,6 +83,17 @@ OP_ACTION_LABELS: dict[QuestionOpAction, str] = {
     QuestionOpAction.IMPORT: "导入",
 }
 
+#: AI 辨识模块 -> 中文标签（模块化输出与逐项检查统一口径）
+RECOGNIZE_MODULE_LABELS: dict[RecognizeModule, str] = {
+    RecognizeModule.SUBJECT: "科目",
+    RecognizeModule.KNOWLEDGE_POINTS: "知识点",
+    RecognizeModule.QUESTION_TYPE: "题型",
+    RecognizeModule.DIFFICULTY: "难度",
+    RecognizeModule.QUALITY_FLAG: "质量标记",
+    RecognizeModule.ANSWER: "答案",
+    RecognizeModule.SOLUTION: "解析",
+}
+
 
 def info(parent: QWidget, text: str, title: str = "提示") -> None:
     """信息提示对话框。"""
@@ -129,6 +141,36 @@ def confirm_action(
     box.addButton(reject_text, QMessageBox.ButtonRole.RejectRole)
     box.exec()
     return box.clickedButton() is accept_button
+
+
+def choose_action(
+    parent: QWidget,
+    text: str,
+    title: str = "请确认",
+    actions: list[tuple[str, str]] | None = None,
+) -> str | None:
+    """多按钮选择框，返回被点击按钮的键（用于"AI 填充 / 手动补齐 / 取消"三选一）。
+
+    :param text: 提示正文（逐项检查结果等）
+    :param actions: ``[(键, 按钮文案)]``；最后一个按钮承担"取消 / 拒绝"角色，
+        直接关闭对话框时返回 ``None``
+    :return: 被点击按钮的键；未选择任何按钮时返回 ``None``
+    """
+    options = actions or [("ok", "确定"), ("cancel", "取消")]
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title)
+    box.setText(text)
+    mapping: dict[object, str] = {}
+    for index, (key, label) in enumerate(options):
+        role = (
+            QMessageBox.ButtonRole.AcceptRole
+            if index < len(options) - 1
+            else QMessageBox.ButtonRole.RejectRole
+        )
+        mapping[box.addButton(label, role)] = key
+    box.exec()
+    return mapping.get(box.clickedButton())
 
 
 def run_guarded(

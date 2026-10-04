@@ -119,13 +119,32 @@ class SQLiteQuestionRepository(QuestionRepository):
         return [self._row_to_question(row) for row in rows]
 
     def count_available(
-        self, subject: str, difficulty: str, question_type: str
+        self,
+        subject: str,
+        difficulty: str,
+        question_type: str,
+        knowledge_points: list[str] | None = None,
     ) -> int:
-        """统计命中题数量（需求 R6 第 2 条），供组卷前展示与 AI 补题判断。"""
+        """统计命中题数量（需求 R6 第 2 条），供组卷前展示与 AI 补题判断。
+
+        ``knowledge_points`` 非空时按"命中任一指定知识点"过滤（用户需求：
+        组卷时可指定知识点）；knowledge_points 列为 JSON 文本，沿用 LIKE 匹配。
+        """
+        clauses = ["subject = ?", "difficulty = ?", "type = ?"]
+        params: list[object] = [
+            subject,
+            Difficulty(difficulty).value,
+            QuestionType(question_type).value,
+        ]
+        points = [str(point).strip() for point in (knowledge_points or []) if str(point).strip()]
+        if points:
+            clauses.append(
+                "(" + " OR ".join("knowledge_points LIKE ?" for _ in points) + ")"
+            )
+            params.extend(f"%{point}%" for point in points)
         row = self._db.connect().execute(
-            "SELECT COUNT(*) AS total FROM questions "
-            "WHERE subject = ? AND difficulty = ? AND type = ?",
-            (subject, Difficulty(difficulty).value, QuestionType(question_type).value),
+            "SELECT COUNT(*) AS total FROM questions WHERE " + " AND ".join(clauses),
+            params,
         ).fetchone()
         return int(row["total"]) if row is not None else 0
 

@@ -12,10 +12,11 @@
 """
 
 import json
-import socket
+import threading
 import urllib.error
 import urllib.request
 from typing import Callable
+from urllib.response import addinfourl
 
 from app.domain.entities.configs import AIConfig
 from app.domain.errors import AIConfigMissingError, AIServiceError
@@ -63,7 +64,18 @@ class OpenAICompatibleAIClient(AIClient):
     def _request(
         config: AIConfig, prompt: str, response_schema: dict | None
     ) -> str:
-        """发起一次 HTTP 请求，返回模型回复的文本内容。"""
+        """发起一次 HTTP 请求，返回模型回复的文本内容。
+
+        超时约束（需求 R15 第 4 条）分两阶段，且**不修改全局 socket 默认超时**，
+        以免在 GUI 主线程里临时干扰 Qt 事件循环与其他 socket 连接：
+
+        - 连接阶段：交给 ``urllib.request.urlopen(timeout=...)``，超时抛出
+          ``URLError``（原因值为 ``socket.timeout``）；
+        - 响应体读取阶段：服务端已接受连接却迟迟不返回 body 时，
+          ``urlopen`` 的 ``timeout`` 不起作用，会永久阻塞 GUI，因此改为在
+          守护线程里读取，主线程用 ``join(timeout)`` 等待，超时后关闭
+          socket 并抛出 ``AIServiceError``。
+        """
         url = config.base_url.rstrip("/") + "/chat/completions"
         payload: dict = {
             "model": config.model,
@@ -85,7 +97,7 @@ class OpenAICompatibleAIClient(AIClient):
         timeout = max(1.0, float(config.timeout_ms) / 1000.0)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8", errors="replace")
+                body = self._read_body(response, timeout)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:200]
             raise AIServiceError(f"AI 服务返回 HTTP {exc.code}：{detail}") from exc
@@ -94,6 +106,37 @@ class OpenAICompatibleAIClient(AIClient):
             return str(parsed["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise AIServiceError(f"AI 服务响应格式非法：{exc}") from exc
+
+    @staticmethod
+    def _read_body(response: "addinfourl", timeout: float) -> str:
+        """在守护线程里读取 body，主线程用 ``join`` 控制读取阶段超时。
+
+        :param response: 已拿到 status / headers 的响应对象
+        :param timeout: 读取阶段超时（秒）
+        :return: 响应体解码后的文本
+        :raises AIServiceError: 读取超时或读取失败
+        """
+        container: dict[str, object] = {}
+
+        def target() -> None:
+            try:
+                container["body"] = response.read().decode("utf-8", errors="replace")
+            except Exception as exc:  # noqa: BLE001 - 跨线程传递，上层统一归类
+                container["error"] = exc
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            # 服务端接受连接后不发 body，关闭 socket 迫使读取端失败并释放资源。
+            try:
+                response.close()
+            except Exception:
+                pass
+            raise AIServiceError(f"AI 响应体读取超时（{timeout:g}s），请检查 AI 服务可用性")
+        if "error" in container:
+            raise AIServiceError(f"AI 响应体读取失败：{container['error']}")
+        return container["body"]  # type: ignore[no-any-return]
 
     @staticmethod
     def _parse(content: str, response_schema: dict | None) -> dict:

@@ -58,6 +58,7 @@
 *.sqlite
 *.sqlite3
 images/
+exports/
 **/.Python
 **/build/
 **/develop-eggs/

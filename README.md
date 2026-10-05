@@ -2,7 +2,7 @@
 
 面向教师与培训人员的桌面端自动出题与组卷工具：手工建库（选择题 + 解答题）、
 AI API 自动标注难度（易/中/难）、按"评分决策 + 加权随机"选题
-（近期重复抑制）、导出 TXT / PDF 试卷（卷末附答案页）。
+（近期重复抑制）、导出 MD / PDF 试卷（PDF 由 MD 转换，卷末附答案页）。
 
 - 需求文档：`.monkeycode/specs/question-paper-generator/requirements.md`
 - 技术设计：`.monkeycode/specs/question-paper-generator/design.md`
@@ -49,7 +49,8 @@ AI API 自动标注难度（易/中/难）、按"评分决策 + 加权随机"选
   批量粘贴在「解析预览」时就会弹窗检查并可选 AI 填充，必填项为科目 / 知识点 / 答案，
   难度 / 解析缺失时允许直接保存；**题干与选项残缺时也可由 AI 补全**
 - 修改题目时可「取消编辑」退出编辑状态
-- 试卷导出：TXT / PDF，按部分与题型分区、含小计与总分、卷末答案页
+- 试卷导出：MD / PDF（PDF 由该 MD 用 pymd2pdf 转换），导出到工作区根目录下程序自建的
+  `exports/` 文件夹，按部分与题型分区、含小计与总分、卷末答案页
 
 ## 目录结构
 
@@ -58,7 +59,7 @@ app/
 ├── domain/          领域层：实体、枚举、校验器（零外部依赖）
 ├── interfaces/      接口层：仓储 / 操作台账 / AI 客户端 / 导出器抽象（端口）
 ├── application/     应用服务层：题目服务与 AI 辨识、评分、抽样、组卷编排等用例
-├── infrastructure/  基础设施层：SQLite 仓储、图片存储、AI 客户端、TXT/PDF 导出
+├── infrastructure/  基础设施层：SQLite 仓储、图片存储、AI 客户端、MD/PDF 导出
 ├── presentation/    表现层：PySide6 主窗口与四个视图（题库 / 组卷 / 历史 / 设置）
 ├── config/          默认配置（评分权重 / 冷却窗口 / AI 参数 / 科目 / 提示词）
 └── container.py     组合根：装配完整对象图

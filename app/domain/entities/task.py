@@ -20,7 +20,7 @@ class ExportRecord:
     """一次导出的记录值对象（需求 R12 第 8 条）。"""
 
     format: ExportFormat
-    """导出格式：TXT / PDF。"""
+    """导出格式：MD / PDF。"""
 
     file_path: str
     """导出文件的绝对或相对路径。"""

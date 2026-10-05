@@ -91,8 +91,8 @@ flowchart LR
 | `infrastructure/repositories/usage_repository.py` | `database/connection`、`database/schema`（question_usage 表）、`domain/entities/usage_record` | `interfaces/repositories.UsageRepository` | `app/container.py` |
 | `infrastructure/repositories/task_repository.py` | `database/connection`、`database/schema`（generation_tasks 等表）、`domain/entities/task` | `interfaces/repositories.TaskRepository` | `app/container.py` |
 | `infrastructure/ai/ai_client.py` | 标准库 `urllib`/`json`/`socket`、`domain/entities/configs.AIConfig`、`domain/errors` | `interfaces/ai_client.AIClient` | `app/container.py` |
-| `infrastructure/exporters/txt_exporter.py` | 标准库 pathlib、`domain/entities/{configs,paper}`、`domain/errors` | `interfaces/exporters.BaseExporter` | `app/container.py`（注册）、`infrastructure/exporters/pdf_exporter.py`（目录校验复用） |
-| `infrastructure/exporters/pdf_exporter.py` | `reportlab`（方法内惰性导入）、`txt_exporter`（目录校验） | `interfaces/exporters.BaseExporter` | `app/container.py`（注册） |
+| `infrastructure/exporters/md_exporter.py` | 标准库 pathlib、`config/settings`（默认导出目录）、`domain/entities/{configs,paper,question}`、`domain/errors` | `interfaces/exporters.BaseExporter` | `app/container.py`（注册）、`infrastructure/exporters/pdf_exporter.py`（PDF 的 MD 来源） |
+| `infrastructure/exporters/pdf_exporter.py` | `pymd2pdf`（方法内惰性导入）、`md_exporter`（先生成 MD）、`config/settings`（转换缓存目录） | `interfaces/exporters.BaseExporter` | `app/container.py`（注册） |
 | `infrastructure/config_store.py` | `database/connection`、`database/schema`（settings 表）、`domain/entities/configs`、`config/settings`（默认值回退） | `interfaces/repositories.ConfigStore` | `app/container.py`、`presentation/views/settings_view` |
 | `infrastructure/image_store.py` | 标准库 `shutil`/`uuid`/`pathlib`、`domain/errors` | —（容器直接持有具体实现） | `app/container.py`、`presentation/views/question_bank_view` |
 | `infrastructure/repositories/question_op_repository.py` | `database/connection`、`database/schema`（question_operations 表）、`domain/entities/question_op`、`domain/enums` | `interfaces/repositories.QuestionOpRepository` | `app/container.py`（装配给 QuestionService / QuestionHistoryService） |
@@ -123,7 +123,8 @@ HistoryView.reuse_criteria_requested(criteria)
 | 包 | 版本 | 使用位置 | 用途 |
 |----|------|----------|------|
 | PySide6 | >=6.6 | `presentation/*`、`main.py` | 桌面 GUI |
-| reportlab | >=4.0 | `infrastructure/exporters/pdf_exporter.py`（惰性导入） | PDF 试卷渲染 |
+| reportlab | >=4.0 | `tests/test_paper_import.py` | 测试中生成样例 PDF |
+| pymd2pdf | 最新 | `infrastructure/exporters/pdf_exporter.py`（惰性导入，导入名 `md2pdf`） | Markdown 试卷转 PDF |
 | requests | >=2.31 | （可选）AI 调用已改用标准库 urllib | AI API HTTP 访问（备选） |
 | pytest | >=8.0 | `tests/*` | 测试 |
 

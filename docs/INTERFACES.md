@@ -127,16 +127,16 @@ class AIClient(ABC):
 
 ```python
 class BaseExporter(ABC):
-    def export(self, paper: Paper, target_dir: str,
+    def export(self, paper: Paper, target_dir: str | None = None,
                options: ExportOptions | None = None) -> str
 ```
 
 | 项 | 说明 |
 |----|------|
-| 实现 | `infrastructure/exporters/txt_exporter.py::TxtExporter`、`infrastructure/exporters/pdf_exporter.py::PdfExporter` |
+| 实现 | `infrastructure/exporters/md_exporter.py::MdExporter`（Markdown 源文件）、`infrastructure/exporters/pdf_exporter.py::PdfExporter`（由该 MD 用 pymd2pdf 转 PDF） |
 | 调用方 | `application/paper_exporter`（按 ExportFormat 路由） |
-| 语义 | 返回生成文件路径；排版契约：两部分分区 / 题型大题 / 小计与总分 / 卷末答案页 (R12) |
-| 异常 | `ExportError`：目录不可写 / 渲染依赖缺失（PDF 缺 reportlab 时提示改用 TXT，R18-4） |
+| 语义 | 返回生成文件路径；排版契约：两部分分区 / 题型大题 / 小计与总分 / 卷末答案页 (R12)；`target_dir` 为 None 时写入工作区根目录下的固定导出目录（程序自建，用户不再指定） |
+| 异常 | `ExportError`：目录不可写 / 渲染依赖缺失（PDF 缺 pymd2pdf 时提示改用 MD，R18-4） |
 
 ### 1.8 LocalImageStore —— 题目图片本地存储（用户需求）
 
@@ -449,7 +449,7 @@ def build_answer_page(self, paper: Paper) -> None    # 解答题答案含参考�
 PaperExporter(exporters: dict[ExportFormat, BaseExporter],
               score_validator: ScoreValidator)
 
-def export(self, paper: Paper, fmt: ExportFormat, target_dir: str,
+def export(self, paper: Paper, fmt: ExportFormat, target_dir: str | None = None,
            options: ExportOptions | None = None) -> str
 def supported_formats(self) -> list[ExportFormat]
 ```
@@ -507,12 +507,13 @@ PaperGenerationView
 ### 4.3 导出链
 
 ```text
-PaperGenerationView
-  -> PaperExporter.export(paper, fmt, target_dir)
+PaperGenerationView（导出目录固定为工作区根目录下的导出文件夹，程序自建）
+  -> PaperExporter.export(paper, fmt, target_dir=None)
        -> ScoreValidator.validate(paper)                       [R11-4]
        -> BaseExporter.export(paper, target_dir, options)      [R12]
-            TxtExporter  标准库渲染
-            PdfExporter  reportlab 渲染（惰性导入）
+            MdExporter   标准库渲染 Markdown 源文件（.md）
+            PdfExporter  先由 MdExporter 产出同名 .md，
+                         再用 pymd2pdf 转成同名 .pdf（惰性导入）
 ```
 
 ## 5. 数据表与接口的对应

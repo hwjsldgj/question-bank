@@ -41,8 +41,8 @@ from app.domain.validators.score_validator import ScoreValidator
 from app.infrastructure.ai.ai_client import OpenAICompatibleAIClient
 from app.infrastructure.config_store import SQLiteConfigStore
 from app.infrastructure.database.connection import DatabaseConnection
+from app.infrastructure.exporters.md_exporter import MdExporter
 from app.infrastructure.exporters.pdf_exporter import PdfExporter
-from app.infrastructure.exporters.txt_exporter import TxtExporter
 from app.infrastructure.image_store import LocalImageStore
 from app.infrastructure.repositories.question_op_repository import (
     SQLiteQuestionOpRepository,
@@ -147,9 +147,11 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         scoring_config,
     )
 
+    # 导出：MD 为源文件，PDF 由同一份 MD 转换（用户需求）
+    md_exporter = MdExporter()
     exporters: dict[ExportFormat, BaseExporter] = {
-        ExportFormat.TXT: TxtExporter(),
-        ExportFormat.PDF: PdfExporter(),
+        ExportFormat.MD: md_exporter,
+        ExportFormat.PDF: PdfExporter(md_exporter),
     }
     paper_exporter = PaperExporter(exporters, score_validator)
     task_history_service = TaskHistoryService(task_repository)

@@ -112,8 +112,8 @@ class ExportOptions:
 
     :param include_answer_page: 是否在卷末附答案页（当前需求恒为 True，
         保留开关以便扩展）
-    :param formats: 允许的导出格式集合，当前支持 TXT / PDF
+    :param formats: 允许的导出格式集合，当前支持 MD / PDF
     """
 
     include_answer_page: bool = True
-    formats: tuple[ExportFormat, ...] = (ExportFormat.TXT, ExportFormat.PDF)
+    formats: tuple[ExportFormat, ...] = (ExportFormat.MD, ExportFormat.PDF)

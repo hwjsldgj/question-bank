@@ -1,10 +1,10 @@
-"""TxtExporter 单元测试：Markdown 排版、知识点板块与答案页。
+"""MdExporter 单元测试：Markdown 排版、知识点板块与答案页。
 
 导出会在目标目录写文件，用 pytest 的 ``tmp_path`` 作为导出目录。
 
 依赖：pytest、app.application.score_calculator、
-      app.infrastructure.exporters.txt_exporter
-被使用：python -m pytest tests/test_txt_exporter.py
+      app.infrastructure.exporters.md_exporter
+被使用：python -m pytest tests/test_md_exporter.py
 """
 
 from pathlib import Path
@@ -15,7 +15,7 @@ from app.domain.entities.criteria import PaperCriteria, TypeRequirement
 from app.domain.entities.paper import Paper, Section
 from app.domain.entities.question import Option, Question
 from app.domain.enums import Difficulty, QuestionType, SectionKind
-from app.infrastructure.exporters.txt_exporter import TxtExporter
+from app.infrastructure.exporters.md_exporter import MdExporter
 
 
 def _single_question(section: str) -> Question:
@@ -64,11 +64,11 @@ def _read(path: str) -> str:
 
 
 def test_export_writes_markdown_with_knowledge_section(tmp_path) -> None:
-    """导出文件为 Markdown 文本，并带上题面的知识点板块（用户需求）。"""
-    path = TxtExporter().export(_paper(_single_question("代数")), str(tmp_path))
+    """导出文件为同名 .md，内容为 Markdown 并带上题面的知识点板块（用户需求）。"""
+    path = MdExporter().export(_paper(_single_question("代数")), str(tmp_path))
     text = _read(path)
 
-    assert path.endswith(".txt")
+    assert path.endswith(".md")
     assert text.startswith("# 试卷")
     assert "**总分：2 分**" in text
     assert "知识点板块：代数" in text
@@ -80,7 +80,16 @@ def test_export_writes_markdown_with_knowledge_section(tmp_path) -> None:
 
 def test_export_without_section_omits_the_line(tmp_path) -> None:
     """题目未填知识点板块时不输出板块行。"""
-    path = TxtExporter().export(
+    path = MdExporter().export(
         _paper(_single_question("")), str(tmp_path), ExportOptions()
     )
     assert "知识点板块：" not in _read(path)
+
+
+def test_export_creates_default_dir_when_missing(tmp_path) -> None:
+    """导出目录由程序创建：目录不存在时自动建好（用户需求）。"""
+    target = tmp_path / "exports"
+    assert not target.exists()
+    path = MdExporter().export(_paper(_single_question("代数")), str(target))
+    assert target.is_dir()
+    assert Path(path).parent == target

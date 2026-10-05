@@ -18,6 +18,12 @@ DEFAULT_DB_PATH = "question_bank.db"
 #: 题目图片的本地存放目录（相对数据库所在目录）
 DEFAULT_IMAGE_DIR = "images"
 
+#: 试卷导出目录（工作区根目录下的固定文件夹，由程序创建；用户不再指定路径）
+DEFAULT_EXPORT_DIR = "exports"
+
+#: md2pdf 的转换缓存目录（放在工作区内的 .cache 下，避免写入用户主目录）
+DEFAULT_MD2PDF_CACHE_DIR = ".cache/pymd2pdf"
+
 #: 默认科目列表：科目改为"只能从列表中选择"，新科目在设置界面维护
 DEFAULT_SUBJECTS: list[str] = [
     "语文",

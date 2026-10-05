@@ -36,7 +36,7 @@ def test_domain_enums_exist() -> None:
     assert QuestionType.SINGLE.value == "single"
     assert QuestionType.SOLUTION.value == "solution"
     assert Difficulty.PENDING.value == "pending"
-    assert ExportFormat.TXT.value == "txt"
+    assert ExportFormat.MD.value == "md"
     assert ExportFormat.PDF.value == "pdf"
 
 

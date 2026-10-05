@@ -207,7 +207,7 @@ class MainWindow(QMainWindow):
             "题库优先、评分决策、加权随机的桌面端组卷工具。\n"
             "支持科目选择式录入、题目图片导入、AI 辨识（仅供参考）与\n"
             "AI 提示词自定义；导出按「选择题 / 解答题」两部分分区、\n"
-            "含分值与总分、卷末附答案页的 TXT / PDF 试卷。\n\n"
+            "含分值与总分、卷末附答案页的 MD / PDF 试卷。\n\n"
             "需求与设计见 .monkeycode/specs/question-paper-generator/",
         )
 

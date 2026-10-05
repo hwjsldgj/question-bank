@@ -33,14 +33,14 @@ class PaperExporter:
         self,
         paper: Paper,
         fmt: ExportFormat,
-        target_dir: str,
+        target_dir: str | None = None,
         options: ExportOptions | None = None,
     ) -> str:
         """导出试卷并返回文件路径（需求 R12 第 7 条）。
 
         :param paper: 待导出试卷（分值必须完整）
-        :param fmt: 导出格式 TXT / PDF
-        :param target_dir: 目标目录
+        :param fmt: 导出格式 MD / PDF（PDF 由同一次导出的 MD 转换而来）
+        :param target_dir: 目标目录；None 时用工作区根目录下的固定导出目录
         :param options: 导出选项；None 时使用默认值
         :return: 生成的文件完整路径
         :raises app.domain.errors.ScoreValidationError: 分值不完整

@@ -15,7 +15,8 @@
   只显示统计表，不显示题目正文
 - 生成试卷：调用 PaperComposer（题库不足按实际可提供数量出卷）
 - 试卷预览与分值：原有展示与分值设置逻辑不变，表格高度为原 3 倍
-- 导出：选择 TXT / PDF 与目标目录，调用 PaperExporter
+- 导出：选择 MD / PDF 并导出到工作区根目录下程序自建的导出文件夹（用户不再指定路径），
+  PDF 由同一次导出的 Markdown 源文件转换而来
 
 数据流：上方配置 -> 各题型配置表与中间统计实时更新（300ms 防抖）；
 下方预览在点击"生成试卷"时按最新配置渲染。
@@ -27,7 +28,7 @@
 被使用：app.presentation.main_window
 """
 
-import os
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -35,13 +36,11 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QPushButton,
     QSpinBox,
     QStyledItemDelegate,
@@ -51,6 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.config.settings import DEFAULT_EXPORT_DIR
 from app.domain.entities.configs import ExportOptions
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement
 from app.domain.entities.paper import Paper, Section
@@ -411,30 +411,27 @@ class PaperGenerationView(QWidget):
         return group
 
     def _build_export_group(self) -> QGroupBox:
-        """构建导出区：格式、目录与导出按钮。"""
+        """构建导出区：格式 + 固定导出目录展示 + 导出按钮（用户需求）。"""
         group = QGroupBox("导出")
         layout = QHBoxLayout(group)
 
         self._format_combo = QComboBox()
         formats = ui_utils.safe_call(self._exporter.supported_formats, default=None)
         if not formats:
-            formats = [ExportFormat.TXT, ExportFormat.PDF]
+            formats = [ExportFormat.MD, ExportFormat.PDF]
         for fmt in formats:
             self._format_combo.addItem(
                 ui_utils.EXPORT_FORMAT_LABELS.get(fmt, str(fmt)), fmt
             )
 
-        self._target_dir_edit = QLineEdit(os.getcwd())
-        browse_button = QPushButton("浏览…")
-        browse_button.clicked.connect(self._on_browse_dir)
         export_button = QPushButton("导出试卷")
         export_button.clicked.connect(self._on_export)
 
         layout.addWidget(QLabel("格式"))
         layout.addWidget(self._format_combo)
-        layout.addWidget(QLabel("目录"))
-        layout.addWidget(self._target_dir_edit, 1)
-        layout.addWidget(browse_button)
+        layout.addWidget(
+            QLabel(f"导出目录：{Path(DEFAULT_EXPORT_DIR).resolve()}（程序自动创建）"), 1
+        )
         layout.addWidget(export_button)
         return group
 
@@ -979,21 +976,14 @@ class PaperGenerationView(QWidget):
 
     # --------------------------------------------------------------- 导出
 
-    def _on_browse_dir(self) -> None:
-        """选择导出目录。"""
-        current = self._target_dir_edit.text().strip() or os.getcwd()
-        directory = QFileDialog.getExistingDirectory(self, "选择导出目录", current)
-        if directory:
-            self._target_dir_edit.setText(directory)
-
     def _on_export(self) -> None:
-        """导出试卷为 TXT / PDF（需求 R12 / R18）。"""
+        """导出试卷为 MD / PDF（需求 R12 / R18）。
+
+        导出目录由程序固定在工作区根目录下的导出文件夹，不再由用户指定；
+        PDF 由同一次导出的 Markdown 源文件转换而来（用户需求）。
+        """
         if self._paper is None:
             ui_utils.info(self, "请先生成试卷。")
-            return
-        target_dir = self._target_dir_edit.text().strip()
-        if not target_dir:
-            ui_utils.warning(self, "请先选择导出目录。")
             return
         fmt = self._format_combo.currentData()
         ok, path = ui_utils.run_guarded(
@@ -1001,7 +991,7 @@ class PaperGenerationView(QWidget):
             self._exporter.export,
             self._paper,
             fmt,
-            target_dir,
+            None,
             ExportOptions(),
         )
         if ok:

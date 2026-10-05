@@ -84,9 +84,13 @@ class SectionKind(str, Enum):
 
 
 class ExportFormat(str, Enum):
-    """导出格式：TXT / PDF（需求 R12）。"""
+    """导出格式：MD / PDF（需求 R12）。
 
-    TXT = "txt"
+    ``MD`` 输出 Markdown 源文件（原 TXT 输出改为 .md，内容不变）；
+    ``PDF`` 由同一份 Markdown 转换而来。
+    """
+
+    MD = "md"
     PDF = "pdf"
 
 

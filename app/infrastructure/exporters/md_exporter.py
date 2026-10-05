@@ -1,17 +1,20 @@
-"""TxtExporter：Markdown 排版的 TXT 导出器（需求 R12 / R18）。
+"""MdExporter：Markdown 试卷导出器（需求 R12 / R18）。
 
 实现接口：app.interfaces.exporters.BaseExporter
-依赖：标准库 pathlib、app.domain.entities.paper、app.domain.errors.ExportError
-被使用：app.container（注册到 PaperExporter 的格式映射）
+依赖：标准库 pathlib、app.config.settings（默认导出目录）、
+      app.domain.entities.paper、app.domain.errors.ExportError
+被使用：app.container（注册到 PaperExporter 的格式映射）、
+        app.infrastructure.exporters.pdf_exporter（PDF 由本导出的 MD 转换）
 
-排版契约：文件内容为 Markdown 文本（``.txt`` 后缀），分"选择题 / 填空题 /
-解答题"三部分，按题型分大题，分区标题含数量与分值小计、文档标明总分，
-卷末附独立答案页。
+排版契约：文件内容为 Markdown 文本（``.md`` 后缀，原 TXT 输出改为 .md，内容不变），
+分"选择题 / 填空题 / 解答题"三部分，按题型分大题，分区标题含数量与分值小计、
+文档标明总分，卷末附独立答案页。默认写入工作区根目录下的固定导出文件夹。
 """
 
 from datetime import datetime
 from pathlib import Path
 
+from app.config.settings import DEFAULT_EXPORT_DIR
 from app.domain.entities.configs import ExportOptions
 from app.domain.entities.paper import Paper, Section
 from app.domain.entities.question import split_sections
@@ -38,22 +41,24 @@ _TYPE_TITLES: dict[QuestionType, str] = {
 _ORDINALS = "一二三四五六七八九十"
 
 
-class TxtExporter(BaseExporter):
-    """TXT 格式导出器：Markdown 文本排版实现。"""
+class MdExporter(BaseExporter):
+    """MD 格式导出器：Markdown 源文件排版实现。"""
 
     def export(
         self,
         paper: Paper,
-        target_dir: str,
+        target_dir: str | None = None,
         options: ExportOptions | None = None,
     ) -> str:
-        """渲染 Markdown 试卷并写入 target_dir，返回文件完整路径。
+        """渲染 Markdown 试卷并写入导出目录，返回文件完整路径。
 
-        :raises ExportError: 目标目录不可写或写盘失败时抛出（需求 R18 第 3 条）
+        :param target_dir: 目标目录；None 时用工作区根目录下的固定导出目录
+            （用户需求：导出目录由程序指定，不再由用户选择）
+        :raises ExportError: 目录不可写或写盘失败时抛出（需求 R18 第 3 条）
         """
         options = options or ExportOptions()
-        directory = self._ensure_target_dir(target_dir)
-        path = directory / f"试卷_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        directory = self._ensure_target_dir(target_dir or DEFAULT_EXPORT_DIR)
+        path = directory / f"试卷_{datetime.now():%Y%m%d_%H%M%S}.md"
         try:
             path.write_text(self._render(paper, options), encoding="utf-8")
         except OSError as exc:
@@ -66,10 +71,10 @@ class TxtExporter(BaseExporter):
         lines = ["# 试卷", "", f"**总分：{paper.total_score:g} 分**", ""]
         number = 0
         for index, section in enumerate(paper.sections, start=1):
-            lines.extend(TxtExporter._render_section(section, index, number + 1))
+            lines.extend(MdExporter._render_section(section, index, number + 1))
             number += len(section.questions)
         if options.include_answer_page:
-            lines.extend(TxtExporter._render_answer_page(paper))
+            lines.extend(MdExporter._render_answer_page(paper))
         return "\n".join(lines).rstrip() + "\n"
 
     @staticmethod
@@ -131,8 +136,15 @@ class TxtExporter(BaseExporter):
 
     @staticmethod
     def _ensure_target_dir(target_dir: str) -> Path:
-        """校验目标目录存在且为目录，非法时抛出 ExportError。"""
+        """返回可写的导出目录，不存在时创建（用户需求：程序自建导出文件夹）。
+
+        :raises ExportError: 路径被同名的文件占用或无法创建时抛出
+        """
         path = Path(str(target_dir)).expanduser()
-        if not path.is_dir():
-            raise ExportError(f"导出目录不存在或不是目录：{path}")
+        if path.is_dir():
+            return path
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ExportError(f"无法创建导出目录：{path}（{exc}）") from exc
         return path

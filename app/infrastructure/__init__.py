@@ -5,7 +5,7 @@
 - ``database``       SQLite 连接管理与建表迁移
 - ``repositories``   题目 / 使用记录 / 组卷任务的 SQLite 仓储实现
 - ``ai``             OpenAI 兼容 AI API 客户端实现
-- ``exporters``      TXT / PDF 导出器实现
+- ``exporters``      MD / PDF 导出器实现（PDF 由 MD 转换）
 - ``config_store``   AI 与评分配置的本机持久化实现
 
 约束：本层只允许被 app.container（组合根）与 main.py 直接构造；

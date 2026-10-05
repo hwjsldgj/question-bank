@@ -77,7 +77,7 @@ workspace/
 │   │   ├── repositories/          题目 / 使用记录 / 任务 / 操作台账的 SQLite 实现
 │   │   ├── ai/                    OpenAI 兼容 AI 客户端（urllib 实现，含重试与降级）
 │   │   ├── image_store.py         题目图片本地存储（复制 + 相对路径解析）
-│   │   ├── exporters/             TXT / PDF 导出器
+│   │   ├── exporters/             MD / PDF 导出器（PDF 由 MD 转换）
 │   │   └── config_store.py        配置持久化实现（AI / 评分 / 提示词 / 科目）
 │   └── presentation/              表现层（PySide6）
 │       ├── main_window.py         主窗口（菜单 / 状态栏 / 四标签页 / 信号协调）
@@ -117,7 +117,8 @@ PaperGenerationView -> PaperComposer.generate
 ```text
 PaperGenerationView -> PaperExporter.export
     -> ScoreValidator.validate             分值完整性校验（缺分值阻止导出）
-    -> TxtExporter / PdfExporter           按格式渲染（两部分 / 分区小计 / 总分 / 答案页）
+    -> MdExporter / PdfExporter           按格式渲染（两部分 / 分区小计 / 总分 / 答案页）；
+                                          PDF 由 MdExporter 产出的同名 .md 用 pymd2pdf 转换
 ```
 
 ### 3.4 AI 辨识链（用户需求：模块化输出、按需给出、一次返回）

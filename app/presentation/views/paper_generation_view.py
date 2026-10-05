@@ -94,8 +94,11 @@ _DIFFICULTIES: tuple[Difficulty, ...] = (
     Difficulty.HARD,
 )
 
-#: 单个题型配置表的最大高度（内部滚动，避免行数多时挤占下方预览）
-_CONFIG_TABLE_HEIGHT = 160
+#: 原中间汇总表的高度（配置表与汇总表高度的基准）
+_SUMMARY_TABLE_HEIGHT = 120
+
+#: 配置表与中间汇总表的高度 = 原中间汇总表高度 × 2（用户需求：两者都加高）
+_TABLE_HEIGHT = _SUMMARY_TABLE_HEIGHT * 2
 
 #: 试卷预览表格高度 = 原始高度 × 本系数（用户需求：高度为原 3 倍）
 _PREVIEW_HEIGHT_FACTOR = 3
@@ -281,7 +284,8 @@ class PaperGenerationView(QWidget):
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        table.setMaximumHeight(_CONFIG_TABLE_HEIGHT)
+        table.setMaximumHeight(_TABLE_HEIGHT)
+        table.setMinimumHeight(_TABLE_HEIGHT)
         table.setItemDelegateForColumn(3, _DifficultyDelegate(table))
         table.setItemDelegateForColumn(4, _CountDelegate(table))
         table.itemChanged.connect(self._on_conditions_changed)
@@ -331,7 +335,8 @@ class PaperGenerationView(QWidget):
         self._stats_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
         )
-        self._stats_table.setMinimumHeight(120)
+        self._stats_table.setMinimumHeight(_TABLE_HEIGHT)
+        self._stats_table.setMaximumHeight(_TABLE_HEIGHT)
         layout.addWidget(self._stats_table)
         return group
 

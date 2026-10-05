@@ -97,6 +97,18 @@ def _add_row(
     )
 
 
+def test_config_and_summary_table_heights(window) -> None:
+    """配置表与中间汇总表高度为原中间汇总表的两倍（用户需求）。"""
+    view = window.paper_generation_view
+    original_summary_height = 120
+    expected = original_summary_height * 2
+    assert view._stats_table.minimumHeight() == expected
+    assert view._stats_table.maximumHeight() == expected
+    for table in view._type_tables.values():
+        assert table.minimumHeight() == expected
+        assert table.maximumHeight() == expected
+
+
 def test_single_and_multiple_are_separately_enabled(window) -> None:
     """组卷时单选与多选分开启用，且只按配置表里的行出题（用户需求）。"""
     view = window.paper_generation_view

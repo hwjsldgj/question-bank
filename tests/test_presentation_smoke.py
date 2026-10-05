@@ -349,12 +349,12 @@ def test_search_results_have_knowledge_points_and_compact_rows(window) -> None:
 
 
 def test_search_filters_by_knowledge_section(window) -> None:
-    """检索可按知识点板块过滤，板块候选随科目联动（用户需求）。"""
+    """检索可按知识点板块过滤；一道题可属于多个板块，命中任一即匹配（用户需求）。"""
     from app.domain.entities.question import Option, Question
 
     bank = window.question_bank_view
     service = bank._question_service
-    for section, stem in (("代数", "板块题"), ("几何", "几何题")):
+    for section, stem in (("代数", "板块题"), ("几何", "几何题"), ("代数、几何", "多板块题")):
         service.create_question(
             Question(
                 id="",
@@ -376,8 +376,36 @@ def test_search_filters_by_knowledge_section(window) -> None:
     bank._search_section.setCurrentIndex(bank._search_section.findData("代数"))
     bank._search_knowledge.setText("")
     bank._on_search()
-    assert bank._result_table.rowCount() == 1
-    assert bank._result_table.item(0, 2).text() == "代数"
+    sections = [
+        bank._result_table.item(row, 2).text()
+        for row in range(bank._result_table.rowCount())
+    ]
+    assert "代数" in sections
+    assert "代数、几何" in sections  # 多板块题也能被单个板块筛出
+
+    # 板块框可输入多个板块（逗号 / 顿号分隔）
+    bank._search_section.setEditText("代数、几何")
+    bank._on_search()
+    assert bank._result_table.rowCount() == len(sections)
+
+
+def test_entry_form_accepts_multiple_knowledge_sections(window) -> None:
+    """录入页知识点板块可填多个，知识点补全取所选板块的并集（用户需求）。"""
+    bank = window.question_bank_view
+    bank._subject_combo.setCurrentIndex(bank._subject_combo.findText("数学"))
+    bank._reload_sections()
+    bank._section_combo.setEditText("代数，几何")
+    bank._reload_knowledge_completer()
+
+    draft = bank._build_draft()
+    assert draft.section == "代数、几何"
+
+    model = bank._knowledge_completer.model()
+    candidates = [model.index(row, 0).data() for row in range(model.rowCount())]
+    assert len(candidates) == len(set(candidates)) > 0
+    # 科目全部知识点中，两个板块的细分知识点都在候选里
+    all_points = bank._question_service.list_knowledge_points("数学")
+    assert set(candidates) <= set(all_points)
 
 
 def test_history_summary_includes_knowledge_section(window) -> None:

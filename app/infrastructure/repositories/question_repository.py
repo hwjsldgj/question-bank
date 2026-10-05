@@ -11,7 +11,12 @@ import json
 import uuid
 from datetime import datetime
 
-from app.domain.entities.question import Option, Question, QuestionFilter
+from app.domain.entities.question import (
+    Option,
+    Question,
+    QuestionFilter,
+    split_sections,
+)
 from app.domain.enums import (
     Difficulty,
     DifficultySource,
@@ -104,8 +109,10 @@ class SQLiteQuestionRepository(QuestionRepository):
             clauses.append("subject = ?")
             params.append(question_filter.subject)
         if question_filter.section:
-            clauses.append("section = ?")
-            params.append(question_filter.section)
+            # 一道题可属于多个知识点板块：命中任一板块即匹配（用户需求）
+            sections = split_sections(question_filter.section)
+            clauses.append("(" + " OR ".join("section LIKE ?" for _ in sections) + ")")
+            params.extend(f"%{name}%" for name in sections)
         if question_filter.knowledge_point:
             clauses.append("knowledge_points LIKE ?")
             params.append(f"%{question_filter.knowledge_point}%")
@@ -134,8 +141,9 @@ class SQLiteQuestionRepository(QuestionRepository):
         """统计命中题数量（需求 R6 第 2 条），供组卷前展示与 AI 补题判断。
 
         ``knowledge_points`` 非空时按"命中任一指定知识点"过滤（用户需求：
-        组卷时可指定知识点）；``section`` 非空时按知识点板块过滤（用户需求：
-        组卷可选知识点板块作为限定）；knowledge_points 列为 JSON 文本，沿用 LIKE 匹配。
+        组卷时可指定知识点）；``section`` 非空时按知识点板块过滤，可写多个板块
+        （命中任一即计入，用户需求：一道题可属于多个板块）；knowledge_points
+        列为 JSON 文本，沿用 LIKE 匹配。
         """
         clauses = ["subject = ?", "difficulty = ?", "type = ?"]
         params: list[object] = [
@@ -144,8 +152,9 @@ class SQLiteQuestionRepository(QuestionRepository):
             QuestionType(question_type).value,
         ]
         if section:
-            clauses.append("section = ?")
-            params.append(section)
+            names = split_sections(section)
+            clauses.append("(" + " OR ".join("section LIKE ?" for _ in names) + ")")
+            params.extend(f"%{name}%" for name in names)
         points = [str(point).strip() for point in (knowledge_points or []) if str(point).strip()]
         if points:
             clauses.append(

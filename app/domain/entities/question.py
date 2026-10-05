@@ -10,6 +10,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 
 from app.domain.enums import (
     Difficulty,
@@ -50,7 +51,11 @@ class Question:
     """科目，组卷筛选的一级维度。"""
 
     section: str = ""
-    """所属知识点板块（科目的二级分组），录入时由出题者选中板块后确定。"""
+    """所属知识点板块（科目的二级分组）。
+
+    一道题可以属于多个板块（用户需求），多个板块以"、"分隔存储，
+    如 ``"代数、几何"``；拆分与匹配统一用 :func:`split_sections`。
+    """
 
     knowledge_points: list[str] = field(default_factory=list)
     """关联知识点列表，用于选题覆盖度计算与 AI 补题。"""
@@ -116,6 +121,19 @@ class Question:
         return self.is_choice
 
 
+def split_sections(text: str | None) -> list[str]:
+    """把板块文本拆分为板块列表（用户需求：一道题可属于多个知识点板块）。
+
+    支持顿号、逗号、分号与空白分隔，并去除重复与空白项，
+    与知识点的录入 / 匹配口径一致。
+
+    :param text: 形如 ``"代数、几何"`` 的板块文本；None 或空串返回空列表
+    :return: 去重后的板块列表（保持出现顺序）
+    """
+    parts = [part.strip() for part in re.split(r"[,，、;；\s]+", text or "")]
+    return list(dict.fromkeys(part for part in parts if part))
+
+
 @dataclass
 class QuestionFilter:
     """题库检索过滤器（需求 R6：按科目 / 知识点 / 难度 / 题型组合检索）。
@@ -127,7 +145,11 @@ class QuestionFilter:
     """精确匹配的科目；None 表示不限。"""
 
     section: str | None = None
-    """精确匹配的知识点板块；None 表示不限。"""
+    """知识点板块；None 表示不限。
+
+    可写单个板块或"代数、几何"这类多板块文本，命中其中任一板块的题目即匹配
+    （用户需求：一道题可属于多个板块）。
+    """
 
     knowledge_point: str | None = None
     """知识点（命中题目的 knowledge_points 列表即可）；None 表示不限。"""

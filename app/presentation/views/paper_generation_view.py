@@ -26,14 +26,12 @@
 """
 
 import os
-import re
 
-from PySide6.QtCore import Qt, QStringListModel, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QCompleter,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -54,7 +52,7 @@ from PySide6.QtWidgets import (
 from app.domain.entities.configs import ExportOptions
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement
 from app.domain.entities.paper import Paper, Section
-from app.domain.entities.question import Question
+from app.domain.entities.question import Question, split_sections
 from app.domain.enums import Difficulty, ExportFormat, QuestionType
 from app.presentation import ui_utils
 
@@ -234,11 +232,11 @@ class PaperGenerationView(QWidget):
 
     @staticmethod
     def _new_section_combo() -> QComboBox:
-        """构建知识点板块下拉框（用户需求：组卷可选知识点板块作为限定）。"""
-        combo = QComboBox()
-        combo.setMinimumWidth(140)
-        combo.addItem(_ANY_LABEL, "")
-        return combo
+        """构建知识点板块选择框（用户需求：组卷可按板块限定，可多个）。
+
+        一道题可属于多个板块，限定多个板块时命中任一板块的题目都算命中。
+        """
+        return ui_utils.new_multi_combo("不限（可多个，用逗号分隔）", 140)
 
     @staticmethod
     def _new_knowledge_combo() -> QComboBox:
@@ -246,20 +244,12 @@ class PaperGenerationView(QWidget):
 
         多个知识点用逗号 / 顿号分隔，留空表示不限。
         """
-        combo = QComboBox()
-        combo.setEditable(True)
-        combo.setMinimumWidth(160)
-        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        line_edit = combo.lineEdit()
-        if line_edit is not None:
-            line_edit.setPlaceholderText("不限（可多个，用逗号分隔）")
-        return combo
+        return ui_utils.new_multi_combo("不限（可多个，用逗号分隔）", 160)
 
     @staticmethod
     def parse_knowledge(text: str) -> list[str]:
         """把知识点输入文本拆分为知识点列表（支持中英文逗号、顿号与分号）。"""
-        parts = [part.strip() for part in re.split(r"[,，、;；\s]+", text or "")]
-        return [part for part in parts if part]
+        return split_sections(text)
 
     def _build_type_group(self, question_type: QuestionType) -> QGroupBox:
         """构建单个题型分组：原条件控件（含知识点板块）+ 追加的配置表。"""
@@ -290,8 +280,8 @@ class PaperGenerationView(QWidget):
         form.addRow("", hit)
         body_layout.addLayout(form)
 
-        section.currentIndexChanged.connect(
-            lambda _index=0, target=question_type: self._on_section_changed(target)
+        section.currentTextChanged.connect(
+            lambda _text="", target=question_type: self._on_section_changed(target)
         )
         knowledge.currentTextChanged.connect(self._on_conditions_changed)
         difficulty.currentIndexChanged.connect(self._on_conditions_changed)
@@ -496,44 +486,31 @@ class PaperGenerationView(QWidget):
             or []
         )
         for combo in self._type_sections.values():
-            current = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem(_ANY_LABEL, "")
-            for name in self._sections_map:
-                combo.addItem(name, name)
-            index = combo.findText(current)
-            combo.setCurrentIndex(index if index >= 0 else 0)
-            combo.blockSignals(False)
+            ui_utils.reload_combo_candidates(combo, list(self._sections_map))
         for question_type in _TYPE_ORDER:
             self._refresh_knowledge_candidates(question_type)
         self.refresh_hit_counts()
 
     def _section_of(self, question_type: QuestionType) -> str:
-        """读取某题型当前选定的知识点板块（"不限"返回空串）。"""
-        text = self._type_sections[question_type].currentText().strip()
-        return "" if text in ("", _ANY_LABEL) else text
+        """读取某题型选定的知识点板块（可多个，用"、"拼接；不限返回空串）。"""
+        return "、".join(
+            split_sections(self._type_sections[question_type].currentText())
+        )
 
     def _refresh_knowledge_candidates(self, question_type: QuestionType) -> None:
-        """按该题型选定的板块刷新知识点候选（未选板块时用科目全部知识点）。"""
-        section = self._section_of(question_type)
-        points = (
-            self._sections_map.get(section, self._subject_points)
-            if section
-            else self._subject_points
+        """按该题型选定的板块刷新知识点候选（多个板块取并集，未选则用科目全部）。"""
+        selected = split_sections(self._type_sections[question_type].currentText())
+        if selected:
+            points = [
+                point
+                for name in selected
+                for point in self._sections_map.get(name, [])
+            ]
+        else:
+            points = list(self._subject_points)
+        ui_utils.reload_combo_candidates(
+            self._type_knowledge[question_type], list(dict.fromkeys(points))
         )
-        combo = self._type_knowledge[question_type]
-        current = combo.currentText()
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(list(points))
-        combo.setCurrentIndex(-1)
-        combo.setEditText(current)
-        combo.blockSignals(False)
-        completer = QCompleter(QStringListModel(list(points), self), combo)
-        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        combo.setCompleter(completer)
 
     def _on_section_changed(self, question_type: QuestionType) -> None:
         """板块变化：按板块过滤该题型的知识点候选并刷新命中量。"""
@@ -879,13 +856,8 @@ class PaperGenerationView(QWidget):
         first = items[0]
         section_combo = self._type_sections[question_type]
         if first.section:
-            index = section_combo.findText(first.section)
-            if index < 0:
-                section_combo.addItem(first.section, first.section)
-                index = section_combo.findText(first.section)
-            section_combo.blockSignals(True)
-            section_combo.setCurrentIndex(index)
-            section_combo.blockSignals(False)
+            # 板块可多个，整段回填（用户需求）
+            section_combo.setEditText("、".join(split_sections(first.section)))
         self._type_knowledge[question_type].setEditText(
             "，".join(first.knowledge_points or [])
         )

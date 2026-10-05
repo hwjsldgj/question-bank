@@ -18,8 +18,14 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QComboBox, QMessageBox, QWidget
+from PySide6.QtCore import Qt, QStringListModel
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QCompleter,
+    QMessageBox,
+    QWidget,
+)
 
 from app.domain.enums import (
     Difficulty,
@@ -108,6 +114,41 @@ def make_rows_compact(table) -> None:
     """收紧表格行距（各视图表格统一使用，避免行高参差不齐）。"""
     table.verticalHeader().setDefaultSectionSize(COMPACT_ROW_HEIGHT)
     table.verticalHeader().setMinimumSectionSize(COMPACT_MIN_ROW_HEIGHT)
+
+
+def new_multi_combo(placeholder: str = "", minimum_width: int = 140) -> QComboBox:
+    """构建可填多个取值的下拉框（知识点板块 / 知识点这类多值字段）。
+
+    下拉给出候选，文本框可手写多个取值（用逗号 / 顿号分隔）。
+    """
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.setMinimumWidth(minimum_width)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    line_edit = combo.lineEdit()
+    if line_edit is not None and placeholder:
+        line_edit.setPlaceholderText(placeholder)
+    return combo
+
+
+def reload_combo_candidates(combo: QComboBox, candidates: list[str]) -> None:
+    """刷新可编辑下拉框的候选并重建补全器（保留用户已输入文本）。
+
+    候选项以 ``itemData`` 保存取值本身，便于 ``select_combo_data`` 直接定位。
+    """
+    current = combo.currentText()
+    names = [str(name) for name in candidates]
+    combo.blockSignals(True)
+    combo.clear()
+    for name in names:
+        combo.addItem(name, name)
+    combo.setCurrentIndex(-1)
+    combo.setEditText(current)
+    combo.blockSignals(False)
+    completer = QCompleter(QStringListModel(names, combo), combo)
+    completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+    completer.setFilterMode(Qt.MatchFlag.MatchContains)
+    combo.setCompleter(completer)
 
 
 def info(parent: QWidget, text: str, title: str = "提示") -> None:

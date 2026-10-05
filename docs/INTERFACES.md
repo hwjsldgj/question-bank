@@ -36,7 +36,7 @@ class QuestionRepository(ABC):
 |----|------|
 | 实现 | `infrastructure/repositories/question_repository.py::SQLiteQuestionRepository` |
 | 调用方 | `application/question_service`、`application/paper_composer`、`application/question_generator` |
-| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6)；count_available 的 `knowledge_points` 非空时按"命中任一指定知识点"统计，`section` 非空时按知识点板块过滤（用户需求：组卷可指定知识点与知识点板块） |
+| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6)；count_available 的 `knowledge_points` 非空时按"命中任一指定知识点"统计，`section` 非空时按知识点板块过滤（可多个板块，命中任一即计入；用户需求：组卷可指定知识点与知识点板块） |
 | 异常 | `sqlite3.Error` 由仓储向上传播，服务层转译为界面提示 |
 
 ### 1.2 UsageRepository —— 使用记录仓储
@@ -164,7 +164,7 @@ class TypeRequirement:              # domain/entities/criteria.py
     difficulty: Difficulty
     count: int
     knowledge_points: list[str] = field(default_factory=list)   # 组卷指定知识点
-    section: str = ""                                           # 组卷指定知识点板块（不限为空）
+    section: str = ""                                           # 组卷指定知识点板块（可多个，不限为空）
 
 @dataclass
 class PaperCriteria:
@@ -182,8 +182,10 @@ class PaperCriteria:
   组卷时同题型的多条要求合并为一个分区，同卷按题目 id 去重。
 - `knowledge_points` 为空表示不限；非空时命中其中任一知识点的题目才计入命中量与选题
   （用户需求：组卷环节可指定知识点）。
-- `section` 为空表示不限；非空时只统计 / 选取该知识点板块下的题目，且界面按所选板块
-  过滤知识点候选（用户需求：组卷可选知识点板块作为限定）。
+- `section` 为空表示不限；非空时只统计 / 选取命中该板块的题目。一道题可属于多个板块
+  （`Question.section` 用"、"分隔，如 `代数、几何`），板块可写多个（用逗号 / 顿号分隔），
+  命中其中任一板块即计入；界面按所选板块过滤知识点候选
+  （用户需求：组卷可选知识点板块作为限定）。
 - 界面在每个题型分组内保留原条件控件（知识点板块 / 知识点 / 难度 / 数量 / 命中量），
   下面追加该题型的配置表（序号 / 题型 / 知识点板块 / 知识点 / 难度 / 数量 / 命中题数）：
   "添加到配置表"把当前条件追加为一行，可改难度、改数量、删除行；

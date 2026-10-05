@@ -54,7 +54,12 @@ from PySide6.QtWidgets import (
 
 from app.application.question_service import RECOGNIZE_MODULES, QuestionService
 from app.config.settings import DEFAULT_SUBJECTS
-from app.domain.entities.question import Option, Question, QuestionFilter
+from app.domain.entities.question import (
+    Option,
+    Question,
+    QuestionFilter,
+    split_sections,
+)
 from app.domain.enums import (
     Difficulty,
     DifficultySource,
@@ -119,9 +124,9 @@ class _PasteDraftEditor(QDialog):
         self._subject_combo = QComboBox()
         self._subject_combo.setMinimumWidth(120)
         self._subject_combo.currentIndexChanged.connect(self._reload_sections)
-        self._section_combo = QComboBox()
-        self._section_combo.setMinimumWidth(120)
-        self._section_combo.currentIndexChanged.connect(self._reload_knowledge_completer)
+        # 一道题可属于多个知识点板块（用户需求）：可手写多个，逗号 / 顿号分隔
+        self._section_combo = ui_utils.new_multi_combo("不限（可多个，用逗号分隔）", 120)
+        self._section_combo.currentTextChanged.connect(self._reload_knowledge_completer)
         self._knowledge_edit = QLineEdit()
         self._knowledge_edit.setPlaceholderText("多个知识点用逗号分隔")
         self._knowledge_completer = QCompleter(
@@ -223,29 +228,29 @@ class _PasteDraftEditor(QDialog):
         return chr(ord("A") + self._options_table.rowCount())
 
     def _reload_sections(self) -> None:
-        """按当前科目重建板块下拉框。"""
+        """按当前科目重建板块候选（保留已输入的多个板块文本）。"""
         subject = self._subject_combo.currentText().strip()
         sections = self._service.list_sections(subject)
-        current = self._section_combo.currentData()
-        self._section_combo.blockSignals(True)
-        self._section_combo.clear()
-        self._section_combo.addItem("全部板块", "")
-        for section in sections:
-            self._section_combo.addItem(section, section)
-        index = self._section_combo.findData(current)
-        self._section_combo.setCurrentIndex(index if index >= 0 else 0)
-        self._section_combo.blockSignals(False)
+        ui_utils.reload_combo_candidates(self._section_combo, list(sections))
         self._reload_knowledge_completer()
 
     def _reload_knowledge_completer(self) -> None:
-        """按当前板块刷新知识点补全；未选板块则补全科目的全部知识点。"""
-        section = self._section_combo.currentData() or ""
+        """按所选板块刷新知识点补全；未选板块则补全科目的全部知识点。
+
+        一道题可属于多个板块（用户需求）：取全部所选板块的知识点并集。
+        """
+        selected = split_sections(self._section_combo.currentText())
         points = self._service.list_sections(self._subject_combo.currentText().strip())
-        candidates = points.get(section) if section else [
-            p for group in points.values() for p in group
-        ]
+        if selected:
+            candidates = [
+                point
+                for section in selected
+                for point in points.get(section, [])
+            ]
+        else:
+            candidates = [p for group in points.values() for p in group]
         self._knowledge_completer.setModel(
-            QStringListModel(list(candidates or []), self._knowledge_edit)
+            QStringListModel(list(dict.fromkeys(candidates)), self._knowledge_edit)
         )
 
     def _on_type_changed(self) -> None:
@@ -265,7 +270,7 @@ class _PasteDraftEditor(QDialog):
         if index >= 0:
             self._subject_combo.setCurrentIndex(index)
             self._reload_sections()
-        ui_utils.select_combo_data(self._section_combo, question.section)
+        self._section_combo.setEditText(question.section)
         self._knowledge_edit.setText("，".join(question.knowledge_points))
         ui_utils.select_combo_data(self._type_combo, question.type)
         self._stem_edit.setPlainText(question.stem)
@@ -276,6 +281,50 @@ class _PasteDraftEditor(QDialog):
             ",".join(question.answer) if question.is_choice else "；".join(question.answer)
         )
         self._solution_edit.setPlainText(question.solution or "")
+
+    def read(self) -> None:
+        """把表单上的修改写回候选题草稿（不落库，用户需求）。"""
+        self._draft.subject = self._subject_combo.currentText().strip()
+        self._draft.section = "、".join(
+            split_sections(self._section_combo.currentText())
+        )
+        self._draft.knowledge_points = self._parse_knowledge()
+        self._draft.type = self._type_combo.currentData()
+        self._draft.stem = self._stem_edit.toPlainText().strip()
+        self._draft.options = [
+            Option(
+                key=self._options_table.item(row, 0).text().strip(),
+                text=self._options_table.item(row, 1).text().strip(),
+            )
+            for row in range(self._options_table.rowCount())
+            if self._options_table.item(row, 0) is not None
+            and self._options_table.item(row, 1) is not None
+        ]
+        self._draft.answer = self._collect_answer()
+        self._draft.solution = self._solution_edit.toPlainText().strip() or None
+
+    def _parse_knowledge(self) -> list[str]:
+        """解析知识点输入（支持中英文逗号、顿号与分号）。"""
+        return [
+            part.strip()
+            for part in re.split(r"[,，、;；\s]+", self._knowledge_edit.text() or "")
+            if part.strip()
+        ]
+
+    def _collect_answer(self) -> list[str]:
+        """按题型收集答案：选择题取标号列表，其余取参考答案文本。"""
+        raw = self._answer_edit.text().strip()
+        if self._type_combo.currentData() in (
+            QuestionType.SOLUTION,
+            QuestionType.FILL,
+        ):
+            parts = [part.strip() for part in re.split(r"[;；\n]+", raw) if part.strip()]
+            return parts or ([raw] if raw else [])
+        return [
+            part.strip().upper()
+            for part in raw.replace("，", ",").replace(" ", ",").split(",")
+            if part.strip()
+        ]
 
     def was_deleted(self) -> bool:
         """用户是否点了"删除本题"。"""
@@ -332,12 +381,15 @@ class QuestionBankView(QWidget):
         self._subject_combo.setToolTip("科目只能从列表中选择；新增科目请到「设置 -> 科目管理」")
         self._subject_combo.currentIndexChanged.connect(self._on_subject_changed)
 
-        self._section_combo = QComboBox()
-        self._section_combo.setMinimumWidth(140)
-        self._section_combo.setToolTip(
-            "按所选科目列出知识点板块与细分知识点；新增板块请到「设置 -> 知识点板块」"
+        # 一道题可属于多个知识点板块（用户需求）：可手写多个，逗号 / 顿号分隔
+        self._section_combo = ui_utils.new_multi_combo(
+            "不限（可多个，用逗号分隔）", 140
         )
-        self._section_combo.currentIndexChanged.connect(self._on_section_changed)
+        self._section_combo.setToolTip(
+            "一道题可属于多个知识点板块（用逗号分隔）；"
+            "新增板块请到「设置 -> 知识点板块」"
+        )
+        self._section_combo.currentTextChanged.connect(self._on_section_changed)
 
         self._knowledge_edit = QLineEdit()
         self._knowledge_edit.setPlaceholderText("多个知识点用逗号分隔，如：一元二次方程,因式分解")
@@ -589,10 +641,13 @@ class QuestionBankView(QWidget):
         self._search_subject = QComboBox()
         self._search_subject.setMinimumWidth(120)
         self._search_subject.currentIndexChanged.connect(self._on_search_subject_changed)
-        self._search_section = QComboBox()
-        self._search_section.setMinimumWidth(120)
-        self._search_section.setToolTip("按知识点板块过滤检索结果（用户需求）")
-        self._search_section.currentIndexChanged.connect(
+        self._search_section = ui_utils.new_multi_combo(
+            "不限（可多个，用逗号分隔）", 120
+        )
+        self._search_section.setToolTip(
+            "按知识点板块过滤检索结果（可多个，命中任一板块即匹配）"
+        )
+        self._search_section.currentTextChanged.connect(
             self._reload_search_completer
         )
         self._search_knowledge = QLineEdit()
@@ -760,7 +815,7 @@ class QuestionBankView(QWidget):
         return Question(
             id=self._editing_id or "",
             subject=self._subject_combo.currentText().strip(),
-            section=self._section_combo.currentData() or "",
+            section="、".join(split_sections(self._section_combo.currentText())),
             knowledge_points=self._parse_knowledge(),
             type=question_type,
             stem=self._stem_edit.toPlainText().strip(),
@@ -808,6 +863,7 @@ class QuestionBankView(QWidget):
         self._solution_edit.clear()
         if self._subject_combo.count():
             self._subject_combo.setCurrentIndex(0)
+        self._section_combo.setEditText("")
         self._reload_sections()
         self._reload_knowledge_completer()
         ui_utils.select_combo_data(self._type_combo, QuestionType.SINGLE)
@@ -836,33 +892,33 @@ class QuestionBankView(QWidget):
         self._reload_knowledge_completer()
 
     def _reload_sections(self) -> None:
-        """按当前科目重建板块下拉框（空值"全部板块"始终保留）。"""
+        """按当前科目重建板块候选（保留已输入的多个板块文本）。"""
         subject = self._subject_combo.currentText().strip()
-        current = self._section_combo.currentData()
         sections = ui_utils.safe_call(
             self._question_service.list_sections, subject, default=None
         ) or {}
-        self._section_combo.blockSignals(True)
-        self._section_combo.clear()
-        self._section_combo.addItem("全部板块", "")
-        for section, points in sections.items():
-            self._section_combo.addItem(section, section)
-        index = self._section_combo.findData(current)
-        self._section_combo.setCurrentIndex(index if index >= 0 else 0)
-        self._section_combo.blockSignals(False)
+        ui_utils.reload_combo_candidates(self._section_combo, list(sections))
 
     def _reload_knowledge_completer(self) -> None:
-        """按当前板块刷新知识点的自动补全候选；未选板块则补全科目的全部知识点。"""
-        section = self._section_combo.currentData() or ""
+        """按所选板块刷新知识点的自动补全候选；未选板块则补全科目的全部知识点。
+
+        一道题可属于多个板块（用户需求）：取全部所选板块的知识点并集。
+        """
+        selected = split_sections(self._section_combo.currentText())
         points = ui_utils.safe_call(
             self._question_service.list_sections,
             self._subject_combo.currentText().strip(),
             default=None,
         ) or {}
-        candidates = points.get(section) if section else [
-            p for group in points.values() for p in group
-        ]
-        model = QStringListModel(list(candidates or []), self._knowledge_edit)
+        if selected:
+            candidates = [
+                point for section in selected for point in points.get(section, [])
+            ]
+        else:
+            candidates = [p for group in points.values() for p in group]
+        model = QStringListModel(
+            list(dict.fromkeys(candidates)), self._knowledge_edit
+        )
         self._knowledge_completer.setModel(model)
 
     def _on_type_changed(self) -> None:
@@ -886,7 +942,7 @@ class QuestionBankView(QWidget):
         if index >= 0:
             self._subject_combo.setCurrentIndex(index)
             self._reload_sections()
-        ui_utils.select_combo_data(self._section_combo, question.section)
+        self._section_combo.setEditText(question.section)
         self._knowledge_edit.setText("，".join(question.knowledge_points))
         self._stem_edit.setPlainText(question.stem)
         ui_utils.select_combo_data(self._type_combo, question.type)
@@ -1058,11 +1114,9 @@ class QuestionBankView(QWidget):
 
         section = result.get("section")
         if section:
-            primary = section.split("、", 1)[0]
-            index = self._section_combo.findData(primary)
-            if index >= 0:
-                self._section_combo.setCurrentIndex(index)
-                self._reload_knowledge_completer()
+            # AI 可给出多个知识点板块（用户需求）：整段回填，用"、"分隔
+            self._section_combo.setEditText("、".join(split_sections(section)))
+            self._reload_knowledge_completer()
             notes.append(f"知识点板块：{section}")
 
         points = result.get("knowledge_points") or []
@@ -1621,7 +1675,7 @@ class QuestionBankView(QWidget):
         """根据检索控件构建过滤器（空条件表示不过滤）。"""
         return QuestionFilter(
             subject=self._search_subject.currentData() or None,
-            section=self._search_section.currentData() or None,
+            section=self._search_section.currentText().strip() or None,
             knowledge_point=self._search_knowledge.text().strip() or None,
             difficulty=self._search_difficulty.currentData(),
             question_type=self._search_type.currentData(),
@@ -1668,30 +1722,24 @@ class QuestionBankView(QWidget):
         self._reload_search_completer()
 
     def _reload_search_sections(self) -> None:
-        """按检索科目重建检索区的板块下拉框（"全部板块"始终保留）。"""
+        """按检索科目重建检索区的板块候选（保留已输入文本）。"""
         subject = self._search_subject.currentData() or ""
-        current = self._search_section.currentData()
         sections = ui_utils.safe_call(
             self._question_service.list_sections, subject, default=None
         ) or {}
-        self._search_section.blockSignals(True)
-        self._search_section.clear()
-        self._search_section.addItem("全部板块", "")
-        for section in sections:
-            self._search_section.addItem(section, section)
-        index = self._search_section.findData(current)
-        self._search_section.setCurrentIndex(index if index >= 0 else 0)
-        self._search_section.blockSignals(False)
+        ui_utils.reload_combo_candidates(self._search_section, list(sections))
 
     def _reload_search_completer(self) -> None:
-        """按检索科目 / 板块刷新检索框的知识点补全候选。"""
+        """按检索科目 / 板块刷新检索框的知识点补全候选（多板块取并集）。"""
         subject = self._search_subject.currentData() or ""
-        section = self._search_section.currentData() or ""
+        selected = split_sections(self._search_section.currentText())
         sections = ui_utils.safe_call(
             self._question_service.list_sections, subject, default=None
         ) or {}
-        if section:
-            candidates = list(sections.get(section, []))
+        if selected:
+            candidates = [
+                point for name in selected for point in sections.get(name, [])
+            ]
         else:
             candidates = [point for group in sections.values() for point in group]
         if not candidates:

@@ -35,7 +35,12 @@ from app.config.settings import (
     DEFAULT_SUBJECTS,
 )
 from app.domain.entities.knowledge_section import KnowledgeSection
-from app.domain.entities.question import Option, Question, QuestionFilter
+from app.domain.entities.question import (
+    Option,
+    Question,
+    QuestionFilter,
+    split_sections,
+)
 from app.domain.entities.question_op import QuestionOpRecord
 from app.domain.enums import (
     Difficulty,
@@ -648,7 +653,8 @@ class QuestionService:
 
         section = str(result.get("section", "")).strip()
         if section:
-            question.section = section
+            # 知识点板块可多个，"、"分隔（用户需求）
+            question.section = "、".join(split_sections(section))
 
         points = result.get("knowledge_points")
         if points:
@@ -778,11 +784,12 @@ class QuestionService:
 
     @staticmethod
     def _normalize_enums(question: Question) -> Question:
-        """把枚举字段归一化为枚举成员，兼容外部传入的字符串取值。
+        """把枚举字段归一化为枚举成员，并归一化知识点板块文本。
 
         AI 返回、界面下拉与旧调用方都可能给出 ``"single"`` 这类字符串；
         若直接落库会在 ``question.type.value`` 处抛出
         ``'str' object has no attribute 'value'``，因此统一在服务入口收敛。
+        知识点板块可多个（用户需求），统一用"、"分隔后落库。
 
         :raises QuestionValidationError: 取值不在允许范围内（消息含字段与取值）
         """
@@ -803,6 +810,7 @@ class QuestionService:
                     + "、".join(member.value for member in enum_cls)
                     + "）"
                 ) from exc
+        question.section = "、".join(split_sections(question.section))
         return question
 
     def _analyze_if_automatic(self, question: Question, enabled: bool = False) -> None:
@@ -911,7 +919,9 @@ class QuestionService:
             options = []
         subject = fields.get("subject", "").strip()
         points = self._split_knowledge(fields.get("knowledge", ""))
-        section = fields.get("section", "").strip() or self._infer_section(subject, points)
+        # 知识点板块可多个（用户需求）：显式标注优先，否则按科目 + 知识点反查
+        section = "、".join(split_sections(fields.get("section", "")))
+        section = section or self._infer_section(subject, points)
         return Question(
             id="",
             subject=subject,

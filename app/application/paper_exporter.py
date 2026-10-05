@@ -14,7 +14,7 @@ from app.domain.entities.configs import ExportOptions, ExportFormat
 from app.domain.entities.paper import Paper
 from app.domain.errors import ExportError
 from app.domain.validators.score_validator import ScoreValidator
-from app.interfaces.exporters import BaseExporter
+from app.interfaces.exporters import BaseExporter, ProgressCallback
 
 
 class PaperExporter:
@@ -35,6 +35,7 @@ class PaperExporter:
         fmt: ExportFormat,
         target_dir: str | None = None,
         options: ExportOptions | None = None,
+        progress: ProgressCallback | None = None,
     ) -> str:
         """导出试卷并返回文件路径（需求 R12 第 7 条）。
 
@@ -42,6 +43,7 @@ class PaperExporter:
         :param fmt: 导出格式 MD / PDF（PDF 由同一次导出的 MD 转换而来）
         :param target_dir: 目标目录；None 时用工作区根目录下的固定导出目录
         :param options: 导出选项；None 时使用默认值
+        :param progress: 进度回调；PDF 转换耗时较长，界面应放到后台线程并显示进度
         :return: 生成的文件完整路径
         :raises app.domain.errors.ScoreValidationError: 分值不完整
         :raises app.domain.errors.ExportError: 目录不可写 / 格式未注册 / 渲染失败
@@ -54,7 +56,9 @@ class PaperExporter:
         exporter = self._exporters.get(key)
         if exporter is None:
             raise ExportError(f"暂不支持的导出格式：{key.value}")
-        return exporter.export(paper, target_dir, options or ExportOptions())
+        return exporter.export(
+            paper, target_dir, options or ExportOptions(), progress
+        )
 
     def supported_formats(self) -> list[ExportFormat]:
         """返回当前已注册的导出格式列表（界面下拉框数据源）。"""

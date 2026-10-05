@@ -115,10 +115,12 @@ PaperGenerationView -> PaperComposer.generate
 ### 3.3 导出链（R11 / R12 / R18）
 
 ```text
-PaperGenerationView -> PaperExporter.export
+PaperGenerationView -> PaperExporter.export          （在后台线程执行，progress 回主线程显示）
     -> ScoreValidator.validate             分值完整性校验（缺分值阻止导出）
-    -> MdExporter / PdfExporter           按格式渲染（两部分 / 分区小计 / 总分 / 答案页）；
-                                          PDF 由 MdExporter 产出的同名 .md 用 pymd2pdf 转换
+    -> MdExporter / PdfExporter            按格式渲染（两部分 / 分区小计 / 总分 / 答案页）；
+                                          答案页每个答案前插入分页标记；
+                                          PDF 由 MdExporter 产出的同名 .md 用 pymd2pdf 转换，
+                                          中文用 ThemeConfig 指定系统中文 TTF（避免乱码）
 ```
 
 ### 3.4 AI 辨识链（用户需求：模块化输出、按需给出、一次返回）

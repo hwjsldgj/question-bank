@@ -20,7 +20,13 @@ from app.domain.entities.paper import Paper, Section
 from app.domain.entities.question import split_sections
 from app.domain.enums import QuestionType, SectionKind
 from app.domain.errors import ExportError
-from app.interfaces.exporters import BaseExporter
+from app.interfaces.exporters import BaseExporter, ProgressCallback
+
+
+def notify_progress(progress: ProgressCallback | None, message: str) -> None:
+    """向进度回调上报一行进度（无回调时忽略）。"""
+    if progress is not None:
+        progress(message)
 
 #: 分区 -> 部分标题
 _SECTION_TITLES: dict[SectionKind, str] = {
@@ -40,6 +46,9 @@ _TYPE_TITLES: dict[QuestionType, str] = {
 #: 中文序号（试卷部分编号）
 _ORDINALS = "一二三四五六七八九十"
 
+#: 分页标记：必须单独成行，pymd2pdf 会编译为 ReportLab PageBreak（用户需求：答案分页）
+PAGE_BREAK = '<div class="pagebreak"></div>'
+
 
 class MdExporter(BaseExporter):
     """MD 格式导出器：Markdown 源文件排版实现。"""
@@ -49,20 +58,24 @@ class MdExporter(BaseExporter):
         paper: Paper,
         target_dir: str | None = None,
         options: ExportOptions | None = None,
+        progress: ProgressCallback | None = None,
     ) -> str:
         """渲染 Markdown 试卷并写入导出目录，返回文件完整路径。
 
         :param target_dir: 目标目录；None 时用工作区根目录下的固定导出目录
             （用户需求：导出目录由程序指定，不再由用户选择）
+        :param progress: 进度回调（界面在后台线程调用，显示"进行中"状态）
         :raises ExportError: 目录不可写或写盘失败时抛出（需求 R18 第 3 条）
         """
         options = options or ExportOptions()
+        notify_progress(progress, "正在写入 Markdown 源文件…")
         directory = self._ensure_target_dir(target_dir or DEFAULT_EXPORT_DIR)
         path = directory / f"试卷_{datetime.now():%Y%m%d_%H%M%S}.md"
         try:
             path.write_text(self._render(paper, options), encoding="utf-8")
         except OSError as exc:
             raise ExportError(f"写入试卷文件失败：{path}（{exc}）") from exc
+        notify_progress(progress, f"Markdown 已生成：{path}")
         return str(path)
 
     @staticmethod
@@ -117,8 +130,12 @@ class MdExporter(BaseExporter):
 
     @staticmethod
     def _render_answer_page(paper: Paper) -> list[str]:
-        """渲染卷末答案页：逐题答案与解析，编号与题面一致。"""
-        lines = ["---", "", "# 答案页", ""]
+        """渲染卷末答案页：逐题答案与解析，编号与题面一致。
+
+        每个答案前插入独立一行的 ``<div class="pagebreak"></div>``，
+        pymd2pdf 会把它编译为 ReportLab 分页（用户需求：答案分页）。
+        """
+        lines = ["---", "", PAGE_BREAK, "", "# 答案页", ""]
         number = 0
         for index, section in enumerate(paper.sections, start=1):
             ordinal = _ORDINALS[index - 1] if index <= len(_ORDINALS) else str(index)
@@ -128,7 +145,13 @@ class MdExporter(BaseExporter):
             for question in section.questions:
                 number += 1
                 entry = answers.get(question.id)
-                lines.append(f"{number}. {entry.answer if entry else '（缺答案）'}")
+                lines.extend(
+                    [
+                        PAGE_BREAK,
+                        "",
+                        f"{number}. {entry.answer if entry else '（缺答案）'}",
+                    ]
+                )
                 if entry is not None and entry.solution:
                     lines.append(f"   - 解析：{entry.solution}")
             lines.append("")

@@ -128,14 +128,15 @@ class AIClient(ABC):
 ```python
 class BaseExporter(ABC):
     def export(self, paper: Paper, target_dir: str | None = None,
-               options: ExportOptions | None = None) -> str
+               options: ExportOptions | None = None,
+               progress: ProgressCallback | None = None) -> str
 ```
 
 | 项 | 说明 |
 |----|------|
 | 实现 | `infrastructure/exporters/md_exporter.py::MdExporter`（Markdown 源文件）、`infrastructure/exporters/pdf_exporter.py::PdfExporter`（由该 MD 用 pymd2pdf 转 PDF） |
 | 调用方 | `application/paper_exporter`（按 ExportFormat 路由） |
-| 语义 | 返回生成文件路径；排版契约：两部分分区 / 题型大题 / 小计与总分 / 卷末答案页 (R12)；`target_dir` 为 None 时写入工作区根目录下的固定导出目录（程序自建，用户不再指定） |
+| 语义 | 返回生成文件路径；排版契约：两部分分区 / 题型大题 / 小计与总分 / 卷末答案页（每个答案前有分页标记，R12）；`target_dir` 为 None 时写入工作区根目录下的固定导出目录（程序自建，用户不再指定）；`progress` 上报一行进度文字 |
 | 异常 | `ExportError`：目录不可写 / 渲染依赖缺失（PDF 缺 pymd2pdf 时提示改用 MD，R18-4） |
 
 ### 1.8 LocalImageStore —— 题目图片本地存储（用户需求）
@@ -450,7 +451,8 @@ PaperExporter(exporters: dict[ExportFormat, BaseExporter],
               score_validator: ScoreValidator)
 
 def export(self, paper: Paper, fmt: ExportFormat, target_dir: str | None = None,
-           options: ExportOptions | None = None) -> str
+           options: ExportOptions | None = None,
+           progress: ProgressCallback | None = None) -> str
 def supported_formats(self) -> list[ExportFormat]
 ```
 
@@ -508,12 +510,14 @@ PaperGenerationView
 
 ```text
 PaperGenerationView（导出目录固定为工作区根目录下的导出文件夹，程序自建）
-  -> PaperExporter.export(paper, fmt, target_dir=None)
+  导出在后台线程执行，progress 回调经 Qt 信号回主线程显示（界面不阻塞）
+  -> PaperExporter.export(paper, fmt, target_dir=None, progress=…)
        -> ScoreValidator.validate(paper)                       [R11-4]
-       -> BaseExporter.export(paper, target_dir, options)      [R12]
-            MdExporter   标准库渲染 Markdown 源文件（.md）
+       -> BaseExporter.export(paper, target_dir, options, progress)   [R12]
+            MdExporter   标准库渲染 Markdown 源文件（.md，答案前插入分页标记）
             PdfExporter  先由 MdExporter 产出同名 .md，
                          再用 pymd2pdf 转成同名 .pdf（惰性导入）
+                         中文用 ThemeConfig 指定系统中文 TTF（默认字体无中文字形）
 ```
 
 ## 5. 数据表与接口的对应

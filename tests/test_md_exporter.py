@@ -1,9 +1,9 @@
-"""MdExporter 单元测试：Markdown 排版、知识点板块与答案页。
+"""MdExporter 单元测试：Markdown 排版、知识点板块、答案分页与中文字体。
 
 导出会在目标目录写文件，用 pytest 的 ``tmp_path`` 作为导出目录。
 
 依赖：pytest、app.application.score_calculator、
-      app.infrastructure.exporters.md_exporter
+      app.infrastructure.exporters.md_exporter、app.infrastructure.exporters.pdf_exporter
 被使用：python -m pytest tests/test_md_exporter.py
 """
 
@@ -15,7 +15,8 @@ from app.domain.entities.criteria import PaperCriteria, TypeRequirement
 from app.domain.entities.paper import Paper, Section
 from app.domain.entities.question import Option, Question
 from app.domain.enums import Difficulty, QuestionType, SectionKind
-from app.infrastructure.exporters.md_exporter import MdExporter
+from app.infrastructure.exporters.md_exporter import PAGE_BREAK, MdExporter
+from app.infrastructure.exporters.pdf_exporter import resolve_chinese_font
 
 
 def _single_question(section: str) -> Question:
@@ -93,3 +94,31 @@ def test_export_creates_default_dir_when_missing(tmp_path) -> None:
     path = MdExporter().export(_paper(_single_question("代数")), str(target))
     assert target.is_dir()
     assert Path(path).parent == target
+
+
+def test_answer_page_has_pagebreak_before_each_answer(tmp_path) -> None:
+    """答案页在每个答案前插入单独一行的分页标记（用户需求：答案分页）。"""
+    paper = _paper(_single_question("代数"))
+    path = MdExporter().export(paper, str(tmp_path))
+    lines = _read(path).splitlines()
+
+    assert PAGE_BREAK in lines  # 必须单独成行，pymd2pdf 才会编译为 PageBreak
+    answer_index = lines.index("# 答案页")
+    assert PAGE_BREAK in lines[answer_index:]  # 答案页前也分页
+    first_answer = next(
+        index for index, line in enumerate(lines) if line.startswith("1. B")
+    )
+    assert lines[answer_index + 1 : first_answer].count(PAGE_BREAK) >= 1
+    # 分页标记前后都是空行，保证独占一行
+    for index, line in enumerate(lines):
+        if line == PAGE_BREAK:
+            assert lines[index - 1] == "" and lines[index + 1] == ""
+
+
+def test_chinese_font_is_resolved_when_available() -> None:
+    """能解析出可用中文字体时给出逻辑名与 TTF 路径（用户需求：中文不乱码）。"""
+    font = resolve_chinese_font()
+    if font is None:  # 无中文字体的环境（如精简 Linux 容器）跳过
+        return
+    name, path = font
+    assert name and Path(path).is_file()

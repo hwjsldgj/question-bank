@@ -24,6 +24,19 @@ DEFAULT_EXPORT_DIR = "exports"
 #: md2pdf 的转换缓存目录（放在工作区内的 .cache 下，避免写入用户主目录）
 DEFAULT_MD2PDF_CACHE_DIR = ".cache/pymd2pdf"
 
+#: PDF 中文字体候选（逻辑名, 字体文件名），按顺序取系统中第一个存在的字体：
+#: pymd2pdf 默认字体 DejaVu Sans 不含中文字形，不配置会出现中文乱码
+DEFAULT_PDF_FONT_CANDIDATES: tuple[tuple[str, str], ...] = (
+    ("SimSun", "simsun.ttc"),
+    ("SimHei", "simhei.ttf"),
+    ("Deng", "Deng.ttf"),
+    ("Microsoft YaHei", "msyh.ttc"),
+    ("Noto Sans CJK SC", "NotoSansCJK-Regular.ttc"),
+    ("Noto Sans CJK SC", "notosanscjk-regular.ttc"),
+    ("WenQuanYi Zen Hei", "wqy-zenhei.ttc"),
+    ("PingFang SC", "PingFang.ttc"),
+)
+
 #: 默认科目列表：科目改为"只能从列表中选择"，新科目在设置界面维护
 DEFAULT_SUBJECTS: list[str] = [
     "语文",

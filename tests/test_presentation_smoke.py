@@ -24,7 +24,12 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.container import build_container  # noqa: E402
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement  # noqa: E402
-from app.domain.enums import Difficulty, QualityFlag, QuestionType  # noqa: E402
+from app.domain.enums import (  # noqa: E402
+    Difficulty,
+    ExportFormat,
+    QualityFlag,
+    QuestionType,
+)
 from app.infrastructure.database.schema import ensure_schema  # noqa: E402
 from app.presentation import ui_utils  # noqa: E402
 from app.presentation.main_window import MainWindow, TAB_TITLES  # noqa: E402
@@ -597,6 +602,48 @@ def test_stats_follow_configuration(window) -> None:
     _add_row(view, QuestionType.SINGLE, "不存在的知识点", Difficulty.MEDIUM, 2)
     view.refresh_hit_counts()
     assert view._stats_table.item(0, 5).text() == "0"
+
+
+def test_export_runs_in_background_thread(window, monkeypatch) -> None:
+    """导出在后台线程执行，主线程立刻返回（用户需求：导出时界面不得无响应）。"""
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    monkeypatch.setattr(ui_utils, "info", lambda *args, **kwargs: None)
+    view = window.paper_generation_view
+    view._paper = object()  # 只验证线程行为，用占位试卷
+    main_thread = threading.current_thread()
+    seen: dict = {}
+
+    class _StubExporter:
+        """替身导出器：记录调用线程并上报一次进度。"""
+
+        def supported_formats(self):
+            return [ExportFormat.MD, ExportFormat.PDF]
+
+        def export(self, paper, fmt, target_dir=None, options=None, progress=None):
+            seen["thread"] = threading.current_thread()
+            seen["target_dir"] = target_dir
+            if progress is not None:
+                progress("正在转换 PDF…")
+            return "exports/试卷.md"
+
+    view._exporter = _StubExporter()
+    view._on_export()
+    assert view._exporting is True  # 主线程未被阻塞，导出仍在后台进行
+
+    for _ in range(500):
+        QApplication.processEvents()
+        if not view._exporting:
+            break
+        time.sleep(0.01)
+
+    assert seen["thread"] is not main_thread  # 导出发生在后台线程
+    assert seen["target_dir"] is None  # 目录由程序固定，不再由用户指定
+    assert view._exporting is False
+    assert view._export_button.isEnabled() is True
 
 
 def test_reuse_signal_routed_to_paper_view(window) -> None:

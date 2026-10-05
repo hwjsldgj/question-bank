@@ -29,8 +29,9 @@
 """
 
 from pathlib import Path
+import threading
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -56,6 +57,7 @@ from app.domain.entities.criteria import PaperCriteria, TypeRequirement
 from app.domain.entities.paper import Paper, Section
 from app.domain.entities.question import Question, split_sections
 from app.domain.enums import Difficulty, ExportFormat, QuestionType
+from app.domain.errors import DomainError
 from app.presentation import ui_utils
 
 #: 题型顺序：选择 -> 填空 -> 解答（与 PaperCriteria.enabled_requirements 一致）
@@ -153,6 +155,12 @@ class _CountDelegate(QStyledItemDelegate):
 class PaperGenerationView(QWidget):
     """组卷视图：按题型逐个添加"知识点 / 难度 / 数量"配置，顺序取题。"""
 
+    #: 导出进度文字（后台线程发出，主线程显示；避免用户以为程序卡死）
+    export_progress = Signal(str)
+
+    #: 导出结束：``(是否成功, 文件路径或异常对象)``
+    export_finished = Signal(bool, object)
+
     def __init__(self, container) -> None:
         """注入容器、构建界面并刷新知识点候选与命中量。"""
         super().__init__()
@@ -174,6 +182,7 @@ class PaperGenerationView(QWidget):
         self._type_hit: dict[QuestionType, QLabel] = {}
         self._sections_map: dict[str, list[str]] = {}
         self._subject_points: list[str] = []
+        self._exporting = False
 
         self._hit_timer = QTimer(self)
         self._hit_timer.setSingleShot(True)
@@ -181,6 +190,8 @@ class PaperGenerationView(QWidget):
         self._hit_timer.timeout.connect(self.refresh_hit_counts)
 
         self._build_ui()
+        self.export_progress.connect(self._on_export_progress)
+        self.export_finished.connect(self._on_export_finished)
         self.reload_subjects()
         self.refresh_hit_counts()
 
@@ -424,15 +435,15 @@ class PaperGenerationView(QWidget):
                 ui_utils.EXPORT_FORMAT_LABELS.get(fmt, str(fmt)), fmt
             )
 
-        export_button = QPushButton("导出试卷")
-        export_button.clicked.connect(self._on_export)
+        self._export_button = QPushButton("导出试卷")
+        self._export_button.clicked.connect(self._on_export)
 
         layout.addWidget(QLabel("格式"))
         layout.addWidget(self._format_combo)
         layout.addWidget(
             QLabel(f"导出目录：{Path(DEFAULT_EXPORT_DIR).resolve()}（程序自动创建）"), 1
         )
-        layout.addWidget(export_button)
+        layout.addWidget(self._export_button)
         return group
 
     # --------------------------------------------------------------- 配置行
@@ -979,20 +990,55 @@ class PaperGenerationView(QWidget):
     def _on_export(self) -> None:
         """导出试卷为 MD / PDF（需求 R12 / R18）。
 
-        导出目录由程序固定在工作区根目录下的导出文件夹，不再由用户指定；
-        PDF 由同一次导出的 Markdown 源文件转换而来（用户需求）。
+        导出目录固定在工作区根目录下的导出文件夹，不再由用户指定；
+        PDF 由同一次导出的 Markdown 源文件转换而来。
+        转换放到后台线程执行（用户需求：导出时界面不得无响应），
+        主线程只负责显示进度与结果。
         """
         if self._paper is None:
             ui_utils.info(self, "请先生成试卷。")
             return
+        if self._exporting:
+            ui_utils.info(self, "正在导出，请稍候…")
+            return
+        self._exporting = True
+        self._export_button.setEnabled(False)
+        self._status.setText("正在导出…")
         fmt = self._format_combo.currentData()
-        ok, path = ui_utils.run_guarded(
-            self,
-            self._exporter.export,
-            self._paper,
-            fmt,
-            None,
-            ExportOptions(),
-        )
+        threading.Thread(
+            target=self._export_in_background,
+            args=(self._paper, fmt),
+            name="paper-export",
+            daemon=True,
+        ).start()
+
+    def _export_in_background(self, paper: Paper, fmt) -> None:
+        """后台线程：执行导出并通过信号回报进度与结果（不触碰控件）。"""
+        try:
+            path = self._exporter.export(
+                paper, fmt, None, ExportOptions(), self.export_progress.emit
+            )
+        except Exception as exc:  # noqa: BLE001 - 统一由主线程转成可读提示
+            self.export_finished.emit(False, exc)
+            return
+        self.export_finished.emit(True, str(path))
+
+    def _on_export_progress(self, message: str) -> None:
+        """主线程：显示后台线程上报的导出进度。"""
+        self._status.setText(message)
+
+    def _on_export_finished(self, ok: bool, payload: object) -> None:
+        """主线程：导出结束，恢复按钮并提示结果。"""
+        self._exporting = False
+        self._export_button.setEnabled(True)
         if ok:
-            ui_utils.info(self, f"导出成功：\n{path}")
+            self._status.setText(f"已导出：{payload}")
+            ui_utils.info(self, f"导出成功：\n{payload}")
+            return
+        self._status.setText(f"导出失败：{payload}")
+        if isinstance(payload, DomainError):
+            ui_utils.warning(self, str(payload))
+        elif isinstance(payload, NotImplementedError):
+            ui_utils.info(self, f"该功能尚未实现（框架占位）。\n\n{payload}")
+        else:
+            ui_utils.critical(self, f"导出失败：{payload}")

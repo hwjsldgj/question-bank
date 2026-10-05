@@ -20,4 +20,17 @@ class ScoreValidator:
         :param paper: 待校验的试卷实体
         :raises ScoreValidationError: 存在未设分值题目或总分不一致时抛出
         """
-        raise NotImplementedError("TODO(R11): 实现分值完整性校验")
+        subtotal_sum = 0.0
+        for section in paper.sections:
+            for index, question in enumerate(section.questions, start=1):
+                score = section.score_of(question.id)
+                if score is None or float(score) <= 0:
+                    raise ScoreValidationError(
+                        f"第 {index} 题未设置有效分值：{question.stem[:20] or question.id}"
+                    )
+                subtotal_sum += float(score)
+        if abs(round(subtotal_sum, 6) - round(float(paper.total_score), 6)) > 1e-6:
+            raise ScoreValidationError(
+                f"总分不一致：试卷总分 {paper.total_score:g}，"
+                f"分区小计合计 {subtotal_sum:g}。"
+            )

@@ -26,7 +26,6 @@ from app.container import build_container  # noqa: E402
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement  # noqa: E402
 from app.domain.enums import Difficulty, QualityFlag, QuestionType  # noqa: E402
 from app.infrastructure.database.schema import ensure_schema  # noqa: E402
-from app.presentation import ui_utils  # noqa: E402
 from app.presentation.main_window import MainWindow, TAB_TITLES  # noqa: E402
 
 
@@ -79,29 +78,49 @@ def test_subject_widgets_are_dropdowns(window) -> None:
     bank = window.question_bank_view
     assert bank._subject_combo.count() > 0
     assert bank._search_subject.itemData(0) is None  # "全部科目"
-    for combo in (
-        window.paper_generation_view._single_subject,
-        window.paper_generation_view._multiple_subject,
-        window.paper_generation_view._fill_subject,
-        window.paper_generation_view._solution_subject,
-    ):
-        assert combo.count() > 0
+    # 组卷条件改为全局单科目 + 按题型分组配置（用户需求）
+    assert window.paper_generation_view._subject_combo.count() > 0
+    assert len(window.paper_generation_view._type_tables) == 4
+
+
+def _set_row_count(
+    view, question_type: QuestionType, point: str, difficulty: Difficulty, count: int
+) -> bool:
+    """在配置表中找到 (知识点, 难度) 行并写入数量，未找到返回 False。"""
+    table = view._type_tables[question_type]
+    for row in range(table.rowCount()):
+        if table.item(row, 1).text() != point:
+            continue
+        if table.cellWidget(row, 2).currentData() != difficulty:
+            continue
+        table.cellWidget(row, 3).setValue(count)
+        return True
+    return False
 
 
 def test_single_and_multiple_are_separately_enabled(window) -> None:
-    """组卷时单选与多选分开启用（用户需求）。"""
+    """组卷时单选与多选分开启用，且只按配置了题数的行出题（用户需求）。"""
     view = window.paper_generation_view
-    view._single_enabled.setChecked(True)
-    view._multiple_enabled.setChecked(False)
-    view._fill_enabled.setChecked(False)
-    view._solution_enabled.setChecked(False)
+    single_table = view._type_tables[QuestionType.SINGLE]
+    single_table.setRowCount(0)
+    view._append_row(single_table, "集合", Difficulty.EASY, 2)
+    view._type_enabled[QuestionType.SINGLE].setChecked(True)
+    view._type_enabled[QuestionType.MULTIPLE].setChecked(False)
+    view._type_enabled[QuestionType.FILL].setChecked(False)
+    view._type_enabled[QuestionType.SOLUTION].setChecked(False)
+
     criteria = view._build_criteria()
     assert criteria.choice_enabled is True
     assert [item.question_type for item in criteria.choice_items] == [
         QuestionType.SINGLE
     ]
+    assert criteria.choice_items[0].count == 2
+    assert criteria.choice_items[0].knowledge_points == ["集合"]
 
-    view._multiple_enabled.setChecked(True)
+    view._append_row(
+        view._type_tables[QuestionType.MULTIPLE], "集合", Difficulty.HARD, 1
+    )
+    view._type_enabled[QuestionType.MULTIPLE].setChecked(True)
     criteria = view._build_criteria()
     assert [item.question_type for item in criteria.choice_items] == [
         QuestionType.SINGLE,
@@ -110,7 +129,7 @@ def test_single_and_multiple_are_separately_enabled(window) -> None:
 
 
 def test_fill_type_supported(window) -> None:
-    """填空题可用：题库题型下拉、组卷条件与命中量均已接入。"""
+    """填空题可用：题库题型下拉、组卷条件与配比统计均已接入。"""
     bank = window.question_bank_view
     types = [
         bank._type_combo.itemData(index) for index in range(bank._type_combo.count())
@@ -118,13 +137,18 @@ def test_fill_type_supported(window) -> None:
     assert QuestionType.FILL in types
 
     view = window.paper_generation_view
-    view._fill_enabled.setChecked(True)
-    view._fill_count.setValue(4)
+    view._subject_combo.setCurrentIndex(0)
+    view._append_row(
+        view._type_tables[QuestionType.FILL], "集合", Difficulty.EASY, 4
+    )
+    view._type_enabled[QuestionType.SINGLE].setChecked(False)
+    view._type_enabled[QuestionType.MULTIPLE].setChecked(False)
+    view._type_enabled[QuestionType.FILL].setChecked(True)
+    view._type_enabled[QuestionType.SOLUTION].setChecked(False)
     criteria = view._build_criteria()
     assert criteria.fill_enabled is True
-    assert criteria.fill_item is not None
-    assert criteria.fill_item.question_type is QuestionType.FILL
-    assert criteria.fill_item.count == 4
+    assert criteria.fill_items[0].question_type is QuestionType.FILL
+    assert criteria.fill_items[0].count == 4
     assert [item.question_type for item in criteria.enabled_requirements()] == [
         QuestionType.FILL
     ]
@@ -302,85 +326,93 @@ def test_apply_recognition_fills_form(window) -> None:
 
 
 def test_apply_criteria_fills_paper_form(window) -> None:
-    """组卷视图能按 PaperCriteria 回填四个题型条件，含指定知识点（需求 R14 第 3 条）。"""
+    """组卷视图能按 PaperCriteria 回填配置行与启用状态（需求 R14 第 3 条）。"""
     criteria = PaperCriteria(
         choice_enabled=True,
         solution_enabled=True,
+        subject="数学",
         choice_items=[
-            TypeRequirement(
-                QuestionType.SINGLE, "数学", Difficulty.EASY, 4, ["集合", "函数"]
-            ),
+            TypeRequirement(QuestionType.SINGLE, "数学", Difficulty.EASY, 4, ["集合"]),
             TypeRequirement(QuestionType.MULTIPLE, "数学", Difficulty.HARD, 2),
         ],
-        solution_item=TypeRequirement(QuestionType.SOLUTION, "数学", Difficulty.MEDIUM, 1),
+        solution_items=[
+            TypeRequirement(QuestionType.SOLUTION, "数学", Difficulty.MEDIUM, 1)
+        ],
     )
     view = window.paper_generation_view
     view.apply_criteria(criteria)
-    assert view._single_subject.currentText() == "数学"
-    assert view._single_count.value() == 4
-    assert view._solution_enabled.isChecked() is True
-    # 指定知识点回填
-    assert view._single_knowledge.currentText() == "集合，函数"
-    assert view._knowledge_of(view._single_knowledge) == ["集合", "函数"]
-    assert view._knowledge_of(view._multiple_knowledge) == []
+    assert view._subject == "数学"
+    assert view._type_enabled[QuestionType.SINGLE].isChecked() is True
+    assert view._type_enabled[QuestionType.MULTIPLE].isChecked() is True
+    assert view._type_enabled[QuestionType.FILL].isChecked() is False
+    assert view._type_enabled[QuestionType.SOLUTION].isChecked() is True
+
+    rebuilt = view._build_criteria()
+    assert rebuilt.subject == "数学"
+    assert [item.count for item in rebuilt.choice_items] == [4, 2]
+    assert rebuilt.choice_items[0].knowledge_points == ["集合"]
+    assert rebuilt.solution_items[0].difficulty is Difficulty.MEDIUM
 
 
-def test_paper_view_can_specify_knowledge_points(window) -> None:
-    """组卷条件可指定知识点：命中量按知识点过滤，条件携带知识点（用户需求）。"""
+def test_stats_follow_configuration(window) -> None:
+    """配比统计只列配置了题数的组合，并带题库命中题数（用户需求，实时刷新）。"""
     from app.domain.entities.question import Option, Question
 
     bank = window.question_bank_view
     view = window.paper_generation_view
+    view._subject_combo.setCurrentIndex(0)
+    subject = view._subject
 
-    for points in (["集合"], ["函数"], ["集合", "函数"]):
+    for point in ("集合", "函数"):
         bank._question_service.create_question(
             Question(
                 id="",
-                subject=view._single_subject.currentText() or "数学",
-                knowledge_points=points,
+                subject=subject,
+                knowledge_points=[point],
                 type=QuestionType.SINGLE,
-                stem=f"题干-{'-'.join(points)}",
+                stem=f"题干-{point}",
                 options=[Option("A", "1"), Option("B", "2")],
                 answer=["A"],
                 difficulty=Difficulty.MEDIUM,
             )
         )
     view.reload_knowledge_points()
-    assert view._single_knowledge.count() >= 2
+    assert _set_row_count(
+        view, QuestionType.SINGLE, "集合", Difficulty.MEDIUM, 1
+    ) is True
 
-    view._single_enabled.setChecked(True)
-    ui_utils.select_combo_data(view._single_difficulty, Difficulty.MEDIUM)
-    view._single_knowledge.setEditText("集合")
+    view._type_enabled[QuestionType.SINGLE].setChecked(True)
+    view._type_enabled[QuestionType.MULTIPLE].setChecked(False)
+    view._type_enabled[QuestionType.FILL].setChecked(False)
+    view._type_enabled[QuestionType.SOLUTION].setChecked(False)
     view.refresh_hit_counts()
-    assert "命中：2 道" in view._single_hit.text()
-    assert "知识点：集合" in view._single_hit.text()
 
-    criteria = view._build_criteria()
-    assert criteria.choice_items[0].knowledge_points == ["集合"]
-
-    view._single_knowledge.setEditText("不存在的知识点")
-    view.refresh_hit_counts()
-    assert "命中：0 道" in view._single_hit.text()
-    view._single_knowledge.setEditText("集合，函数、导数")
-    assert view.parse_knowledge(view._single_knowledge.currentText()) == [
-        "集合",
-        "函数",
-        "导数",
+    stats = view._stats_table
+    rows = [
+        [stats.item(row, column).text() for column in range(stats.columnCount())]
+        for row in range(stats.rowCount())
     ]
-    view._single_knowledge.setEditText("")
+    assert rows == [["单选题", "中", "集合", "1", "1"]]
+
+    # 数量改为 0 后该行不再计入配比
+    _set_row_count(view, QuestionType.SINGLE, "集合", Difficulty.MEDIUM, 0)
+    view.refresh_hit_counts()
+    assert view._stats_table.rowCount() == 0
 
 
 def test_reuse_signal_routed_to_paper_view(window) -> None:
     """历史视图发出复用信号后，主窗口把它路由到组卷视图（需求 R14 第 3 条）。"""
     criteria = PaperCriteria(
         choice_enabled=True,
+        subject="物理",
         choice_items=[
             TypeRequirement(QuestionType.SINGLE, "物理", Difficulty.MEDIUM, 6)
         ],
     )
     window.history_view.reuse_criteria_requested.emit(criteria)
-    assert window.paper_generation_view._single_subject.currentText() == "物理"
-    assert window.paper_generation_view._single_count.value() == 6
+    view = window.paper_generation_view
+    assert view._subject == "物理"
+    assert view._build_criteria().choice_items[0].count == 6
     assert window.centralWidget().currentIndex() == TAB_TITLES.index("组卷")
 
 

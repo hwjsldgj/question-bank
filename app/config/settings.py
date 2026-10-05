@@ -10,6 +10,7 @@
 """
 
 from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
+from app.domain.enums import QuestionType
 
 #: 本地 SQLite 数据库文件名（相对当前工作目录，需求 R18：数据存本机）
 DEFAULT_DB_PATH = "question_bank.db"
@@ -94,6 +95,15 @@ DEFAULT_SCORING_CONFIG = ScoringConfig(
     weight_recency=0.2,
     cooldown_value=30,
 )
+
+#: 组卷后各题型的默认单题分值：出题者未设分值时即可直接导出试卷，
+#: 仍可在组卷页按题型或逐题调整（需求 R11）
+DEFAULT_TYPE_SCORES: dict[QuestionType, float] = {
+    QuestionType.SINGLE: 2.0,
+    QuestionType.MULTIPLE: 3.0,
+    QuestionType.FILL: 2.0,
+    QuestionType.SOLUTION: 10.0,
+}
 
 #: AI 服务默认配置（默认为空：未配置状态，需求 R15 第 2 条降级依据）
 DEFAULT_AI_CONFIG = AIConfig(

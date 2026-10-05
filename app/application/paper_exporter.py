@@ -12,6 +12,7 @@
 
 from app.domain.entities.configs import ExportOptions, ExportFormat
 from app.domain.entities.paper import Paper
+from app.domain.errors import ExportError
 from app.domain.validators.score_validator import ScoreValidator
 from app.interfaces.exporters import BaseExporter
 
@@ -43,10 +44,18 @@ class PaperExporter:
         :param options: 导出选项；None 时使用默认值
         :return: 生成的文件完整路径
         :raises app.domain.errors.ScoreValidationError: 分值不完整
-        :raises app.domain.errors.ExportError: 目录不可写 / 渲染失败
+        :raises app.domain.errors.ExportError: 目录不可写 / 格式未注册 / 渲染失败
         """
-        raise NotImplementedError("TODO(R12): 实现导出分发")
+        self._score_validator.validate(paper)
+        try:
+            key = ExportFormat(fmt)
+        except ValueError as exc:
+            raise ExportError(f"未知的导出格式：{fmt}") from exc
+        exporter = self._exporters.get(key)
+        if exporter is None:
+            raise ExportError(f"暂不支持的导出格式：{key.value}")
+        return exporter.export(paper, target_dir, options or ExportOptions())
 
     def supported_formats(self) -> list[ExportFormat]:
         """返回当前已注册的导出格式列表（界面下拉框数据源）。"""
-        raise NotImplementedError("TODO(R12): 实现格式枚举")
+        return list(self._exporters.keys())

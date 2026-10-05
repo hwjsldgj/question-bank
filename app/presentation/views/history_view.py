@@ -272,23 +272,13 @@ class HistoryView(QWidget):
 
     @staticmethod
     def _criteria_summary(criteria: PaperCriteria) -> str:
-        """把组卷条件渲染为一行摘要。"""
-        parts: list[str] = []
-        if criteria.choice_enabled:
-            for item in criteria.choice_items:
-                parts.append(
-                    HistoryView._requirement_summary(
-                        ui_utils.QUESTION_TYPE_LABELS.get(item.question_type, ""), item
-                    )
-                )
-        if criteria.fill_enabled and criteria.fill_item is not None:
-            parts.append(
-                HistoryView._requirement_summary("填空题", criteria.fill_item)
+        """把组卷条件渲染为一行摘要（逐条列出启用部分的出题要求）。"""
+        parts = [
+            HistoryView._requirement_summary(
+                ui_utils.QUESTION_TYPE_LABELS.get(item.question_type, ""), item
             )
-        if criteria.solution_enabled and criteria.solution_item is not None:
-            parts.append(
-                HistoryView._requirement_summary("解答题", criteria.solution_item)
-            )
+            for item in criteria.enabled_requirements()
+        ]
         return "；".join(parts) if parts else "—"
 
     @staticmethod

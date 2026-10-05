@@ -1,22 +1,44 @@
-"""TxtExporter：TXT 格式导出器（需求 R12 / R18）。
+"""TxtExporter：Markdown 排版的 TXT 导出器（需求 R12 / R18）。
 
 实现接口：app.interfaces.exporters.BaseExporter
 依赖：标准库 pathlib、app.domain.entities.paper、app.domain.errors.ExportError
 被使用：app.container（注册到 PaperExporter 的格式映射）
 
-排版契约与 PDF 导出器保持一致：选择题 / 解答题两部分、按题型分大题、
-分区标题含数量与小计、文档总分、卷末独立答案页。
+排版契约：文件内容为 Markdown 文本（``.txt`` 后缀），分"选择题 / 填空题 /
+解答题"三部分，按题型分大题，分区标题含数量与分值小计、文档标明总分，
+卷末附独立答案页。
 """
 
+from datetime import datetime
 from pathlib import Path
 
 from app.domain.entities.configs import ExportOptions
-from app.domain.entities.paper import Paper
+from app.domain.entities.paper import Paper, Section
+from app.domain.enums import QuestionType, SectionKind
+from app.domain.errors import ExportError
 from app.interfaces.exporters import BaseExporter
+
+#: 分区 -> 部分标题
+_SECTION_TITLES: dict[SectionKind, str] = {
+    SectionKind.CHOICE: "选择题部分",
+    SectionKind.FILL: "填空题部分",
+    SectionKind.SOLUTION: "解答题部分",
+}
+
+#: 题型 -> 大题标题
+_TYPE_TITLES: dict[QuestionType, str] = {
+    QuestionType.SINGLE: "单项选择",
+    QuestionType.MULTIPLE: "多项选择",
+    QuestionType.FILL: "填空题",
+    QuestionType.SOLUTION: "解答题",
+}
+
+#: 中文序号（试卷部分编号）
+_ORDINALS = "一二三四五六七八九十"
 
 
 class TxtExporter(BaseExporter):
-    """TXT 格式导出器：纯文本排版实现。"""
+    """TXT 格式导出器：Markdown 文本排版实现。"""
 
     def export(
         self,
@@ -24,18 +46,83 @@ class TxtExporter(BaseExporter):
         target_dir: str,
         options: ExportOptions | None = None,
     ) -> str:
-        """渲染文本试卷并写入 target_dir，返回文件完整路径。
+        """渲染 Markdown 试卷并写入 target_dir，返回文件完整路径。
 
-        :raises ExportError: 目标目录不可写时抛出（需求 R18 第 3 条）
+        :raises ExportError: 目标目录不可写或写盘失败时抛出（需求 R18 第 3 条）
         """
-        raise NotImplementedError("TODO(R12): 实现 TXT 渲染与写盘")
+        options = options or ExportOptions()
+        directory = self._ensure_target_dir(target_dir)
+        path = directory / f"试卷_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        try:
+            path.write_text(self._render(paper, options), encoding="utf-8")
+        except OSError as exc:
+            raise ExportError(f"写入试卷文件失败：{path}（{exc}）") from exc
+        return str(path)
 
     @staticmethod
     def _render(paper: Paper, options: ExportOptions) -> str:
-        """把 Paper 渲染为全文文本（私有方法：分区 / 小计 / 总分 / 答案页）。"""
-        raise NotImplementedError("TODO(R12): 实现 TXT 文本渲染")
+        """把 Paper 渲染为全文 Markdown 文本（分区 / 小计 / 总分 / 答案页）。"""
+        lines = ["# 试卷", "", f"**总分：{paper.total_score:g} 分**", ""]
+        number = 0
+        for index, section in enumerate(paper.sections, start=1):
+            lines.extend(TxtExporter._render_section(section, index, number + 1))
+            number += len(section.questions)
+        if options.include_answer_page:
+            lines.extend(TxtExporter._render_answer_page(paper))
+        return "\n".join(lines).rstrip() + "\n"
+
+    @staticmethod
+    def _render_section(section: Section, index: int, start_number: int) -> list[str]:
+        """渲染一个分区：标题（数量 / 分值）+ 逐题题面。"""
+        ordinal = _ORDINALS[index - 1] if index <= len(_ORDINALS) else str(index)
+        title = _SECTION_TITLES.get(section.section_kind, "试题")
+        type_title = _TYPE_TITLES.get(section.question_type, "")
+        subtotal = sum(section.score_of(q.id) or 0.0 for q in section.questions)
+        score_hint = (
+            f"每题 {section.per_question_score:g} 分，"
+            if section.per_question_score is not None and not section.question_scores
+            else ""
+        )
+
+        lines = [
+            f"## {ordinal}、{title} · {type_title}",
+            "",
+            f"共 {len(section.questions)} 题，{score_hint}小计 {subtotal:g} 分",
+            "",
+        ]
+        for offset, question in enumerate(section.questions):
+            number = start_number + offset
+            lines.append(f"{number}. {question.stem}")
+            for option in question.options:
+                lines.append(f"   - {option.key}. {option.text}")
+            if question.image_path:
+                lines.append(f"   ![题目图片]({question.image_path})")
+            lines.append("")
+        return lines
+
+    @staticmethod
+    def _render_answer_page(paper: Paper) -> list[str]:
+        """渲染卷末答案页：逐题答案与解析，编号与题面一致。"""
+        lines = ["---", "", "# 答案页", ""]
+        number = 0
+        for index, section in enumerate(paper.sections, start=1):
+            ordinal = _ORDINALS[index - 1] if index <= len(_ORDINALS) else str(index)
+            title = _SECTION_TITLES.get(section.section_kind, "试题")
+            lines.extend([f"## {ordinal}、{title}", ""])
+            answers = {entry.question_id: entry for entry in section.answer_page}
+            for question in section.questions:
+                number += 1
+                entry = answers.get(question.id)
+                lines.append(f"{number}. {entry.answer if entry else '（缺答案）'}")
+                if entry is not None and entry.solution:
+                    lines.append(f"   - 解析：{entry.solution}")
+            lines.append("")
+        return lines
 
     @staticmethod
     def _ensure_target_dir(target_dir: str) -> Path:
-        """校验目标目录存在且可写，非法时抛出 ExportError。"""
-        raise NotImplementedError("TODO(R18): 实现目录校验")
+        """校验目标目录存在且为目录，非法时抛出 ExportError。"""
+        path = Path(str(target_dir)).expanduser()
+        if not path.is_dir():
+            raise ExportError(f"导出目录不存在或不是目录：{path}")
+        return path

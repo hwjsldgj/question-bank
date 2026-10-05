@@ -170,15 +170,18 @@ class PaperCriteria:
     solution_enabled: bool
     fill_enabled: bool
     choice_items: list[TypeRequirement]
-    fill_item: TypeRequirement | None
-    solution_item: TypeRequirement | None
+    fill_items: list[TypeRequirement]
+    solution_items: list[TypeRequirement]
+    subject: str = ""                                          # 全局单科目
     def enabled_requirements(self) -> list[TypeRequirement]     # 顺序：选择 -> 填空 -> 解答
 ```
 
+- 每类题型可配置多条要求（界面按"知识点 × 难度"逐行配置题数），
+  组卷时同题型的多条要求合并为一个分区，同卷按题目 id 去重。
 - `knowledge_points` 为空表示不限；非空时命中其中任一知识点的题目才计入命中量与选题
   （用户需求：组卷环节可指定知识点）。
-- 界面按题型各自维护一个可编辑的知识点选择框（下拉选择已有知识点，也可手写多个，
-  以逗号 / 顿号分隔）；`paper_generation_view.parse_knowledge` 负责拆分。
+- 界面配置行按当前科目的知识点 × 易中难自动生成，可改数量、改难度、删除行；
+  数量为 0 的行不参与组卷与配比统计。
 
 ## 2. 领域校验器
 

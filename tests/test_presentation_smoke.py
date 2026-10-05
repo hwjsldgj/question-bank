@@ -281,6 +281,18 @@ def test_bank_completion_widgets(window) -> None:
     assert bank._on_reanalyze_selected is not None
 
 
+def test_search_results_have_knowledge_points_and_compact_rows(window) -> None:
+    """检索结果新增知识点列，并收紧行距（用户需求）。"""
+    bank = window.question_bank_view
+    headers = [
+        bank._result_table.horizontalHeaderItem(index).text()
+        for index in range(bank._result_table.columnCount())
+    ]
+    assert headers.index("知识点") == headers.index("科目") + 1
+    assert bank._result_table.verticalHeader().defaultSectionSize() == 22
+    assert bank._result_table.verticalHeader().minimumSectionSize() == 18
+
+
 def test_ai_can_skip_solution(window) -> None:
     """AI 辨识可要求不输出解析：取消「解析」模块后不生成也不覆盖解析（用户需求）。"""
     from app.domain.enums import RecognizeModule

@@ -67,6 +67,28 @@ from app.presentation import ui_utils
 #: 图片预览的最大尺寸（像素）
 PREVIEW_SIZE = (220, 160)
 
+#: 检索结果表的数据列：题目 ID / 科目 / 知识点 / 题型 / 难度 / 质量 / 图片 /
+#: 使用次数 / 最近使用 / 题干（用户需求：检索结果含知识点列）
+RESULT_COLUMNS: tuple[str, ...] = (
+    "题目 ID",
+    "科目",
+    "知识点",
+    "题型",
+    "难度",
+    "质量",
+    "图片",
+    "使用次数",
+    "最近使用",
+    "题干",
+)
+
+#: 检索结果表的行高（用户需求：减小科目 / 题型 / 难度 / 质量 / 图片 /
+#: 使用次数等短列的占用，行距比默认更紧凑）
+RESULT_ROW_HEIGHT = 22
+
+#: 检索结果表的最小行高
+RESULT_MIN_ROW_HEIGHT = 18
+
 
 class _PasteDraftEditor(QDialog):
     """批量粘贴预览中双击一行后弹出的候选题编辑器。
@@ -600,20 +622,8 @@ class QuestionBankView(QWidget):
         filter_row.addWidget(search_button)
         layout.addLayout(filter_row)
 
-        self._result_table = QTableWidget(0, 9)
-        self._result_table.setHorizontalHeaderLabels(
-            [
-                "题目 ID",
-                "科目",
-                "题型",
-                "难度",
-                "质量",
-                "图片",
-                "使用次数",
-                "最近使用",
-                "题干",
-            ]
-        )
+        self._result_table = QTableWidget(0, len(RESULT_COLUMNS))
+        self._result_table.setHorizontalHeaderLabels(list(RESULT_COLUMNS))
         self._result_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
@@ -623,8 +633,13 @@ class QuestionBankView(QWidget):
         self._result_table.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
+        # 题干列占满剩余宽度；行距收紧（用户需求）
         self._result_table.horizontalHeader().setSectionResizeMode(
-            8, QHeaderView.ResizeMode.Stretch
+            len(RESULT_COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
+        )
+        self._result_table.verticalHeader().setDefaultSectionSize(RESULT_ROW_HEIGHT)
+        self._result_table.verticalHeader().setMinimumSectionSize(
+            RESULT_MIN_ROW_HEIGHT
         )
         layout.addWidget(self._result_table)
 
@@ -1707,6 +1722,7 @@ class QuestionBankView(QWidget):
             values = [
                 question.id,
                 question.subject,
+                "、".join(question.knowledge_points),
                 ui_utils.QUESTION_TYPE_LABELS.get(question.type, ""),
                 ui_utils.DIFFICULTY_LABELS.get(question.difficulty, ""),
                 ui_utils.QUALITY_LABELS.get(question.quality_flag, ""),

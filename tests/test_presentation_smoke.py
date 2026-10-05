@@ -89,11 +89,16 @@ def test_subject_widgets_are_dropdowns(window) -> None:
 
 
 def _add_row(
-    view, question_type: QuestionType, point: str, difficulty: Difficulty, count: int
+    view,
+    question_type: QuestionType,
+    point: str,
+    difficulty: Difficulty,
+    count: int,
+    section: str = "",
 ) -> None:
     """往某题型配置表添加一行（等价界面上点「添加到配置表」）。"""
     view._append_row(
-        view._type_tables[question_type], question_type, point, difficulty, count
+        view._type_tables[question_type], question_type, section, point, difficulty, count
     )
 
 
@@ -107,6 +112,36 @@ def test_config_and_summary_table_heights(window) -> None:
     for table in view._type_tables.values():
         assert table.minimumHeight() == expected
         assert table.maximumHeight() == expected
+
+
+def test_paper_view_can_limit_by_knowledge_section(window) -> None:
+    """组卷可按知识板块限定：板块进入配置行与组卷条件，知识点候选随之过滤。"""
+    view = window.paper_generation_view
+    view._subject_combo.setCurrentIndex(view._subject_combo.findText("数学"))
+    view.reload_knowledge_points()
+
+    section_combo = view._type_sections[QuestionType.SINGLE]
+    assert section_combo.count() > 1  # 含"不限"与科目下的板块
+    ui_utils.select_combo_data(section_combo, "不存在的板块")
+    section_combo.addItem("代数")
+    section_combo.setCurrentText("代数")
+    view._on_section_changed(QuestionType.SINGLE)
+
+    _add_row(view, QuestionType.SINGLE, "一元二次方程", Difficulty.MEDIUM, 2, "代数")
+    view._type_enabled[QuestionType.SINGLE].setChecked(True)
+    view._type_enabled[QuestionType.MULTIPLE].setChecked(False)
+    view._type_enabled[QuestionType.FILL].setChecked(False)
+    view._type_enabled[QuestionType.SOLUTION].setChecked(False)
+    view.refresh_hit_counts()
+
+    table = view._type_tables[QuestionType.SINGLE]
+    assert table.item(0, 2).text() == "代数"
+    assert table.item(0, 3).text() == "一元二次方程"
+    assert view._stats_table.item(0, 2).text() == "代数"
+
+    criteria = view._build_criteria()
+    assert criteria.choice_items[0].section == "代数"
+    assert criteria.choice_items[0].knowledge_points == ["一元二次方程"]
 
 
 def test_single_and_multiple_are_separately_enabled(window) -> None:
@@ -282,15 +317,16 @@ def test_bank_completion_widgets(window) -> None:
 
 
 def test_search_results_have_knowledge_points_and_compact_rows(window) -> None:
-    """检索结果新增知识点列，并收紧行距（用户需求）。"""
+    """检索结果含知识点板块与知识点列，并收紧行距（用户需求）。"""
     bank = window.question_bank_view
     headers = [
         bank._result_table.horizontalHeaderItem(index).text()
         for index in range(bank._result_table.columnCount())
     ]
-    assert headers.index("知识点") == headers.index("科目") + 1
-    assert bank._result_table.verticalHeader().defaultSectionSize() == 22
-    assert bank._result_table.verticalHeader().minimumSectionSize() == 18
+    assert headers.index("知识点板块") == headers.index("科目") + 1
+    assert headers.index("知识点") == headers.index("知识点板块") + 1
+    assert bank._result_table.verticalHeader().defaultSectionSize() == 18
+    assert bank._result_table.verticalHeader().minimumSectionSize() == 16
 
 
 def test_ai_can_skip_solution(window) -> None:
@@ -420,17 +456,17 @@ def test_stats_follow_configuration(window) -> None:
     # 该题型配置表同样显示命中题数，且题型列标明题型
     table = view._type_tables[QuestionType.SINGLE]
     assert table.item(0, 1).text() == "单选题"
-    assert table.item(0, 5).text() == "1"
+    assert table.item(0, 6).text() == "1"
 
     # 数量改为 0 后该行不再计入配比
-    table.item(0, 4).setText("0")
+    table.item(0, 5).setText("0")
     view.refresh_hit_counts()
     assert view._stats_table.rowCount() == 0
 
     # 命中量为 0 的知识点照样显示
     _add_row(view, QuestionType.SINGLE, "不存在的知识点", Difficulty.MEDIUM, 2)
     view.refresh_hit_counts()
-    assert view._stats_table.item(0, 4).text() == "0"
+    assert view._stats_table.item(0, 5).text() == "0"
 
 
 def test_reuse_signal_routed_to_paper_view(window) -> None:

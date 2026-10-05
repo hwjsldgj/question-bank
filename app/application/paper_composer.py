@@ -140,12 +140,13 @@ class PaperComposer:
     def _select_for_requirement(self, requirement: TypeRequirement) -> list[Question]:
         """为单个题型要求顺序读取题目（占位实现：不评分、不抽样、不补题）。
 
-        :param requirement: 单题型出题要求（题型 / 科目 / 难度 / 数量）
+        :param requirement: 单题型出题要求（题型 / 科目 / 知识板块 / 难度 / 数量）
         :return: 按题库顺序截取的前 ``count`` 道题；不足时返回实际可提供的全部
         """
         questions = self._question_repository.search(
             QuestionFilter(
                 subject=requirement.subject.strip(),
+                section=requirement.section.strip() or None,
                 difficulty=requirement.difficulty,
                 question_type=requirement.question_type,
             )

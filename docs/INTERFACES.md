@@ -25,7 +25,8 @@ class QuestionRepository(ABC):
     def delete(self, question_id: str) -> None
     def search(self, question_filter: QuestionFilter) -> list[Question]
     def count_available(self, subject: str, difficulty: str, question_type: str,
-                        knowledge_points: list[str] | None = None) -> int
+                        knowledge_points: list[str] | None = None,
+                        section: str | None = None) -> int
     def list_knowledge_points(self, subject: str | None = None) -> list[str]
     def count_by_type(self) -> dict[str, int]
     def count_by_image(self, image_path: str) -> int
@@ -35,7 +36,7 @@ class QuestionRepository(ABC):
 |----|------|
 | 实现 | `infrastructure/repositories/question_repository.py::SQLiteQuestionRepository` |
 | 调用方 | `application/question_service`、`application/paper_composer`、`application/question_generator` |
-| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6)；count_available 的 `knowledge_points` 非空时按"命中任一指定知识点"统计（用户需求：组卷可指定知识点） |
+| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6)；count_available 的 `knowledge_points` 非空时按"命中任一指定知识点"统计，`section` 非空时按知识板块过滤（用户需求：组卷可指定知识点与知识板块） |
 | 异常 | `sqlite3.Error` 由仓储向上传播，服务层转译为界面提示 |
 
 ### 1.2 UsageRepository —— 使用记录仓储
@@ -163,6 +164,7 @@ class TypeRequirement:              # domain/entities/criteria.py
     difficulty: Difficulty
     count: int
     knowledge_points: list[str] = field(default_factory=list)   # 组卷指定知识点
+    section: str = ""                                           # 组卷指定知识板块（不限为空）
 
 @dataclass
 class PaperCriteria:
@@ -176,12 +178,14 @@ class PaperCriteria:
     def enabled_requirements(self) -> list[TypeRequirement]     # 顺序：选择 -> 填空 -> 解答
 ```
 
-- 每类题型可配置多条要求（界面按"知识点 × 难度"逐行配置题数），
+- 每类题型可配置多条要求（界面按"知识板块 / 知识点 × 难度"逐行配置题数），
   组卷时同题型的多条要求合并为一个分区，同卷按题目 id 去重。
 - `knowledge_points` 为空表示不限；非空时命中其中任一知识点的题目才计入命中量与选题
   （用户需求：组卷环节可指定知识点）。
-- 界面在每个题型分组内保留原条件控件（知识点 / 难度 / 数量 / 命中量），
-  下面追加该题型的配置表（序号 / 题型 / 知识点 / 难度 / 数量 / 命中题数）：
+- `section` 为空表示不限；非空时只统计 / 选取该知识板块下的题目，且界面按所选板块
+  过滤知识点候选（用户需求：组卷可选知识板块作为限定）。
+- 界面在每个题型分组内保留原条件控件（知识板块 / 知识点 / 难度 / 数量 / 命中量），
+  下面追加该题型的配置表（序号 / 题型 / 知识板块 / 知识点 / 难度 / 数量 / 命中题数）：
   "添加到配置表"把当前条件追加为一行，可改难度、改数量、删除行；
   数量为 0 的行不参与组卷与配比统计。
 

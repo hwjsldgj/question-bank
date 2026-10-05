@@ -399,14 +399,17 @@ class QuestionService:
         difficulty: Difficulty,
         question_type: QuestionType,
         knowledge_points: list[str] | None = None,
+        section: str | None = None,
     ) -> int:
         """统计某组卷条件的命中题数量（需求 R6 第 2 / 3 条）。
 
         :param knowledge_points: 指定知识点（用户需求：组卷时可指定知识点），
             非空表示只统计命中其中任一知识点的题目
+        :param section: 指定知识板块（用户需求：组卷可选知识板块作为限定），
+            非空表示只统计该板块下的题目
         """
         return self._repository.count_available(
-            subject, difficulty, question_type, knowledge_points
+            subject, difficulty, question_type, knowledge_points, section
         )
 
     # ------------------------------------------------------------- AI 辨识

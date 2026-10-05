@@ -67,11 +67,12 @@ from app.presentation import ui_utils
 #: 图片预览的最大尺寸（像素）
 PREVIEW_SIZE = (220, 160)
 
-#: 检索结果表的数据列：题目 ID / 科目 / 知识点 / 题型 / 难度 / 质量 / 图片 /
-#: 使用次数 / 最近使用 / 题干（用户需求：检索结果含知识点列）
+#: 检索结果表的数据列：题目 ID / 科目 / 知识点板块 / 知识点 / 题型 / 难度 / 质量 /
+#: 图片 / 使用次数 / 最近使用 / 题干（用户需求：检索结果含知识点板块与知识点列）
 RESULT_COLUMNS: tuple[str, ...] = (
     "题目 ID",
     "科目",
+    "知识点板块",
     "知识点",
     "题型",
     "难度",
@@ -84,10 +85,10 @@ RESULT_COLUMNS: tuple[str, ...] = (
 
 #: 检索结果表的行高（用户需求：减小科目 / 题型 / 难度 / 质量 / 图片 /
 #: 使用次数等短列的占用，行距比默认更紧凑）
-RESULT_ROW_HEIGHT = 22
+RESULT_ROW_HEIGHT = 18
 
 #: 检索结果表的最小行高
-RESULT_MIN_ROW_HEIGHT = 18
+RESULT_MIN_ROW_HEIGHT = 16
 
 
 class _PasteDraftEditor(QDialog):
@@ -1722,6 +1723,7 @@ class QuestionBankView(QWidget):
             values = [
                 question.id,
                 question.subject,
+                question.section,
                 "、".join(question.knowledge_points),
                 ui_utils.QUESTION_TYPE_LABELS.get(question.type, ""),
                 ui_utils.DIFFICULTY_LABELS.get(question.difficulty, ""),

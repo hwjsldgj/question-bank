@@ -314,6 +314,7 @@ class PaperGenerationView(QWidget):
         table.setItemDelegateForColumn(4, _DifficultyDelegate(table))
         table.setItemDelegateForColumn(5, _CountDelegate(table))
         table.itemChanged.connect(self._on_conditions_changed)
+        ui_utils.make_rows_compact(table)
 
         add_button = QPushButton("添加到配置表")
         add_button.clicked.connect(
@@ -363,6 +364,7 @@ class PaperGenerationView(QWidget):
         )
         self._stats_table.setMinimumHeight(_TABLE_HEIGHT)
         self._stats_table.setMaximumHeight(_TABLE_HEIGHT)
+        ui_utils.make_rows_compact(self._stats_table)
         layout.addWidget(self._stats_table)
         return group
 
@@ -389,6 +391,7 @@ class PaperGenerationView(QWidget):
         self._result_table.setMinimumHeight(
             self._result_table.sizeHint().height() * _PREVIEW_HEIGHT_FACTOR
         )
+        ui_utils.make_rows_compact(self._result_table)
         layout.addWidget(self._result_table)
 
         score_row = QHBoxLayout()

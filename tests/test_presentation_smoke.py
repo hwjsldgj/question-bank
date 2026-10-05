@@ -317,7 +317,7 @@ def test_bank_completion_widgets(window) -> None:
 
 
 def test_search_results_have_knowledge_points_and_compact_rows(window) -> None:
-    """检索结果含知识点板块与知识点列，并收紧行距（用户需求）。"""
+    """检索结果含知识点板块与知识点列，各表格行距统一收紧（用户需求）。"""
     bank = window.question_bank_view
     headers = [
         bank._result_table.horizontalHeaderItem(index).text()
@@ -325,8 +325,75 @@ def test_search_results_have_knowledge_points_and_compact_rows(window) -> None:
     ]
     assert headers.index("知识点板块") == headers.index("科目") + 1
     assert headers.index("知识点") == headers.index("知识点板块") + 1
-    assert bank._result_table.verticalHeader().defaultSectionSize() == 18
-    assert bank._result_table.verticalHeader().minimumSectionSize() == 16
+
+    tables = [
+        bank._result_table,
+        bank._options_table,
+        bank._preview_table,
+        window.paper_generation_view._stats_table,
+        window.paper_generation_view._result_table,
+        *window.paper_generation_view._type_tables.values(),
+        window.history_view._history_table,
+        window.history_view._import_table,
+        window.history_view._edit_table,
+    ]
+    for table in tables:
+        assert (
+            table.verticalHeader().defaultSectionSize()
+            == ui_utils.COMPACT_ROW_HEIGHT
+        )
+        assert (
+            table.verticalHeader().minimumSectionSize()
+            == ui_utils.COMPACT_MIN_ROW_HEIGHT
+        )
+
+
+def test_search_filters_by_knowledge_section(window) -> None:
+    """检索可按知识板块过滤，板块候选随科目联动（用户需求）。"""
+    from app.domain.entities.question import Option, Question
+
+    bank = window.question_bank_view
+    service = bank._question_service
+    for section, stem in (("代数", "板块题"), ("几何", "几何题")):
+        service.create_question(
+            Question(
+                id="",
+                subject="数学",
+                section=section,
+                knowledge_points=["一元二次方程"],
+                type=QuestionType.SINGLE,
+                stem=stem,
+                options=[Option("A", "1"), Option("B", "2")],
+                answer=["A"],
+                difficulty=Difficulty.MEDIUM,
+            )
+        )
+
+    bank._search_subject.setCurrentIndex(bank._search_subject.findData("数学"))
+    bank.reload_knowledge_points()
+    assert bank._search_section.findData("代数") >= 0
+
+    bank._search_section.setCurrentIndex(bank._search_section.findData("代数"))
+    bank._search_knowledge.setText("")
+    bank._on_search()
+    assert bank._result_table.rowCount() == 1
+    assert bank._result_table.item(0, 2).text() == "代数"
+
+
+def test_history_summary_includes_knowledge_section(window) -> None:
+    """组卷条件摘要包含知识板块（用户需求）。"""
+    criteria = PaperCriteria(
+        choice_enabled=True,
+        subject="数学",
+        choice_items=[
+            TypeRequirement(
+                QuestionType.SINGLE, "数学", Difficulty.EASY, 2, ["一元二次方程"], "代数"
+            )
+        ],
+    )
+    summary = window.history_view._criteria_summary(criteria)
+    assert "板块：代数" in summary
+    assert "知识点：一元二次方程" in summary
 
 
 def test_ai_can_skip_solution(window) -> None:

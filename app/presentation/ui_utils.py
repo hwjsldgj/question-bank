@@ -96,6 +96,19 @@ RECOGNIZE_MODULE_LABELS: dict[RecognizeModule, str] = {
     RecognizeModule.OPTIONS: "选项",
 }
 
+#: 表格紧凑行高（用户需求：减小科目 / 题型 / 难度 / 质量 / 图片 / 使用次数
+#: 等短列所在行的高度）
+COMPACT_ROW_HEIGHT = 18
+
+#: 表格最小行高
+COMPACT_MIN_ROW_HEIGHT = 16
+
+
+def make_rows_compact(table) -> None:
+    """收紧表格行距（各视图表格统一使用，避免行高参差不齐）。"""
+    table.verticalHeader().setDefaultSectionSize(COMPACT_ROW_HEIGHT)
+    table.verticalHeader().setMinimumSectionSize(COMPACT_MIN_ROW_HEIGHT)
+
 
 def info(parent: QWidget, text: str, title: str = "提示") -> None:
     """信息提示对话框。"""

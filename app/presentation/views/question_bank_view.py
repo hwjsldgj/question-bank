@@ -83,13 +83,6 @@ RESULT_COLUMNS: tuple[str, ...] = (
     "题干",
 )
 
-#: 检索结果表的行高（用户需求：减小科目 / 题型 / 难度 / 质量 / 图片 /
-#: 使用次数等短列的占用，行距比默认更紧凑）
-RESULT_ROW_HEIGHT = 18
-
-#: 检索结果表的最小行高
-RESULT_MIN_ROW_HEIGHT = 16
-
 
 class _PasteDraftEditor(QDialog):
     """批量粘贴预览中双击一行后弹出的候选题编辑器。
@@ -194,6 +187,7 @@ class _PasteDraftEditor(QDialog):
         self._options_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
+        ui_utils.make_rows_compact(self._options_table)
         layout.addWidget(self._options_table)
 
         option_row = QHBoxLayout()
@@ -472,6 +466,7 @@ class QuestionBankView(QWidget):
         )
         self._options_table.verticalHeader().setVisible(False)
         self._options_table.setFixedHeight(150)
+        ui_utils.make_rows_compact(self._options_table)
         layout.addWidget(self._options_table)
 
         add_button = QPushButton("添加选项")
@@ -578,6 +573,7 @@ class QuestionBankView(QWidget):
             3, QHeaderView.ResizeMode.Stretch
         )
         self._preview_table.doubleClicked.connect(self._on_preview_double_clicked)
+        ui_utils.make_rows_compact(self._preview_table)
         layout.addWidget(self._preview_table)
 
         self._paste_status = QLabel("尚未解析")
@@ -592,6 +588,13 @@ class QuestionBankView(QWidget):
         filter_row = QHBoxLayout()
         self._search_subject = QComboBox()
         self._search_subject.setMinimumWidth(120)
+        self._search_subject.currentIndexChanged.connect(self._on_search_subject_changed)
+        self._search_section = QComboBox()
+        self._search_section.setMinimumWidth(120)
+        self._search_section.setToolTip("按知识板块过滤检索结果（用户需求）")
+        self._search_section.currentIndexChanged.connect(
+            self._reload_search_completer
+        )
         self._search_knowledge = QLineEdit()
         self._search_knowledge.setPlaceholderText("知识点（可空）")
         self._search_difficulty = QComboBox()
@@ -616,6 +619,8 @@ class QuestionBankView(QWidget):
         search_button.clicked.connect(self._on_search)
         filter_row.addWidget(QLabel("科目"))
         filter_row.addWidget(self._search_subject)
+        filter_row.addWidget(QLabel("知识板块"))
+        filter_row.addWidget(self._search_section)
         filter_row.addWidget(QLabel("知识点"))
         filter_row.addWidget(self._search_knowledge)
         filter_row.addWidget(self._search_difficulty)
@@ -638,10 +643,7 @@ class QuestionBankView(QWidget):
         self._result_table.horizontalHeader().setSectionResizeMode(
             len(RESULT_COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
         )
-        self._result_table.verticalHeader().setDefaultSectionSize(RESULT_ROW_HEIGHT)
-        self._result_table.verticalHeader().setMinimumSectionSize(
-            RESULT_MIN_ROW_HEIGHT
-        )
+        ui_utils.make_rows_compact(self._result_table)
         layout.addWidget(self._result_table)
 
         action_row = QHBoxLayout()
@@ -1619,6 +1621,7 @@ class QuestionBankView(QWidget):
         """根据检索控件构建过滤器（空条件表示不过滤）。"""
         return QuestionFilter(
             subject=self._search_subject.currentData() or None,
+            section=self._search_section.currentData() or None,
             knowledge_point=self._search_knowledge.text().strip() or None,
             difficulty=self._search_difficulty.currentData(),
             question_type=self._search_type.currentData(),
@@ -1645,25 +1648,67 @@ class QuestionBankView(QWidget):
             combo.setCurrentIndex(index if index >= 0 else 0)
             combo.blockSignals(False)
 
+        # 科目列表变化后，检索区的板块候选与知识点补全需按新科目重建
+        self._reload_search_sections()
+        self._reload_search_completer()
+
     def reload_knowledge_points(self) -> None:
         """按已有知识点刷新录入与检索的自动补全（用户需求：完成题库相关内容）。"""
-        points = ui_utils.safe_call(
-            self._question_service.list_knowledge_points, default=None
-        ) or []
-
-        # 录入页补全器由 _reload_knowledge_completer 按板块刷新；检索框独立新建一个。
-        # 注意：对 _knowledge_edit 调 setCompleter 会让 Qt 删除长期持有的
-        # _knowledge_completer，因此这里只碰检索框。
-        search_completer = QCompleter(
-            QStringListModel(list(points), self._search_knowledge), self._search_knowledge
-        )
-        search_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-        search_completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        self._search_knowledge.setCompleter(search_completer)
+        # 检索区的板块候选与知识点补全随科目 / 板块联动（用户需求：检索可按板块过滤）
+        self._reload_search_sections()
+        self._reload_search_completer()
 
         # 录入页按当前科目重新联动板块与知识点（科目下拉刷新后需重建）
         self._reload_sections()
         self._reload_knowledge_completer()
+
+    def _on_search_subject_changed(self) -> None:
+        """检索科目切换：重建板块下拉并刷新知识点补全。"""
+        self._reload_search_sections()
+        self._reload_search_completer()
+
+    def _reload_search_sections(self) -> None:
+        """按检索科目重建检索区的板块下拉框（"全部板块"始终保留）。"""
+        subject = self._search_subject.currentData() or ""
+        current = self._search_section.currentData()
+        sections = ui_utils.safe_call(
+            self._question_service.list_sections, subject, default=None
+        ) or {}
+        self._search_section.blockSignals(True)
+        self._search_section.clear()
+        self._search_section.addItem("全部板块", "")
+        for section in sections:
+            self._search_section.addItem(section, section)
+        index = self._search_section.findData(current)
+        self._search_section.setCurrentIndex(index if index >= 0 else 0)
+        self._search_section.blockSignals(False)
+
+    def _reload_search_completer(self) -> None:
+        """按检索科目 / 板块刷新检索框的知识点补全候选。"""
+        subject = self._search_subject.currentData() or ""
+        section = self._search_section.currentData() or ""
+        sections = ui_utils.safe_call(
+            self._question_service.list_sections, subject, default=None
+        ) or {}
+        if section:
+            candidates = list(sections.get(section, []))
+        else:
+            candidates = [point for group in sections.values() for point in group]
+        if not candidates:
+            candidates = list(
+                ui_utils.safe_call(
+                    self._question_service.list_knowledge_points,
+                    subject or None,
+                    default=None,
+                )
+                or []
+            )
+        search_completer = QCompleter(
+            QStringListModel(candidates, self._search_knowledge), self._search_knowledge
+        )
+        search_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        search_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._search_knowledge.setCompleter(search_completer)
 
     def reload_questions(self) -> None:
         """静默重新检索（初始化与跨视图刷新使用，不弹窗）。"""

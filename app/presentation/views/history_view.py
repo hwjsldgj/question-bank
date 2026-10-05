@@ -80,6 +80,7 @@ class HistoryView(QWidget):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self._history_table.horizontalHeader().setStretchLastSection(True)
+        ui_utils.make_rows_compact(self._history_table)
         layout.addWidget(self._history_table)
 
         button_row = QHBoxLayout()
@@ -150,13 +151,14 @@ class HistoryView(QWidget):
 
     @staticmethod
     def _configure_readonly_table(table: QTableWidget, stretch_column: int) -> None:
-        """统一设置只读、按行选择与末列拉伸。"""
+        """统一设置只读、按行选择、末列拉伸与紧凑行距。"""
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.horizontalHeader().setSectionResizeMode(
             stretch_column, QHeaderView.ResizeMode.Stretch
         )
+        ui_utils.make_rows_compact(table)
 
     # --------------------------------------------------------------- 加载
 
@@ -260,11 +262,14 @@ class HistoryView(QWidget):
 
     @staticmethod
     def _requirement_summary(label: str, item) -> str:
-        """把单个题型要求渲染为一段摘要（含用户指定的知识点）。"""
+        """把单个题型要求渲染为一段摘要（含指定知识板块与知识点）。"""
         text = (
             f"{label}×{item.count}（{item.subject}/"
             f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}"
         )
+        section = str(getattr(item, "section", "") or "")
+        if section:
+            text += f"/板块：{section}"
         points = list(getattr(item, "knowledge_points", None) or [])
         if points:
             text += "/知识点：" + "、".join(points)

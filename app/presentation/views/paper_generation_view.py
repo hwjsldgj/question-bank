@@ -1,19 +1,21 @@
 """组卷视图：配置 / 配比统计 / 生成 / 分值编辑 / 导出（需求 R6-R12）。
 
-界面结构（用户需求：按题型分组配置"知识点 × 难度"的题数）：
+界面结构（用户需求）：
 
 - 组卷科目：一次组卷只针对一个科目
-- 四个题型分组（单选 / 多选 / 填空 / 解答）：保留原分组容器，内部改为配置表
-  （序号 / 知识点 / 难度 / 数量）；配置行按当前科目的知识点 × 易中难自动生成，
-  可改数量、改难度、删除行，只配数量、不勾选单题
-- 配比统计预览：只显示统计表（题型 / 难度 / 知识点 / 配置题数 / 命中题数），
-  不含题目正文，随上方配置实时刷新
+- 四个题型分组（单选 / 多选 / 填空 / 解答）：保留原分组容器与原有条件控件
+  （启用开关 + 知识点 / 难度 / 数量 / 命中量），并在其下**追加配置表**，
+  显示当前题型已添加的条目（序号 / 题型 / 知识点 / 难度 / 数量 / 命中题数）；
+  点"添加到配置表"把当前条件追加为一行，可改难度、改数量、删除行；
+  只配数量，不勾选单题
+- 配比统计预览：跨题型汇总（题型 / 难度 / 知识点 / 配置题数 / 命中题数），
+  只显示统计表，不显示题目正文
 - 生成试卷：调用 PaperComposer（题库不足按实际可提供数量出卷）
 - 试卷预览与分值：原有展示与分值设置逻辑不变，表格高度为原 3 倍
 - 导出：选择 TXT / PDF 与目标目录，调用 PaperExporter
 
-数据流：上方配置 -> 中间统计实时更新（300ms 防抖）；下方预览在点击
-"生成试卷"时按最新配置渲染。
+数据流：上方配置 -> 各题型配置表与中间统计实时更新（300ms 防抖）；
+下方预览在点击"生成试卷"时按最新配置渲染。
 
 依赖：PySide6.QtCore / QtWidgets、app.container.Container、
       app.domain.entities.{criteria,paper,question}、app.domain.entities.configs、
@@ -23,14 +25,17 @@
 """
 
 import os
+import re
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QStringListModel, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -68,14 +73,28 @@ _TYPE_GROUP_TITLES: dict[QuestionType, str] = {
     QuestionType.SOLUTION: "解答题部分",
 }
 
-#: 配置行展开用的三级难度（组卷不接受"待确认"）
+#: 各题型数量控件的默认值（沿用原有默认）
+_TYPE_DEFAULT_COUNT: dict[QuestionType, int] = {
+    QuestionType.SINGLE: 5,
+    QuestionType.MULTIPLE: 3,
+    QuestionType.FILL: 4,
+    QuestionType.SOLUTION: 2,
+}
+
+#: 配置表列：序号 / 题型 / 知识点 / 难度 / 数量 / 命中题数
+_CONFIG_COLUMNS: tuple[str, ...] = ("序号", "题型", "知识点", "难度", "数量", "命中题数")
+
+#: 知识点留空时在配置表中显示的占位文本（对应该行"不限知识点"）
+_ANY_POINT_LABEL = "不限"
+
+#: 三级难度（组卷不接受"待确认"）
 _DIFFICULTIES: tuple[Difficulty, ...] = (
     Difficulty.EASY,
     Difficulty.MEDIUM,
     Difficulty.HARD,
 )
 
-#: 单个题型配置表的最大高度（内部滚动，避免知识点过多时挤占下方预览）
+#: 单个题型配置表的最大高度（内部滚动，避免行数多时挤占下方预览）
 _CONFIG_TABLE_HEIGHT = 160
 
 #: 试卷预览表格高度 = 原始高度 × 本系数（用户需求：高度为原 3 倍）
@@ -90,8 +109,8 @@ _DIFFICULTY_BY_LABEL: dict[str, Difficulty] = {
 class _DifficultyDelegate(QStyledItemDelegate):
     """难度列编辑器：只能选择易 / 中 / 难。
 
-    用委托按需创建编辑器而不是常驻控件：知识点多时配置表可达数百行，
-    常驻控件会让科目切换卡住（用户反馈的"选择科目无响应"）。
+    用委托按需创建编辑器而不是常驻控件：配置表行数可能很多，
+    常驻控件会让界面卡住（用户反馈的"选择科目无响应"）。
     """
 
     def createEditor(self, parent, option, index):  # noqa: N802 - Qt 命名约定
@@ -120,10 +139,10 @@ class _CountDelegate(QStyledItemDelegate):
 
 
 class PaperGenerationView(QWidget):
-    """组卷视图：按"知识点 × 难度"配置题数，题库优先、顺序取题。"""
+    """组卷视图：按题型逐个添加"知识点 / 难度 / 数量"配置，顺序取题。"""
 
     def __init__(self, container) -> None:
-        """注入容器、构建界面并初始化配置行与统计。"""
+        """注入容器、构建界面并刷新知识点候选与命中量。"""
         super().__init__()
         self._container = container
         self._composer = container.paper_composer
@@ -136,6 +155,10 @@ class PaperGenerationView(QWidget):
         self._type_tables: dict[QuestionType, QTableWidget] = {}
         self._type_bodies: dict[QuestionType, QWidget] = {}
         self._type_enabled: dict[QuestionType, QCheckBox] = {}
+        self._type_knowledge: dict[QuestionType, QComboBox] = {}
+        self._type_difficulty: dict[QuestionType, QComboBox] = {}
+        self._type_count: dict[QuestionType, QSpinBox] = {}
+        self._type_hit: dict[QuestionType, QLabel] = {}
 
         self._hit_timer = QTimer(self)
         self._hit_timer.setSingleShot(True)
@@ -174,7 +197,7 @@ class PaperGenerationView(QWidget):
         self._subject_combo.currentIndexChanged.connect(self._on_subject_changed)
         layout.addWidget(QLabel("科目"))
         layout.addWidget(self._subject_combo)
-        layout.addWidget(QLabel("（配置行按该科目的知识点 × 难度自动生成）"))
+        layout.addWidget(QLabel("（一次组卷只针对一个科目）"))
         layout.addStretch(1)
         return group
 
@@ -185,8 +208,38 @@ class PaperGenerationView(QWidget):
         combo.setMinimumWidth(120)
         return combo
 
+    @staticmethod
+    def _new_difficulty_combo() -> QComboBox:
+        """构建只含三级难度的下拉框（组卷不接受"待确认"）。"""
+        combo = QComboBox()
+        for difficulty in _DIFFICULTIES:
+            combo.addItem(ui_utils.DIFFICULTY_LABELS[difficulty], difficulty)
+        ui_utils.select_combo_data(combo, Difficulty.MEDIUM)
+        return combo
+
+    @staticmethod
+    def _new_knowledge_combo() -> QComboBox:
+        """构建知识点选择框（可选已有知识点，也可直接手写）。
+
+        多个知识点用逗号 / 顿号分隔，留空表示不限。
+        """
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setMinimumWidth(160)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        line_edit = combo.lineEdit()
+        if line_edit is not None:
+            line_edit.setPlaceholderText("不限（可多个，用逗号分隔）")
+        return combo
+
+    @staticmethod
+    def parse_knowledge(text: str) -> list[str]:
+        """把知识点输入文本拆分为知识点列表（支持中英文逗号、顿号与分号）。"""
+        parts = [part.strip() for part in re.split(r"[,，、;；\s]+", text or "")]
+        return [part for part in parts if part]
+
     def _build_type_group(self, question_type: QuestionType) -> QGroupBox:
-        """构建单个题型分组：启用开关 + 配置表（序号 / 知识点 / 难度 / 数量）。"""
+        """构建单个题型分组：原条件控件 + 追加的配置表。"""
         title = _TYPE_GROUP_TITLES[question_type]
         group = QGroupBox(title)
         outer = QVBoxLayout(group)
@@ -197,8 +250,27 @@ class PaperGenerationView(QWidget):
 
         body = QWidget()
         body_layout = QVBoxLayout(body)
-        table = QTableWidget(0, 4)
-        table.setHorizontalHeaderLabels(["序号", "知识点", "难度", "数量"])
+
+        # 原条件控件：知识点 / 难度 / 数量（只配数量，不勾选单题）
+        knowledge = self._new_knowledge_combo()
+        difficulty = self._new_difficulty_combo()
+        count = QSpinBox()
+        count.setRange(1, 999)
+        count.setValue(_TYPE_DEFAULT_COUNT[question_type])
+        hit = QLabel("命中：—")
+        form = QFormLayout()
+        form.addRow("知识点", knowledge)
+        form.addRow("难度", difficulty)
+        form.addRow("数量", count)
+        form.addRow("", hit)
+        body_layout.addLayout(form)
+
+        knowledge.currentTextChanged.connect(self._on_conditions_changed)
+        difficulty.currentIndexChanged.connect(self._on_conditions_changed)
+
+        # 追加的配置表：显示当前题型已添加的条目（不含题目正文）
+        table = QTableWidget(0, len(_CONFIG_COLUMNS))
+        table.setHorizontalHeaderLabels(list(_CONFIG_COLUMNS))
         table.setEditTriggers(
             QAbstractItemView.EditTrigger.DoubleClicked
             | QAbstractItemView.EditTrigger.SelectedClicked
@@ -208,21 +280,26 @@ class PaperGenerationView(QWidget):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.verticalHeader().setVisible(False)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table.setMaximumHeight(_CONFIG_TABLE_HEIGHT)
-        table.setItemDelegateForColumn(2, _DifficultyDelegate(table))
-        table.setItemDelegateForColumn(3, _CountDelegate(table))
+        table.setItemDelegateForColumn(3, _DifficultyDelegate(table))
+        table.setItemDelegateForColumn(4, _CountDelegate(table))
         table.itemChanged.connect(self._on_conditions_changed)
-        body_layout.addWidget(table)
 
+        add_button = QPushButton("添加到配置表")
+        add_button.clicked.connect(
+            lambda _checked=False, target=question_type: self._add_from_controls(target)
+        )
         remove_button = QPushButton("删除选中行")
         remove_button.clicked.connect(
             lambda _checked=False, target=table: self._remove_selected_rows(target)
         )
         button_row = QHBoxLayout()
+        button_row.addWidget(add_button)
         button_row.addWidget(remove_button)
         button_row.addStretch(1)
         body_layout.addLayout(button_row)
+        body_layout.addWidget(table)
 
         outer.addWidget(body)
         body.setEnabled(enabled.isChecked())
@@ -230,10 +307,14 @@ class PaperGenerationView(QWidget):
         self._type_tables[question_type] = table
         self._type_bodies[question_type] = body
         self._type_enabled[question_type] = enabled
+        self._type_knowledge[question_type] = knowledge
+        self._type_difficulty[question_type] = difficulty
+        self._type_count[question_type] = count
+        self._type_hit[question_type] = hit
         return group
 
     def _build_stats_group(self) -> QGroupBox:
-        """构建配比统计预览区（只显示统计表，不显示题目正文）。"""
+        """构建配比统计预览区（跨题型汇总，只显示统计表）。"""
         group = QGroupBox("配比统计预览")
         layout = QVBoxLayout(group)
 
@@ -340,11 +421,11 @@ class PaperGenerationView(QWidget):
 
     @property
     def _subject(self) -> str:
-        """当前全局科目（供配置行与条件构建使用）。"""
+        """当前全局科目（供命中统计与条件构建使用）。"""
         return self._subject_combo.currentText().strip()
 
     def reload_subjects(self) -> None:
-        """按设置中的科目列表重建科目下拉框，并按新科目重建配置行（用户需求）。"""
+        """按设置中的科目列表重建科目下拉框，并刷新知识点候选（用户需求）。"""
         subjects = ui_utils.safe_call(
             self._question_service.list_subjects, default=None
         )
@@ -358,97 +439,106 @@ class PaperGenerationView(QWidget):
         index = self._subject_combo.findText(current)
         self._subject_combo.setCurrentIndex(index if index >= 0 else 0)
         self._subject_combo.blockSignals(False)
-        self._sync_rows(force=True)
-        self.refresh_hit_counts()
+        self.reload_knowledge_points()
 
     def reload_knowledge_points(self) -> None:
-        """按题库现有知识点补充配置行（新增知识点补行，已改数量与已删行不动）。"""
-        self._sync_rows(force=False)
-        self.refresh_hit_counts()
+        """按当前科目刷新四个知识点选择框的候选与补全，并刷新命中量。
 
-    def _sync_rows(self, force: bool) -> None:
-        """同步四个题型配置表与知识点列表。
-
-        :param force: True 时清空重建（科目变化）；False 时只为新知识点补行
+        保留用户当前输入（含手写但题库中还不存在的知识点）。
         """
         points = ui_utils.safe_call(
             self._question_service.list_knowledge_points, self._subject, default=None
         ) or []
-        for table in self._type_tables.values():
-            rows = self._collect_rows(table, points, force)
-            self._fill_table(table, rows)
+        model = QStringListModel(list(points), self)
+        for combo in self._type_knowledge.values():
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(list(points))
+            combo.setCurrentIndex(-1)
+            combo.setEditText(current)
+            combo.blockSignals(False)
+            completer = QCompleter(model, combo)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            combo.setCompleter(completer)
+        self.refresh_hit_counts()
 
-    def _collect_rows(
-        self, table: QTableWidget, points: list[str], force: bool
-    ) -> list[tuple[str, Difficulty, int]]:
-        """计算配置表的全部行：已有行 + 新知识点 × 三级难度，数量默认 0。"""
-        if force:
-            return [
-                (point, difficulty, 0)
-                for point in points
-                for difficulty in _DIFFICULTIES
-            ]
-        rows = [self._row_values(table, row) for row in range(table.rowCount())]
-        known = {point for point, _difficulty, _count in rows}
-        rows.extend(
-            (point, difficulty, 0)
-            for point in points
-            if point not in known
-            for difficulty in _DIFFICULTIES
+    def _on_subject_changed(self) -> None:
+        """科目变化：刷新知识点候选与命中量（配置行由出题者维护，保持不动）。"""
+        self.reload_knowledge_points()
+
+    def _add_from_controls(self, question_type: QuestionType) -> None:
+        """把当前条件（知识点 / 难度 / 数量）追加为配置表的一行。"""
+        knowledge = self._type_knowledge[question_type]
+        difficulty = self._type_difficulty[question_type].currentData()
+        if difficulty is None:
+            return
+        table = self._type_tables[question_type]
+        self._append_row(
+            table,
+            question_type,
+            knowledge.currentText().strip(),
+            Difficulty(difficulty),
+            self._type_count[question_type].value(),
         )
-        return rows
-
-    def _fill_table(
-        self, table: QTableWidget, rows: list[tuple[str, Difficulty, int]]
-    ) -> None:
-        """一次性写入配置表全部行（批量赋值，避免逐行插入触发信号与重绘）。"""
-        table.blockSignals(True)
-        table.setRowCount(len(rows))
-        for row, (point, difficulty, count) in enumerate(rows):
-            self._write_row(table, row, point, difficulty, count)
-        table.blockSignals(False)
+        knowledge.setEditText("")
+        self._on_conditions_changed()
 
     def _append_row(
-        self, table: QTableWidget, point: str, difficulty: Difficulty, count: int
+        self,
+        table: QTableWidget,
+        question_type: QuestionType,
+        point_text: str,
+        difficulty: Difficulty,
+        count: int,
     ) -> None:
         """追加一条配置行（序号自动编号，难度与数量在单元格内编辑）。"""
         row = table.rowCount()
         table.setRowCount(row + 1)
-        self._write_row(table, row, point, difficulty, count)
+        self._write_row(table, row, question_type, point_text, difficulty, count)
 
-    @staticmethod
     def _write_row(
+        self,
         table: QTableWidget,
         row: int,
-        point: str,
+        question_type: QuestionType,
+        point_text: str,
         difficulty: Difficulty,
         count: int,
     ) -> None:
-        """写入一行配置：序号 / 知识点只读，难度与数量可编辑。"""
+        """写入一行配置：序号 / 题型 / 知识点只读，难度与数量可编辑。"""
         index_item = QTableWidgetItem(str(row + 1))
         index_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        point_item = QTableWidgetItem(point)
+        type_item = QTableWidgetItem(
+            ui_utils.QUESTION_TYPE_LABELS.get(question_type, "")
+        )
+        point_item = QTableWidgetItem(point_text or _ANY_POINT_LABEL)
         difficulty_item = QTableWidgetItem(ui_utils.DIFFICULTY_LABELS[difficulty])
         count_item = QTableWidgetItem(str(count))
         count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        for item in (index_item, point_item):
+        hit_item = QTableWidgetItem("—")
+        hit_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        for item in (index_item, type_item, point_item, hit_item):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         for column, item in enumerate(
-            (index_item, point_item, difficulty_item, count_item)
+            (index_item, type_item, point_item, difficulty_item, count_item, hit_item)
         ):
             table.setItem(row, column, item)
 
     @staticmethod
-    def _row_values(table: QTableWidget, row: int) -> tuple[str, Difficulty, int]:
-        """读取一行配置：``(知识点, 难度, 数量)``；难度无法识别时返回 None。"""
-        point_item = table.item(row, 1)
-        difficulty_item = table.item(row, 2)
+    def _row_values(
+        table: QTableWidget, row: int
+    ) -> tuple[str, Difficulty | None, int]:
+        """读取一行配置：``(知识点文本, 难度, 数量)``；难度无法识别时返回 None。"""
+        point_item = table.item(row, 2)
+        difficulty_item = table.item(row, 3)
         if point_item is None or difficulty_item is None:
             return ("", None, 0)
         return (
-            point_item.text(),
+            "" if point_item.text() == _ANY_POINT_LABEL else point_item.text(),
             _DIFFICULTY_BY_LABEL.get(difficulty_item.text()),
-            PaperGenerationView._item_count(table.item(row, 3)),
+            PaperGenerationView._item_count(table.item(row, 4)),
         )
 
     @staticmethod
@@ -478,61 +568,87 @@ class PaperGenerationView(QWidget):
         self._on_conditions_changed()
 
     def _read_rows(self, table: QTableWidget) -> list[tuple[str, Difficulty, int]]:
-        """读取配置表的有效行：``(知识点, 难度, 数量)``。"""
+        """读取配置表的有效行：``(知识点文本, 难度, 数量)``。"""
         rows: list[tuple[str, Difficulty, int]] = []
         for row in range(table.rowCount()):
-            point, difficulty, count = self._row_values(table, row)
+            point_text, difficulty, count = self._row_values(table, row)
             if difficulty is None:
                 continue
-            rows.append((point, difficulty, count))
+            rows.append((point_text, difficulty, count))
         return rows
-
-    def _on_subject_changed(self) -> None:
-        """科目变化：按新科目的知识点重建配置行并刷新统计。"""
-        self._sync_rows(force=True)
-        self._on_conditions_changed()
 
     # ------------------------------------------------------------- 条件与统计
 
     def _on_conditions_changed(self) -> None:
-        """配置变化：切换配置表可用性并触发统计防抖刷新。"""
+        """配置变化：切换分组可用性并触发命中量与统计的防抖刷新。"""
         for question_type, enabled in self._type_enabled.items():
             self._type_bodies[question_type].setEnabled(enabled.isChecked())
         self._hit_timer.start()
 
-    def refresh_hit_counts(self) -> None:
-        """实时刷新配比统计表：配置题数 + 该组合的题库命中题数（需求 R6 第 2 条）。"""
-        subject = self._subject
-        rows: list[tuple[str, str, str, int, int | None]] = []
-        for question_type in _TYPE_ORDER:
-            if not self._type_enabled[question_type].isChecked():
-                continue
-            for point, difficulty, count in self._read_rows(
-                self._type_tables[question_type]
-            ):
-                if count <= 0:
-                    continue
-                hits = ui_utils.safe_call(
-                    self._question_service.count_available,
-                    subject,
-                    difficulty,
-                    question_type,
-                    [point] if point else [],
-                    default=None,
-                )
-                rows.append(
-                    (
-                        ui_utils.QUESTION_TYPE_LABELS.get(question_type, ""),
-                        ui_utils.DIFFICULTY_LABELS.get(difficulty, ""),
-                        point,
-                        count,
-                        hits,
-                    )
-                )
-        self._render_stats(rows)
+    def _count_hits(
+        self, question_type: QuestionType, difficulty: Difficulty, point_text: str
+    ) -> int | None:
+        """查询"科目 + 题型 + 难度 + 知识点"组合的题库命中题数。"""
+        return ui_utils.safe_call(
+            self._question_service.count_available,
+            self._subject,
+            difficulty,
+            question_type,
+            self.parse_knowledge(point_text),
+            default=None,
+        )
 
-    def _render_stats(self, rows: list[tuple[str, str, str, int, int | None]]) -> None:
-        """把统计行写入配比统计表（只显示统计，不显示题目正文）。"""
+    def refresh_hit_counts(self) -> None:
+        """刷新各题型配置表的命中题数列与中间配比统计（需求 R6 第 2 / 3 条）。"""
+        stats: list[tuple[str, str, str, int, int | None]] = []
+        for question_type in _TYPE_ORDER:
+            table = self._type_tables[question_type]
+            enabled = self._type_enabled[question_type].isChecked()
+            table.blockSignals(True)
+            for row in range(table.rowCount()):
+                point_text, difficulty, count = self._row_values(table, row)
+                if difficulty is None:
+                    continue
+                hits = self._count_hits(question_type, difficulty, point_text)
+                hit_item = table.item(row, 5)
+                if hit_item is not None:
+                    hit_item.setText("—" if hits is None else str(hits))
+                if enabled and count > 0:
+                    stats.append(
+                        (
+                            ui_utils.QUESTION_TYPE_LABELS.get(question_type, ""),
+                            ui_utils.DIFFICULTY_LABELS.get(difficulty, ""),
+                            point_text or _ANY_POINT_LABEL,
+                            count,
+                            hits,
+                        )
+                    )
+            table.blockSignals(False)
+            self._update_hit_label(question_type)
+        self._render_stats(stats)
+
+    def _update_hit_label(self, question_type: QuestionType) -> None:
+        """刷新当前题型条件控件的命中量标签（含指定知识点）。"""
+        label = self._type_hit[question_type]
+        difficulty = self._type_difficulty[question_type].currentData()
+        if not self._subject:
+            label.setText("命中：—（请先在设置中维护科目）")
+            return
+        if difficulty is None:
+            label.setText("命中：—")
+            return
+        text_input = self._type_knowledge[question_type].currentText()
+        points = self.parse_knowledge(text_input)
+        hits = self._count_hits(question_type, Difficulty(difficulty), text_input)
+        text = "命中：—" if hits is None else f"命中：{hits} 道"
+        if points:
+            text += f"（知识点：{'、'.join(points)}）"
+        label.setText(text)
+
+    def _render_stats(
+        self, rows: list[tuple[str, str, str, int, int | None]]
+    ) -> None:
+        """把统计行写入中间配比统计表（只显示统计，不显示题目正文）。"""
         self._stats_table.setRowCount(0)
         for values in rows:
             row = self._stats_table.rowCount()
@@ -571,7 +687,7 @@ class PaperGenerationView(QWidget):
         for question_type in _TYPE_ORDER:
             if not self._type_enabled[question_type].isChecked():
                 continue
-            for point, difficulty, count in self._read_rows(
+            for point_text, difficulty, count in self._read_rows(
                 self._type_tables[question_type]
             ):
                 if count <= 0:
@@ -582,7 +698,7 @@ class PaperGenerationView(QWidget):
                         subject=subject,
                         difficulty=difficulty,
                         count=count,
-                        knowledge_points=[point] if point else [],
+                        knowledge_points=self.parse_knowledge(point_text),
                     )
                 )
         return PaperCriteria(
@@ -608,7 +724,6 @@ class PaperGenerationView(QWidget):
             self._subject_combo.blockSignals(True)
             self._subject_combo.setCurrentIndex(index)
             self._subject_combo.blockSignals(False)
-        self._sync_rows(force=True)
 
         for question_type in _TYPE_ORDER:
             items = self._items_of(criteria, question_type)
@@ -617,29 +732,27 @@ class PaperGenerationView(QWidget):
             enabled.setChecked(bool(items))
             enabled.blockSignals(False)
             self._type_bodies[question_type].setEnabled(bool(items))
-            self._fill_rows(self._type_tables[question_type], items)
+            self._fill_rows(question_type, items)
 
-        self._on_conditions_changed()
-        self.refresh_hit_counts()
+        self.reload_knowledge_points()
 
     def _fill_rows(
-        self, table: QTableWidget, items: list[TypeRequirement]
+        self, question_type: QuestionType, items: list[TypeRequirement]
     ) -> None:
-        """把历史条件的各条要求在配置表中回填（不存在组合时补行）。"""
-        rows = [self._row_values(table, row) for row in range(table.rowCount())]
-        positions = {
-            (point, difficulty): index
-            for index, (point, difficulty, _count) in enumerate(rows)
-        }
-        for item in items:
-            for point in item.knowledge_points or [""]:
-                key = (point, item.difficulty)
-                if key in positions:
-                    rows[positions[key]] = (point, item.difficulty, int(item.count))
-                    continue
-                positions[key] = len(rows)
-                rows.append((point, item.difficulty, int(item.count)))
-        self._fill_table(table, rows)
+        """重建某题型的配置表：把历史条件的各条要求逐行写入。"""
+        table = self._type_tables[question_type]
+        table.blockSignals(True)
+        table.setRowCount(len(items))
+        for row, item in enumerate(items):
+            self._write_row(
+                table,
+                row,
+                question_type,
+                "，".join(item.knowledge_points or []),
+                item.difficulty,
+                int(item.count),
+            )
+        table.blockSignals(False)
 
     # --------------------------------------------------------------- 生成
 
@@ -660,7 +773,7 @@ class PaperGenerationView(QWidget):
         """执行组卷（需求 R7-R10 / R13）。"""
         criteria = self._build_criteria()
         if not criteria.enabled_requirements():
-            ui_utils.warning(self, "请至少为一个「知识点 / 难度」配置大于 0 的题数。")
+            ui_utils.warning(self, "请先为要出题的题型添加配置行，并配置大于 0 的题数。")
             return
         allow_ai = self._confirm_ai_supplement()
         ok, paper = ui_utils.run_guarded(

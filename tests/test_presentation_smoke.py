@@ -26,6 +26,7 @@ from app.container import build_container  # noqa: E402
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement  # noqa: E402
 from app.domain.enums import Difficulty, QualityFlag, QuestionType  # noqa: E402
 from app.infrastructure.database.schema import ensure_schema  # noqa: E402
+from app.presentation import ui_utils  # noqa: E402
 from app.presentation.main_window import MainWindow, TAB_TITLES  # noqa: E402
 
 
@@ -78,31 +79,28 @@ def test_subject_widgets_are_dropdowns(window) -> None:
     bank = window.question_bank_view
     assert bank._subject_combo.count() > 0
     assert bank._search_subject.itemData(0) is None  # "全部科目"
-    # 组卷条件改为全局单科目 + 按题型分组配置（用户需求）
-    assert window.paper_generation_view._subject_combo.count() > 0
-    assert len(window.paper_generation_view._type_tables) == 4
+    # 组卷改为全局单科目 + 每个题型分组内的知识点下拉（用户需求）
+    view = window.paper_generation_view
+    assert view._subject_combo.count() > 0
+    assert len(view._type_tables) == 4
+    assert len(view._type_knowledge) == 4
+    for combo in view._type_knowledge.values():
+        assert combo.isEditable() is True
 
 
-def _set_row_count(
+def _add_row(
     view, question_type: QuestionType, point: str, difficulty: Difficulty, count: int
-) -> bool:
-    """在配置表中找到 (知识点, 难度) 行并写入数量，未找到返回 False。"""
-    table = view._type_tables[question_type]
-    for row in range(table.rowCount()):
-        current = view._row_values(table, row)
-        if current[0] != point or current[1] != difficulty:
-            continue
-        table.item(row, 3).setText(str(count))
-        return True
-    return False
+) -> None:
+    """往某题型配置表添加一行（等价界面上点「添加到配置表」）。"""
+    view._append_row(
+        view._type_tables[question_type], question_type, point, difficulty, count
+    )
 
 
 def test_single_and_multiple_are_separately_enabled(window) -> None:
-    """组卷时单选与多选分开启用，且只按配置了题数的行出题（用户需求）。"""
+    """组卷时单选与多选分开启用，且只按配置表里的行出题（用户需求）。"""
     view = window.paper_generation_view
-    single_table = view._type_tables[QuestionType.SINGLE]
-    single_table.setRowCount(0)
-    view._append_row(single_table, "集合", Difficulty.EASY, 2)
+    _add_row(view, QuestionType.SINGLE, "集合", Difficulty.EASY, 2)
     view._type_enabled[QuestionType.SINGLE].setChecked(True)
     view._type_enabled[QuestionType.MULTIPLE].setChecked(False)
     view._type_enabled[QuestionType.FILL].setChecked(False)
@@ -116,9 +114,7 @@ def test_single_and_multiple_are_separately_enabled(window) -> None:
     assert criteria.choice_items[0].count == 2
     assert criteria.choice_items[0].knowledge_points == ["集合"]
 
-    view._append_row(
-        view._type_tables[QuestionType.MULTIPLE], "集合", Difficulty.HARD, 1
-    )
+    _add_row(view, QuestionType.MULTIPLE, "集合", Difficulty.HARD, 1)
     view._type_enabled[QuestionType.MULTIPLE].setChecked(True)
     criteria = view._build_criteria()
     assert [item.question_type for item in criteria.choice_items] == [
@@ -137,9 +133,15 @@ def test_fill_type_supported(window) -> None:
 
     view = window.paper_generation_view
     view._subject_combo.setCurrentIndex(0)
-    view._append_row(
-        view._type_tables[QuestionType.FILL], "集合", Difficulty.EASY, 4
+    # 走界面路径：填条件 -> 添加到配置表
+    view._type_knowledge[QuestionType.FILL].setEditText("集合")
+    ui_utils.select_combo_data(
+        view._type_difficulty[QuestionType.FILL], Difficulty.EASY
     )
+    view._type_count[QuestionType.FILL].setValue(4)
+    view._add_from_controls(QuestionType.FILL)
+    assert view._type_tables[QuestionType.FILL].rowCount() == 1
+
     view._type_enabled[QuestionType.SINGLE].setChecked(False)
     view._type_enabled[QuestionType.MULTIPLE].setChecked(False)
     view._type_enabled[QuestionType.FILL].setChecked(True)
@@ -354,7 +356,7 @@ def test_apply_criteria_fills_paper_form(window) -> None:
 
 
 def test_stats_follow_configuration(window) -> None:
-    """配比统计只列配置了题数的组合，并带题库命中题数（用户需求，实时刷新）。"""
+    """配置行实时汇总到配比统计，并回填该题型的命中题数（用户需求）。"""
     from app.domain.entities.question import Option, Question
 
     bank = window.question_bank_view
@@ -376,10 +378,8 @@ def test_stats_follow_configuration(window) -> None:
             )
         )
     view.reload_knowledge_points()
-    assert _set_row_count(
-        view, QuestionType.SINGLE, "集合", Difficulty.MEDIUM, 1
-    ) is True
 
+    _add_row(view, QuestionType.SINGLE, "集合", Difficulty.MEDIUM, 1)
     view._type_enabled[QuestionType.SINGLE].setChecked(True)
     view._type_enabled[QuestionType.MULTIPLE].setChecked(False)
     view._type_enabled[QuestionType.FILL].setChecked(False)
@@ -393,10 +393,20 @@ def test_stats_follow_configuration(window) -> None:
     ]
     assert rows == [["单选题", "中", "集合", "1", "1"]]
 
+    # 该题型配置表同样显示命中题数，且题型列标明题型
+    table = view._type_tables[QuestionType.SINGLE]
+    assert table.item(0, 1).text() == "单选题"
+    assert table.item(0, 5).text() == "1"
+
     # 数量改为 0 后该行不再计入配比
-    _set_row_count(view, QuestionType.SINGLE, "集合", Difficulty.MEDIUM, 0)
+    table.item(0, 4).setText("0")
     view.refresh_hit_counts()
     assert view._stats_table.rowCount() == 0
+
+    # 命中量为 0 的知识点照样显示
+    _add_row(view, QuestionType.SINGLE, "不存在的知识点", Difficulty.MEDIUM, 2)
+    view.refresh_hit_counts()
+    assert view._stats_table.item(0, 4).text() == "0"
 
 
 def test_reuse_signal_routed_to_paper_view(window) -> None:

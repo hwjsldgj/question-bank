@@ -141,6 +141,8 @@ class MainWindow(QMainWindow):
         )
         self.settings_view.config_changed.connect(self._on_config_changed)
         self.history_view.reuse_criteria_requested.connect(self._on_reuse_criteria)
+        # 组卷导出进度 / 结果显示到状态栏（用户需求：导出时左下角不能一直显示"就绪"）
+        self.paper_generation_view.status_message.connect(self.show_status)
 
     # ------------------------------------------------------------------ 槽函数
 
@@ -157,7 +159,7 @@ class MainWindow(QMainWindow):
             self._ai_status_label.setText("AI：未配置（辨识 / 难度分析 / 补题不可用）")
 
     def show_status(self, message: str, timeout_ms: int = 5000) -> None:
-        """在状态栏显示临时消息（供视图调用）。"""
+        """在状态栏显示临时消息（供视图调用；timeout_ms 为 0 时保持常驻）。"""
         self._status.showMessage(message, timeout_ms)
 
     def _refresh_current_view(self) -> None:

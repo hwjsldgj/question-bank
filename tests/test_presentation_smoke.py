@@ -634,8 +634,15 @@ def test_export_runs_in_background_thread(window, monkeypatch) -> None:
     view._on_export()
     assert view._exporting is True  # 主线程未被阻塞，导出仍在后台进行
 
+    status_bar = window.statusBar()
+    app = QApplication.instance()
+    assert app is not None
+    app.processEvents()
+    # 状态栏显示导出进度（用户需求：左下角不能一直显示"就绪"）
+    assert status_bar.currentMessage() != "就绪"
+
     for _ in range(500):
-        QApplication.processEvents()
+        app.processEvents()
         if not view._exporting:
             break
         time.sleep(0.01)
@@ -644,6 +651,8 @@ def test_export_runs_in_background_thread(window, monkeypatch) -> None:
     assert seen["target_dir"] is None  # 目录由程序固定，不再由用户指定
     assert view._exporting is False
     assert view._export_button.isEnabled() is True
+    app.processEvents()
+    assert status_bar.currentMessage().startswith("已导出：")
 
 
 def test_reuse_signal_routed_to_paper_view(window) -> None:

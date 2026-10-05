@@ -161,6 +161,9 @@ class PaperGenerationView(QWidget):
     #: 导出结束：``(是否成功, 文件路径或异常对象)``
     export_finished = Signal(bool, object)
 
+    #: 需要在主窗口状态栏显示的消息：``(文本, 自动清除毫秒数；0 表示常驻)``
+    status_message = Signal(str, int)
+
     def __init__(self, container) -> None:
         """注入容器、构建界面并刷新知识点候选与命中量。"""
         super().__init__()
@@ -1004,6 +1007,7 @@ class PaperGenerationView(QWidget):
         self._exporting = True
         self._export_button.setEnabled(False)
         self._status.setText("正在导出…")
+        self.status_message.emit("正在导出…", 0)
         fmt = self._format_combo.currentData()
         threading.Thread(
             target=self._export_in_background,
@@ -1024,8 +1028,9 @@ class PaperGenerationView(QWidget):
         self.export_finished.emit(True, str(path))
 
     def _on_export_progress(self, message: str) -> None:
-        """主线程：显示后台线程上报的导出进度。"""
+        """主线程：显示后台线程上报的导出进度（视图内标签 + 主窗口状态栏）。"""
         self._status.setText(message)
+        self.status_message.emit(message, 0)
 
     def _on_export_finished(self, ok: bool, payload: object) -> None:
         """主线程：导出结束，恢复按钮并提示结果。"""
@@ -1033,9 +1038,11 @@ class PaperGenerationView(QWidget):
         self._export_button.setEnabled(True)
         if ok:
             self._status.setText(f"已导出：{payload}")
+            self.status_message.emit(f"已导出：{payload}", 10000)
             ui_utils.info(self, f"导出成功：\n{payload}")
             return
         self._status.setText(f"导出失败：{payload}")
+        self.status_message.emit(f"导出失败：{payload}", 10000)
         if isinstance(payload, DomainError):
             ui_utils.warning(self, str(payload))
         elif isinstance(payload, NotImplementedError):

@@ -61,7 +61,7 @@ class QuestionRepository(ABC):
 
         :param knowledge_points: 指定知识点（用户需求：组卷可指定知识点）；
             为空表示不限，非空表示命中其中任一知识点的题目才计入
-        :param section: 指定知识板块（用户需求：组卷可选知识板块作为限定）；
+        :param section: 指定知识点板块（用户需求：组卷可选知识点板块作为限定）；
             为空表示不限
         """
 
@@ -137,7 +137,7 @@ class QuestionOpRepository(ABC):
 
 
 class ConfigStore(ABC):
-    """配置存储接口：AI 配置、评分配置、提示词、科目与知识板块的持久化（需求 R15）。
+    """配置存储接口：AI 配置、评分配置、提示词、科目与知识点板块的持久化（需求 R15）。
 
     密钥仅保存在本机（需求 R18），实现方不得外传。
 
@@ -179,8 +179,8 @@ class ConfigStore(ABC):
 
     @abstractmethod
     def load_sections(self) -> list[KnowledgeSection]:
-        """读取知识板块列表；无配置时返回默认值。"""
+        """读取知识点板块列表；无配置时返回默认值。"""
 
     @abstractmethod
     def save_sections(self, sections: list[KnowledgeSection]) -> None:
-        """保存知识板块映射（科目改为选择式录入后由设置界面维护）。"""
+        """保存知识点板块映射（科目改为选择式录入后由设置界面维护）。"""

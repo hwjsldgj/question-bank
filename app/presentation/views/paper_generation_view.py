@@ -4,12 +4,12 @@
 
 - 组卷科目：一次组卷只针对一个科目
 - 四个题型分组（单选 / 多选 / 填空 / 解答）：保留原分组容器与原有条件控件
-  （启用开关 + 知识板块 / 知识点 / 难度 / 数量 / 命中量），并在其下**追加配置表**，
-  显示当前题型已添加的条目（序号 / 题型 / 知识板块 / 知识点 / 难度 / 数量 / 命中题数）；
+  （启用开关 + 知识点板块 / 知识点 / 难度 / 数量 / 命中量），并在其下**追加配置表**，
+  显示当前题型已添加的条目（序号 / 题型 / 知识点板块 / 知识点 / 难度 / 数量 / 命中题数）；
   点"添加到配置表"把当前条件追加为一行，可改难度、改数量、删除行；
-  选定知识板块后知识点候选只保留该板块的细分知识点（用户需求：板块作为限定），
+  选定知识点板块后知识点候选只保留该板块的细分知识点（用户需求：板块作为限定），
   只配数量，不勾选单题
-- 配比统计预览：跨题型汇总（题型 / 难度 / 知识板块 / 知识点 / 配置题数 / 命中题数），
+- 配比统计预览：跨题型汇总（题型 / 难度 / 知识点板块 / 知识点 / 配置题数 / 命中题数），
   只显示统计表，不显示题目正文
 - 生成试卷：调用 PaperComposer（题库不足按实际可提供数量出卷）
 - 试卷预览与分值：原有展示与分值设置逻辑不变，表格高度为原 3 倍
@@ -82,18 +82,18 @@ _TYPE_DEFAULT_COUNT: dict[QuestionType, int] = {
     QuestionType.SOLUTION: 2,
 }
 
-#: 配置表列：序号 / 题型 / 知识板块 / 知识点 / 难度 / 数量 / 命中题数
+#: 配置表列：序号 / 题型 / 知识点板块 / 知识点 / 难度 / 数量 / 命中题数
 _CONFIG_COLUMNS: tuple[str, ...] = (
     "序号",
     "题型",
-    "知识板块",
+    "知识点板块",
     "知识点",
     "难度",
     "数量",
     "命中题数",
 )
 
-#: 知识板块 / 知识点留空时在配置表中显示的占位文本（对应该行"不限"）
+#: 知识点板块 / 知识点留空时在配置表中显示的占位文本（对应该行"不限"）
 _ANY_LABEL = "不限"
 
 #: 三级难度（组卷不接受"待确认"）
@@ -234,7 +234,7 @@ class PaperGenerationView(QWidget):
 
     @staticmethod
     def _new_section_combo() -> QComboBox:
-        """构建知识板块下拉框（用户需求：组卷可选知识点板块作为限定）。"""
+        """构建知识点板块下拉框（用户需求：组卷可选知识点板块作为限定）。"""
         combo = QComboBox()
         combo.setMinimumWidth(140)
         combo.addItem(_ANY_LABEL, "")
@@ -262,7 +262,7 @@ class PaperGenerationView(QWidget):
         return [part for part in parts if part]
 
     def _build_type_group(self, question_type: QuestionType) -> QGroupBox:
-        """构建单个题型分组：原条件控件（含知识板块）+ 追加的配置表。"""
+        """构建单个题型分组：原条件控件（含知识点板块）+ 追加的配置表。"""
         title = _TYPE_GROUP_TITLES[question_type]
         group = QGroupBox(title)
         outer = QVBoxLayout(group)
@@ -274,7 +274,7 @@ class PaperGenerationView(QWidget):
         body = QWidget()
         body_layout = QVBoxLayout(body)
 
-        # 原条件控件：知识板块 / 知识点 / 难度 / 数量（只配数量，不勾选单题）
+        # 原条件控件：知识点板块 / 知识点 / 难度 / 数量（只配数量，不勾选单题）
         section = self._new_section_combo()
         knowledge = self._new_knowledge_combo()
         difficulty = self._new_difficulty_combo()
@@ -283,7 +283,7 @@ class PaperGenerationView(QWidget):
         count.setValue(_TYPE_DEFAULT_COUNT[question_type])
         hit = QLabel("命中：—")
         form = QFormLayout()
-        form.addRow("知识板块", section)
+        form.addRow("知识点板块", section)
         form.addRow("知识点", knowledge)
         form.addRow("难度", difficulty)
         form.addRow("数量", count)
@@ -351,7 +351,7 @@ class PaperGenerationView(QWidget):
 
         self._stats_table = QTableWidget(0, 6)
         self._stats_table.setHorizontalHeaderLabels(
-            ["题型", "难度", "知识板块", "知识点", "配置题数", "命中题数"]
+            ["题型", "难度", "知识点板块", "知识点", "配置题数", "命中题数"]
         )
         self._stats_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
@@ -476,7 +476,7 @@ class PaperGenerationView(QWidget):
         self.reload_knowledge_points()
 
     def reload_knowledge_points(self) -> None:
-        """按当前科目刷新知识板块候选、各题型的知识点候选与命中量。
+        """按当前科目刷新知识点板块候选、各题型的知识点候选与命中量。
 
         板块选定后只补全该板块的细分知识点（与题库录入页一致，用户需求）；
         保留用户当前输入（含手写但题库中还不存在的知识点）。
@@ -510,7 +510,7 @@ class PaperGenerationView(QWidget):
         self.refresh_hit_counts()
 
     def _section_of(self, question_type: QuestionType) -> str:
-        """读取某题型当前选定的知识板块（"不限"返回空串）。"""
+        """读取某题型当前选定的知识点板块（"不限"返回空串）。"""
         text = self._type_sections[question_type].currentText().strip()
         return "" if text in ("", _ANY_LABEL) else text
 
@@ -545,7 +545,7 @@ class PaperGenerationView(QWidget):
         self.reload_knowledge_points()
 
     def _add_from_controls(self, question_type: QuestionType) -> None:
-        """把当前条件（知识板块 / 知识点 / 难度 / 数量）追加为配置表的一行。"""
+        """把当前条件（知识点板块 / 知识点 / 难度 / 数量）追加为配置表的一行。"""
         knowledge = self._type_knowledge[question_type]
         difficulty = self._type_difficulty[question_type].currentData()
         if difficulty is None:
@@ -588,7 +588,7 @@ class PaperGenerationView(QWidget):
         difficulty: Difficulty,
         count: int,
     ) -> None:
-        """写入一行配置：序号 / 题型 / 知识板块 / 知识点只读，难度与数量可编辑。"""
+        """写入一行配置：序号 / 题型 / 知识点板块 / 知识点只读，难度与数量可编辑。"""
         index_item = QTableWidgetItem(str(row + 1))
         index_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         type_item = QTableWidgetItem(
@@ -620,7 +620,7 @@ class PaperGenerationView(QWidget):
     def _row_values(
         table: QTableWidget, row: int
     ) -> tuple[str, str, Difficulty | None, int]:
-        """读取一行配置：``(知识板块, 知识点, 难度, 数量)``；难度无法识别返回 None。"""
+        """读取一行配置：``(知识点板块, 知识点, 难度, 数量)``；难度无法识别返回 None。"""
         section_item = table.item(row, 2)
         point_item = table.item(row, 3)
         difficulty_item = table.item(row, 4)
@@ -662,7 +662,7 @@ class PaperGenerationView(QWidget):
     def _read_rows(
         self, table: QTableWidget
     ) -> list[tuple[str, str, Difficulty, int]]:
-        """读取配置表的有效行：``(知识板块, 知识点, 难度, 数量)``。"""
+        """读取配置表的有效行：``(知识点板块, 知识点, 难度, 数量)``。"""
         rows: list[tuple[str, str, Difficulty, int]] = []
         for row in range(table.rowCount()):
             section_text, point_text, difficulty, count = self._row_values(table, row)
@@ -686,7 +686,7 @@ class PaperGenerationView(QWidget):
         difficulty: Difficulty,
         point_text: str,
     ) -> int | None:
-        """查询"科目 + 题型 + 知识板块 + 难度 + 知识点"组合的题库命中题数。"""
+        """查询"科目 + 题型 + 知识点板块 + 难度 + 知识点"组合的题库命中题数。"""
         return ui_utils.safe_call(
             self._question_service.count_available,
             self._subject,

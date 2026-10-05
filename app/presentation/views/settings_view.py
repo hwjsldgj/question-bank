@@ -9,7 +9,7 @@
 - 评分与冷却：五项评分权重、冷却窗口计量方式与长度、抽样权重下限
   （需求 R8 第 7 条 / R13 第 4 条）
 - 科目管理：维护可选科目列表（科目改为选择式录入，提供默认科目）
-- 知识板块：维护"科目 -> 知识板块 -> 细分知识点"的三级结构，供录入页联动与
+- 知识点板块：维护"科目 -> 知识点板块 -> 细分知识点"的三级结构，供录入页联动与
   AI 辨识分级使用
 
 保存任意配置后发出 ``config_changed`` 信号，由主窗口刷新状态栏、
@@ -86,7 +86,7 @@ class SettingsView(QWidget):
         self._inner_tabs.addTab(self._build_ai_tab(), "AI 设置")
         self._inner_tabs.addTab(self._build_scoring_tab(), "评分与冷却")
         self._inner_tabs.addTab(self._build_subject_tab(), "科目管理")
-        self._inner_tabs.addTab(self._build_sections_tab(), "知识板块")
+        self._inner_tabs.addTab(self._build_sections_tab(), "知识点板块")
         root.addWidget(self._inner_tabs)
 
     def _build_ai_tab(self) -> QWidget:
@@ -270,12 +270,12 @@ class SettingsView(QWidget):
         return page
 
     def _build_sections_tab(self) -> QWidget:
-        """构建知识板块页（只读展示 + JSON 文件编辑，用户需求）。"""
+        """构建知识点板块页（只读展示 + JSON 文件编辑，用户需求）。"""
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(
             QLabel(
-                "知识板块是科目与知识点之间的中间层级：录入时先选科目、再选板块，"
+                "知识点板块是科目与知识点之间的中间层级：录入时先选科目、再选板块，"
                 "最后从该板块的细分知识点中选取；AI 辨识也会先按板块分级、再细化知识点。"
             )
         )
@@ -317,7 +317,7 @@ class SettingsView(QWidget):
         import_button.setToolTip("读取 JSON 文件并写入系统（文件里有的科目会覆盖现有数据）")
         import_button.clicked.connect(self._on_import_sections)
         default_button = QPushButton("恢复默认")
-        default_button.setToolTip("恢复为程序内置的默认知识板块")
+        default_button.setToolTip("恢复为程序内置的默认知识点板块")
         default_button.clicked.connect(self._on_reset_sections)
         button_row.addWidget(export_button)
         button_row.addWidget(edit_button)
@@ -406,7 +406,7 @@ class SettingsView(QWidget):
             self._render_subjects(subjects)
             self.config_changed.emit()
 
-    # ------------------------------------------------------------- 知识板块
+    # ------------------------------------------------------------- 知识点板块
 
     @staticmethod
     def _default_sections_file() -> Path:
@@ -414,7 +414,7 @@ class SettingsView(QWidget):
         return Path(DEFAULT_DB_PATH).parent / "knowledge_sections.json"
 
     def _load_sections(self) -> None:
-        """读取科目与知识板块并渲染（需求：手动导入时提供板块与知识点细分）。"""
+        """读取科目与知识点板块并渲染（需求：手动导入时提供板块与知识点细分）。"""
         subjects = ui_utils.safe_call(self._config_store.load_subjects, default=None) or list(
             DEFAULT_SUBJECTS
         )
@@ -452,7 +452,7 @@ class SettingsView(QWidget):
         ]
 
     def _render_section_subjects(self, subjects: list[str]) -> None:
-        """重建知识板块页的科目下拉框。"""
+        """重建知识点板块页的科目下拉框。"""
         current = self._section_subject_combo.currentData()
         self._section_subject_combo.blockSignals(True)
         self._section_subject_combo.clear()
@@ -489,7 +489,7 @@ class SettingsView(QWidget):
         default_path.parent.mkdir(parents=True, exist_ok=True)
 
         path, ok = QFileDialog.getSaveFileName(
-            self, "导出知识板块", str(default_path), "JSON 文件 (*.json)"
+            self, "导出知识点板块", str(default_path), "JSON 文件 (*.json)"
         )
         if not ok or not path:
             return
@@ -500,7 +500,7 @@ class SettingsView(QWidget):
         except OSError as exc:
             ui_utils.critical(self, f"写入文件失败：{exc}", title="导出失败")
             return
-        ui_utils.info(self, f"知识板块已导出至\n{path}", title="导出成功")
+        ui_utils.info(self, f"知识点板块已导出至\n{path}", title="导出成功")
 
     def _on_edit_sections(self) -> None:
         """用系统默认编辑器打开 JSON 文件。"""
@@ -519,9 +519,9 @@ class SettingsView(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _on_import_sections(self) -> None:
-        """从 JSON 文件读入知识板块并写入系统。"""
+        """从 JSON 文件读入知识点板块并写入系统。"""
         path, ok = QFileDialog.getOpenFileName(
-            self, "导入知识板块", str(self._default_sections_file()), "JSON 文件 (*.json)"
+            self, "导入知识点板块", str(self._default_sections_file()), "JSON 文件 (*.json)"
         )
         if not ok or not path:
             return
@@ -576,17 +576,17 @@ class SettingsView(QWidget):
             self,
             self._config_store.save_sections,
             self._dict_to_sections(data),
-            success_message="知识板块已导入，录入页下拉框已更新",
+            success_message="知识点板块已导入，录入页下拉框已更新",
         )
         if ok:
             self._render_sections()
             self.config_changed.emit()
 
     def _on_reset_sections(self) -> None:
-        """恢复默认知识板块并保存。"""
+        """恢复默认知识点板块并保存。"""
         if not ui_utils.confirm(
             self,
-            "将把全部科目的知识板块恢复为程序内置默认值，现有自定义板块将丢失。是否继续？",
+            "将把全部科目的知识点板块恢复为程序内置默认值，现有自定义板块将丢失。是否继续？",
             title="恢复默认",
         ):
             return
@@ -594,7 +594,7 @@ class SettingsView(QWidget):
             self,
             self._config_store.save_sections,
             self._dict_to_sections(DEFAULT_KNOWLEDGE_SECTIONS),
-            success_message="已恢复默认知识板块，录入页下拉框已更新",
+            success_message="已恢复默认知识点板块，录入页下拉框已更新",
         )
         if ok:
             self._render_sections()

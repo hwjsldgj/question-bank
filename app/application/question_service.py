@@ -14,7 +14,7 @@
 依赖（构造注入，全部为抽象）：
 - app.interfaces.repositories.QuestionRepository
 - app.interfaces.repositories.QuestionOpRepository（可选，操作台账）
-- app.interfaces.repositories.ConfigStore（可选，科目列表、知识板块与提示词）
+- app.interfaces.repositories.ConfigStore（可选，科目列表、知识点板块与提示词）
 - app.interfaces.ai_client.AIClient（可选，AI 辨识）
 - app.domain.validators.question_validator.QuestionValidator
 - app.application.difficulty_service.DifficultyService
@@ -127,6 +127,10 @@ _FIELD_ALIASES: dict[str, str] = {
     "知识点": "knowledge",
     "考点": "knowledge",
     "knowledge": "knowledge",
+    "知识点板块": "section",
+    "知识板块": "section",  # 兼容旧写法（统一术语前粘贴过的文本）
+    "板块": "section",
+    "section": "section",
     "题型": "type",
     "类型": "type",
     "type": "type",
@@ -405,7 +409,7 @@ class QuestionService:
 
         :param knowledge_points: 指定知识点（用户需求：组卷时可指定知识点），
             非空表示只统计命中其中任一知识点的题目
-        :param section: 指定知识板块（用户需求：组卷可选知识板块作为限定），
+        :param section: 指定知识点板块（用户需求：组卷可选知识点板块作为限定），
             非空表示只统计该板块下的题目
         """
         return self._repository.count_available(
@@ -698,7 +702,7 @@ class QuestionService:
             return []
 
     def list_sections(self, subject: str | None = None) -> dict[str, list[str]]:
-        """返回知识板块与细分知识点（可按科目过滤），格式 ``{板块: [细分知识点, ...]}``。
+        """返回知识点板块与细分知识点（可按科目过滤），格式 ``{板块: [细分知识点, ...]}``。
 
         无配置或读取失败时返回默认值；``subject`` 为空时合并全部科目，
         供"选择板块后给出该板块知识点"的联动场景使用。
@@ -905,10 +909,14 @@ class QuestionService:
         question_type = self._parse_type(fields.get("type", ""), options, fields.get("answer", ""))
         if question_type in (QuestionType.SOLUTION, QuestionType.FILL):
             options = []
+        subject = fields.get("subject", "").strip()
+        points = self._split_knowledge(fields.get("knowledge", ""))
+        section = fields.get("section", "").strip() or self._infer_section(subject, points)
         return Question(
             id="",
-            subject=fields.get("subject", "").strip(),
-            knowledge_points=self._split_knowledge(fields.get("knowledge", "")),
+            subject=subject,
+            section=section,
+            knowledge_points=points,
             type=question_type,
             stem=stem,
             options=options,
@@ -923,6 +931,23 @@ class QuestionService:
                 else DifficultySource.AI
             ),
         )
+
+    def _infer_section(self, subject: str, points: list[str]) -> str:
+        """按科目与知识点反查所属知识点板块（粘贴文本未标注板块时兜底）。
+
+        一道题可命中多个板块，板块名用"、"拼接（与 AI 辨识的分级输出一致）。
+
+        :return: 命中的板块名；无法判断时返回空串（表示不限）
+        """
+        if not points:
+            return ""
+        sections = self.list_sections(subject or None)
+        matched = [
+            name
+            for name, candidates in sections.items()
+            if any(point in candidates for point in points)
+        ]
+        return "、".join(matched)
 
     @staticmethod
     def _parse_options(raw: str) -> list[Option]:

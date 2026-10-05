@@ -147,8 +147,10 @@ def test_batch_parse_and_commit_records_import(service) -> None:
     drafts = service.batch_parse(
         "科目：物理\n知识点：牛顿定律\n题型：单选\n题干：惯性由什么决定？\n"
         "A. 质量\nB. 速度\n答案：A\n\n"
-        "科目：数学\n知识点：函数\n题型：解答题\n题干：求极值。\n参考答案：令导数为零。\n\n"
-        "科目：数学\n知识点：因式分解\n题型：填空\n题干：x^2-1 = ____\n参考答案：3；-1"
+        "科目：数学\n知识点板块：代数\n知识点：函数\n题型：解答题\n题干：求极值。\n"
+        "参考答案：令导数为零。\n\n"
+        "科目：数学\n知识板块：代数\n知识点：因式分解\n题型：填空\n题干：x^2-1 = ____\n"
+        "参考答案：3；-1"
     )
     assert len(drafts) == 3
     assert drafts[0].type is QuestionType.SINGLE
@@ -160,8 +162,14 @@ def test_batch_parse_and_commit_records_import(service) -> None:
     assert drafts[2].options == []
     assert drafts[2].answer == ["3；-1"]
 
+    # 知识点板块：未标注时按科目 + 知识点反查；显式标注（含旧术语）优先
+    assert drafts[0].section == "力学"
+    assert drafts[1].section == "代数"
+    assert drafts[2].section == "代数"
+
     committed = service.batch_commit(drafts)
     assert len(committed) == 3
+    assert [question.section for question in committed] == ["力学", "代数", "代数"]
     imports = service.list_operations([QuestionOpAction.IMPORT])
     assert len(imports) == 3
     assert imports[0].batch_id and imports[0].batch_id == imports[1].batch_id

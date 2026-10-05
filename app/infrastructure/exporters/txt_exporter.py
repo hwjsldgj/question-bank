@@ -93,8 +93,8 @@ class TxtExporter(BaseExporter):
             f"共 {len(section.questions)} 题，{score_hint}小计 {subtotal:g} 分",
         ]
         if sections_used:
-            # 知识板块随题面导出（用户需求：导出内容带板块）
-            lines.append(f"知识板块：{'、'.join(sections_used)}")
+            # 知识点板块随题面导出（用户需求：导出内容带板块）
+            lines.append(f"知识点板块：{'、'.join(sections_used)}")
         lines.append("")
         for offset, question in enumerate(section.questions):
             number = start_number + offset

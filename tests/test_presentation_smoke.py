@@ -115,7 +115,7 @@ def test_config_and_summary_table_heights(window) -> None:
 
 
 def test_paper_view_can_limit_by_knowledge_section(window) -> None:
-    """组卷可按知识板块限定：板块进入配置行与组卷条件，知识点候选随之过滤。"""
+    """组卷可按知识点板块限定：板块进入配置行与组卷条件，知识点候选随之过滤。"""
     view = window.paper_generation_view
     view._subject_combo.setCurrentIndex(view._subject_combo.findText("数学"))
     view.reload_knowledge_points()
@@ -349,7 +349,7 @@ def test_search_results_have_knowledge_points_and_compact_rows(window) -> None:
 
 
 def test_search_filters_by_knowledge_section(window) -> None:
-    """检索可按知识板块过滤，板块候选随科目联动（用户需求）。"""
+    """检索可按知识点板块过滤，板块候选随科目联动（用户需求）。"""
     from app.domain.entities.question import Option, Question
 
     bank = window.question_bank_view
@@ -381,7 +381,7 @@ def test_search_filters_by_knowledge_section(window) -> None:
 
 
 def test_history_summary_includes_knowledge_section(window) -> None:
-    """组卷条件摘要包含知识板块（用户需求）。"""
+    """组卷条件摘要包含知识点板块（用户需求）。"""
     criteria = PaperCriteria(
         choice_enabled=True,
         subject="数学",

@@ -137,7 +137,7 @@ class SQLiteConfigStore(ConfigStore):
         self._write_key(self.KEY_SUBJECTS, json.dumps(cleaned, ensure_ascii=False))
 
     def load_sections(self) -> list[KnowledgeSection]:
-        """读取知识板块列表；无记录或格式非法时返回默认值。
+        """读取知识点板块列表；无记录或格式非法时返回默认值。
 
         返回按科目、板块顺序排列的 ``KnowledgeSection`` 列表，调用方按需按科目过滤。
         """
@@ -177,7 +177,7 @@ class SQLiteConfigStore(ConfigStore):
         return sections or self._default_sections()
 
     def save_sections(self, sections: list[KnowledgeSection]) -> None:
-        """保存知识板块映射（科目 -> 板块 -> 细分知识点，去重并保持顺序）。"""
+        """保存知识点板块映射（科目 -> 板块 -> 细分知识点，去重并保持顺序）。"""
         normalized: dict[str, dict[str, list[str]]] = {}
         for section in sections:
             if not isinstance(section, KnowledgeSection):
@@ -200,7 +200,7 @@ class SQLiteConfigStore(ConfigStore):
 
     @staticmethod
     def _default_sections() -> list[KnowledgeSection]:
-        """默认知识板块列表（无持久化配置时的兜底）。"""
+        """默认知识点板块列表（无持久化配置时的兜底）。"""
         return [
             KnowledgeSection(subject=subject, section=section, knowledge_points=list(points))
             for subject, groups in DEFAULT_KNOWLEDGE_SECTIONS.items()

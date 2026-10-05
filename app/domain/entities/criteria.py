@@ -24,7 +24,7 @@ class TypeRequirement:
     :param count: 需要的题目数量（正整数）
     :param knowledge_points: 指定知识点（用户需求：组卷时可指定知识点）；
         空列表表示不限，非空表示只统计 / 选取命中其中任一知识点的题目
-    :param section: 指定知识板块（用户需求：组卷可选知识点板块作为限定）；
+    :param section: 指定知识点板块（用户需求：组卷可选知识点板块作为限定）；
         空字符串表示不限
     """
 

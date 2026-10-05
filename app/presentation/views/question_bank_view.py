@@ -2,9 +2,9 @@
 
 界面结构（内嵌三个子页签）：
 
-- 录入 / 编辑：结构化表单（科目下拉选择 / 知识板块 / 知识点 / 题型 / 选项 / 答案 / 解析 /
+- 录入 / 编辑：结构化表单（科目下拉选择 / 知识点板块 / 知识点 / 题型 / 选项 / 答案 / 解析 /
   难度 / 质量标记 / 题目图片），题型为解答题时切换为"参考答案"输入；
-  选中科目后联动其知识板块，选中板块后只补全该板块的细分知识点
+  选中科目后联动其知识点板块，选中板块后只补全该板块的细分知识点
 - 批量粘贴：粘贴多题文本 -> 解析预览（"待修正"行标红）-> 确认批量入库
 - 检索：按科目（下拉）/ 知识点 / 难度 / 题型过滤，结果展示使用次数与最近使用时间，
   并可对选中题目执行编辑 / 删除 / 质量标记
@@ -155,7 +155,7 @@ class _PasteDraftEditor(QDialog):
         self._solution_edit.setFixedHeight(60)
 
         form.addRow("科目 *", self._subject_combo)
-        form.addRow("知识板块", self._section_combo)
+        form.addRow("知识点板块", self._section_combo)
         form.addRow("知识点", self._knowledge_edit)
         form.addRow("题型 *", self._type_combo)
         form.addRow("题干 *", self._stem_edit)
@@ -335,7 +335,7 @@ class QuestionBankView(QWidget):
         self._section_combo = QComboBox()
         self._section_combo.setMinimumWidth(140)
         self._section_combo.setToolTip(
-            "按所选科目列出知识板块与细分知识点；新增板块请到「设置 -> 知识板块」"
+            "按所选科目列出知识点板块与细分知识点；新增板块请到「设置 -> 知识点板块」"
         )
         self._section_combo.currentIndexChanged.connect(self._on_section_changed)
 
@@ -389,7 +389,7 @@ class QuestionBankView(QWidget):
         self._solution_edit.setFixedHeight(70)
 
         form.addRow("科目 *", self._subject_combo)
-        form.addRow("知识板块", self._section_combo)
+        form.addRow("知识点板块", self._section_combo)
         form.addRow("知识点", self._knowledge_edit)
         form.addRow("题型 *", self._type_combo)
         form.addRow("难度", self._difficulty_combo)
@@ -591,7 +591,7 @@ class QuestionBankView(QWidget):
         self._search_subject.currentIndexChanged.connect(self._on_search_subject_changed)
         self._search_section = QComboBox()
         self._search_section.setMinimumWidth(120)
-        self._search_section.setToolTip("按知识板块过滤检索结果（用户需求）")
+        self._search_section.setToolTip("按知识点板块过滤检索结果（用户需求）")
         self._search_section.currentIndexChanged.connect(
             self._reload_search_completer
         )
@@ -619,7 +619,7 @@ class QuestionBankView(QWidget):
         search_button.clicked.connect(self._on_search)
         filter_row.addWidget(QLabel("科目"))
         filter_row.addWidget(self._search_subject)
-        filter_row.addWidget(QLabel("知识板块"))
+        filter_row.addWidget(QLabel("知识点板块"))
         filter_row.addWidget(self._search_section)
         filter_row.addWidget(QLabel("知识点"))
         filter_row.addWidget(self._search_knowledge)
@@ -1063,7 +1063,7 @@ class QuestionBankView(QWidget):
             if index >= 0:
                 self._section_combo.setCurrentIndex(index)
                 self._reload_knowledge_completer()
-            notes.append(f"知识板块：{section}")
+            notes.append(f"知识点板块：{section}")
 
         points = result.get("knowledge_points") or []
         if points:

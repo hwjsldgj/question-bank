@@ -262,7 +262,7 @@ class HistoryView(QWidget):
 
     @staticmethod
     def _requirement_summary(label: str, item) -> str:
-        """把单个题型要求渲染为一段摘要（含指定知识板块与知识点）。"""
+        """把单个题型要求渲染为一段摘要（含指定知识点板块与知识点）。"""
         text = (
             f"{label}×{item.count}（{item.subject}/"
             f"{ui_utils.DIFFICULTY_LABELS.get(item.difficulty, '')}"

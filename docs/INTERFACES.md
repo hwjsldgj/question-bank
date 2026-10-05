@@ -36,7 +36,7 @@ class QuestionRepository(ABC):
 |----|------|
 | 实现 | `infrastructure/repositories/question_repository.py::SQLiteQuestionRepository` |
 | 调用方 | `application/question_service`、`application/paper_composer`、`application/question_generator` |
-| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6)；count_available 的 `knowledge_points` 非空时按"命中任一指定知识点"统计，`section` 非空时按知识板块过滤（用户需求：组卷可指定知识点与知识板块） |
+| 语义 | save 分配唯一 id (R1)；update 保留 id 与使用记录 (R1)；search 按 QuestionFilter 组合过滤 (R6)；count_available 的 `knowledge_points` 非空时按"命中任一指定知识点"统计，`section` 非空时按知识点板块过滤（用户需求：组卷可指定知识点与知识点板块） |
 | 异常 | `sqlite3.Error` 由仓储向上传播，服务层转译为界面提示 |
 
 ### 1.2 UsageRepository —— 使用记录仓储
@@ -82,7 +82,7 @@ class ConfigStore(ABC):
     def save_prompt_config(self, config: PromptConfig) -> None
     def load_subjects(self) -> list[str]              # 科目列表（选择式录入）
     def save_subjects(self, subjects: list[str]) -> None
-    def load_sections(self) -> list[KnowledgeSection]   # 知识板块列表（无配置时回退默认）
+    def load_sections(self) -> list[KnowledgeSection]   # 知识点板块列表（无配置时回退默认）
     def save_sections(self, sections: list[KnowledgeSection]) -> None
 ```
 
@@ -90,7 +90,7 @@ class ConfigStore(ABC):
 |----|------|
 | 实现 | `infrastructure/config_store.py::SQLiteConfigStore`（settings 键值表，JSON 值） |
 | 调用方 | `app/container.py`（装配）、`presentation/views/settings_view`、`application/{question_service,difficulty_service}`（提示词与科目） |
-| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；提示词为空时逐项回退默认模板；`PromptConfig.module_prompts` 按模块逐项合并（只改了部分模块时，其余模块仍用默认片段）；科目列表去重且保序，为空时回退默认科目；知识板块映射按科目逐板块去重保序，无配置时回退默认板块 |
+| 语义 | 无记录 / 解析失败回退 `config/settings.py` 默认值；提示词为空时逐项回退默认模板；`PromptConfig.module_prompts` 按模块逐项合并（只改了部分模块时，其余模块仍用默认片段）；科目列表去重且保序，为空时回退默认科目；知识点板块映射按科目逐板块去重保序，无配置时回退默认板块 |
 | 隐私 | API Key 仅存本机 settings 表，禁止外传或写日志 (R18) |
 
 ### 1.5 QuestionOpRepository —— 题库操作台账（用户需求）
@@ -164,7 +164,7 @@ class TypeRequirement:              # domain/entities/criteria.py
     difficulty: Difficulty
     count: int
     knowledge_points: list[str] = field(default_factory=list)   # 组卷指定知识点
-    section: str = ""                                           # 组卷指定知识板块（不限为空）
+    section: str = ""                                           # 组卷指定知识点板块（不限为空）
 
 @dataclass
 class PaperCriteria:
@@ -178,14 +178,14 @@ class PaperCriteria:
     def enabled_requirements(self) -> list[TypeRequirement]     # 顺序：选择 -> 填空 -> 解答
 ```
 
-- 每类题型可配置多条要求（界面按"知识板块 / 知识点 × 难度"逐行配置题数），
+- 每类题型可配置多条要求（界面按"知识点板块 / 知识点 × 难度"逐行配置题数），
   组卷时同题型的多条要求合并为一个分区，同卷按题目 id 去重。
 - `knowledge_points` 为空表示不限；非空时命中其中任一知识点的题目才计入命中量与选题
   （用户需求：组卷环节可指定知识点）。
-- `section` 为空表示不限；非空时只统计 / 选取该知识板块下的题目，且界面按所选板块
-  过滤知识点候选（用户需求：组卷可选知识板块作为限定）。
-- 界面在每个题型分组内保留原条件控件（知识板块 / 知识点 / 难度 / 数量 / 命中量），
-  下面追加该题型的配置表（序号 / 题型 / 知识板块 / 知识点 / 难度 / 数量 / 命中题数）：
+- `section` 为空表示不限；非空时只统计 / 选取该知识点板块下的题目，且界面按所选板块
+  过滤知识点候选（用户需求：组卷可选知识点板块作为限定）。
+- 界面在每个题型分组内保留原条件控件（知识点板块 / 知识点 / 难度 / 数量 / 命中量），
+  下面追加该题型的配置表（序号 / 题型 / 知识点板块 / 知识点 / 难度 / 数量 / 命中题数）：
   "添加到配置表"把当前条件追加为一行，可改难度、改数量、删除行；
   数量为 0 的行不参与组卷与配比统计。
 
@@ -284,8 +284,8 @@ def list_operations(self, actions=None, limit=None) -> list[QuestionOpRecord]
 自定义总述未使用 `{modules}` 时，服务层只追加"总述里还没提到"的模块要求，
 避免同一字段（如难度）在提示词里出现两次。
 
-**知识板块分级提示词（用户需求）**：`module_prompts["knowledge_points"]` 不再笼统要求
-"知识点数组"，而是要求 AI 先判断题目涉及哪些知识板块（只从
+**知识点板块分级提示词（用户需求）**：`module_prompts["knowledge_points"]` 不再笼统要求
+"知识点数组"，而是要求 AI 先判断题目涉及哪些知识点板块（只从
 `DEFAULT_KNOWLEDGE_SECTIONS` / 用户配置的板块列表里选，可涉及多个板块），
 再对每个板块细化到细分知识点，输出 `{"板块名": ["细分知识点", ...]}` 对象。
 服务层 `_format_sections_for_prompt()` 把"科目-板块-知识点"扁平为

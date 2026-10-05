@@ -1,4 +1,4 @@
-"""TxtExporter 单元测试：Markdown 排版、知识板块与答案页。
+"""TxtExporter 单元测试：Markdown 排版、知识点板块与答案页。
 
 导出会在目标目录写文件，用 pytest 的 ``tmp_path`` 作为导出目录。
 
@@ -64,14 +64,14 @@ def _read(path: str) -> str:
 
 
 def test_export_writes_markdown_with_knowledge_section(tmp_path) -> None:
-    """导出文件为 Markdown 文本，并带上题面的知识板块（用户需求）。"""
+    """导出文件为 Markdown 文本，并带上题面的知识点板块（用户需求）。"""
     path = TxtExporter().export(_paper(_single_question("代数")), str(tmp_path))
     text = _read(path)
 
     assert path.endswith(".txt")
     assert text.startswith("# 试卷")
     assert "**总分：2 分**" in text
-    assert "知识板块：代数" in text
+    assert "知识点板块：代数" in text
     assert "1. 下列方程是一元二次方程的是？" in text
     assert "   - B. x^2-1=0" in text
     assert "# 答案页" in text
@@ -79,8 +79,8 @@ def test_export_writes_markdown_with_knowledge_section(tmp_path) -> None:
 
 
 def test_export_without_section_omits_the_line(tmp_path) -> None:
-    """题目未填知识板块时不输出板块行。"""
+    """题目未填知识点板块时不输出板块行。"""
     path = TxtExporter().export(
         _paper(_single_question("")), str(tmp_path), ExportOptions()
     )
-    assert "知识板块：" not in _read(path)
+    assert "知识点板块：" not in _read(path)

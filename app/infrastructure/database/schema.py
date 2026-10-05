@@ -127,7 +127,7 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
 COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # 题目图片列为后加字段，旧库需补列（用户需求：题目图片导入）
     ("questions", "image_path", "TEXT"),
-    # 知识板块列为后加字段，旧库需补列
+    # 知识点板块列为后加字段，旧库需补列
     ("questions", "section", "TEXT NOT NULL DEFAULT ''"),
 )
 

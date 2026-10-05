@@ -134,8 +134,8 @@ class SQLiteQuestionRepository(QuestionRepository):
         """统计命中题数量（需求 R6 第 2 条），供组卷前展示与 AI 补题判断。
 
         ``knowledge_points`` 非空时按"命中任一指定知识点"过滤（用户需求：
-        组卷时可指定知识点）；``section`` 非空时按知识板块过滤（用户需求：
-        组卷可选知识板块作为限定）；knowledge_points 列为 JSON 文本，沿用 LIKE 匹配。
+        组卷时可指定知识点）；``section`` 非空时按知识点板块过滤（用户需求：
+        组卷可选知识点板块作为限定）；knowledge_points 列为 JSON 文本，沿用 LIKE 匹配。
         """
         clauses = ["subject = ?", "difficulty = ?", "type = ?"]
         params: list[object] = [

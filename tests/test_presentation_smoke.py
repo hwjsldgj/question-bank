@@ -79,13 +79,16 @@ def test_subject_widgets_are_dropdowns(window) -> None:
     bank = window.question_bank_view
     assert bank._subject_combo.count() > 0
     assert bank._search_subject.itemData(0) is None  # "全部科目"
-    # 组卷改为全局单科目 + 每个题型分组内的知识点下拉（用户需求）
+    # 组卷改为全局单科目 + 每个题型分组内的标签输入框（用户需求）
     view = window.paper_generation_view
     assert view._subject_combo.count() > 0
     assert len(view._type_tables) == 4
     assert len(view._type_knowledge) == 4
-    for combo in view._type_knowledge.values():
-        assert combo.isEditable() is True
+    assert len(view._type_sections) == 4
+    for tag_input in view._type_knowledge.values():
+        assert isinstance(tag_input, ui_utils.TagInput)
+    for tag_input in view._type_sections.values():
+        assert isinstance(tag_input, ui_utils.TagInput)
 
 
 def _add_row(
@@ -115,17 +118,31 @@ def test_config_and_summary_table_heights(window) -> None:
 
 
 def test_paper_view_can_limit_by_knowledge_section(window) -> None:
-    """组卷可按知识点板块限定：板块进入配置行与组卷条件，知识点候选随之过滤。"""
+    """组卷知识点板块用标签输入：候选可选可写、标签可叠加与删除，并列限定。"""
     view = window.paper_generation_view
     view._subject_combo.setCurrentIndex(view._subject_combo.findText("数学"))
     view.reload_knowledge_points()
 
-    section_combo = view._type_sections[QuestionType.SINGLE]
-    assert section_combo.count() > 1  # 含"不限"与科目下的板块
-    ui_utils.select_combo_data(section_combo, "不存在的板块")
-    section_combo.addItem("代数")
-    section_combo.setCurrentText("代数")
+    section_input = view._type_sections[QuestionType.SINGLE]
+    assert isinstance(section_input, ui_utils.TagInput)
+    assert section_input.candidates()  # 候选来自科目下的板块
+    assert "代数" in section_input.candidates()
+    assert section_input.values() == []
+
+    # 候选里选中 -> 加入已选标签；候选与已选无关（仍保留已选项）
     view._on_section_changed(QuestionType.SINGLE)
+    section_input.set_values(["代数"])
+    assert section_input.values() == ["代数"]
+    assert "代数" in section_input.candidates()
+
+    # 标签可叠加：多个板块并列限定
+    section_input.set_values(["代数", "几何"])
+    assert section_input.values() == ["代数", "几何"]
+    assert view._section_of(QuestionType.SINGLE) == "代数、几何"
+
+    # 删除标签
+    section_input._remove_value("几何")
+    assert section_input.values() == ["代数"]
 
     _add_row(view, QuestionType.SINGLE, "一元二次方程", Difficulty.MEDIUM, 2, "代数")
     view._type_enabled[QuestionType.SINGLE].setChecked(True)
@@ -142,6 +159,21 @@ def test_paper_view_can_limit_by_knowledge_section(window) -> None:
     criteria = view._build_criteria()
     assert criteria.choice_items[0].section == "代数"
     assert criteria.choice_items[0].knowledge_points == ["一元二次方程"]
+
+
+def test_section_input_adds_tags_by_typing(window) -> None:
+    """标签输入框：回车把当前输入加入标签并清空输入，便于继续输入（用户需求）。"""
+    view = window.paper_generation_view
+    view._subject_combo.setCurrentIndex(view._subject_combo.findText("数学"))
+    view.reload_knowledge_points()
+
+    section_input = view._type_sections[QuestionType.SINGLE]
+    section_input._add_value("几何")
+    assert section_input.values() == ["几何"]
+    assert view._section_of(QuestionType.SINGLE) == "几何"
+    # 重复加入不产生重复标签
+    section_input._add_value("几何")
+    assert section_input.values() == ["几何"]
 
 
 def test_single_and_multiple_are_separately_enabled(window) -> None:
@@ -180,14 +212,15 @@ def test_fill_type_supported(window) -> None:
 
     view = window.paper_generation_view
     view._subject_combo.setCurrentIndex(0)
-    # 走界面路径：填条件 -> 添加到配置表
-    view._type_knowledge[QuestionType.FILL].setEditText("集合")
+    # 走界面路径：填条件 -> 添加到配置表（知识点用标签输入框）
+    view._type_knowledge[QuestionType.FILL].set_values(["集合"])
     ui_utils.select_combo_data(
         view._type_difficulty[QuestionType.FILL], Difficulty.EASY
     )
     view._type_count[QuestionType.FILL].setValue(4)
     view._add_from_controls(QuestionType.FILL)
     assert view._type_tables[QuestionType.FILL].rowCount() == 1
+    assert view._type_knowledge[QuestionType.FILL].values() == []  # 添加后清空输入
 
     view._type_enabled[QuestionType.SINGLE].setChecked(False)
     view._type_enabled[QuestionType.MULTIPLE].setChecked(False)

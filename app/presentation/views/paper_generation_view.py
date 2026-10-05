@@ -6,6 +6,8 @@
 - 四个题型分组（单选 / 多选 / 填空 / 解答）：保留原分组容器与原有条件控件
   （启用开关 + 知识点板块 / 知识点 / 难度 / 数量 / 命中量），并在其下**追加配置表**，
   显示当前题型已添加的条目（序号 / 题型 / 知识点板块 / 知识点 / 难度 / 数量 / 命中题数）；
+  知识点板块与知识点用标签输入框：输入即给候选标签，选中或回车加入已选，
+  标签平级、可叠加、可删除，多个标签是并列筛选（命中任一即匹配，用户需求）；
   点"添加到配置表"把当前条件追加为一行，可改难度、改数量、删除行；
   选定知识点板块后知识点候选只保留该板块的细分知识点（用户需求：板块作为限定），
   只配数量，不勾选单题
@@ -165,8 +167,8 @@ class PaperGenerationView(QWidget):
         self._type_tables: dict[QuestionType, QTableWidget] = {}
         self._type_bodies: dict[QuestionType, QWidget] = {}
         self._type_enabled: dict[QuestionType, QCheckBox] = {}
-        self._type_sections: dict[QuestionType, QComboBox] = {}
-        self._type_knowledge: dict[QuestionType, QComboBox] = {}
+        self._type_sections: dict[QuestionType, ui_utils.TagInput] = {}
+        self._type_knowledge: dict[QuestionType, ui_utils.TagInput] = {}
         self._type_difficulty: dict[QuestionType, QComboBox] = {}
         self._type_count: dict[QuestionType, QSpinBox] = {}
         self._type_hit: dict[QuestionType, QLabel] = {}
@@ -231,20 +233,14 @@ class PaperGenerationView(QWidget):
         return combo
 
     @staticmethod
-    def _new_section_combo() -> QComboBox:
-        """构建知识点板块选择框（用户需求：组卷可按板块限定，可多个）。
-
-        一道题可属于多个板块，限定多个板块时命中任一板块的题目都算命中。
-        """
-        return ui_utils.new_multi_combo("不限（可多个，用逗号分隔）", 140)
+    def _new_section_input() -> ui_utils.TagInput:
+        """构建知识点板块标签输入框（用户需求：可按多个板块并列限定）。"""
+        return ui_utils.TagInput("输入板块名，选候选或回车加入")
 
     @staticmethod
-    def _new_knowledge_combo() -> QComboBox:
-        """构建知识点选择框（可选已有知识点，也可直接手写）。
-
-        多个知识点用逗号 / 顿号分隔，留空表示不限。
-        """
-        return ui_utils.new_multi_combo("不限（可多个，用逗号分隔）", 160)
+    def _new_knowledge_input() -> ui_utils.TagInput:
+        """构建知识点标签输入框（多知识点为并列筛选）。"""
+        return ui_utils.TagInput("输入知识点，选候选或回车加入")
 
     @staticmethod
     def parse_knowledge(text: str) -> list[str]:
@@ -264,9 +260,10 @@ class PaperGenerationView(QWidget):
         body = QWidget()
         body_layout = QVBoxLayout(body)
 
-        # 原条件控件：知识点板块 / 知识点 / 难度 / 数量（只配数量，不勾选单题）
-        section = self._new_section_combo()
-        knowledge = self._new_knowledge_combo()
+        # 原条件控件：知识点板块 / 知识点 / 难度 / 数量（只配数量，不勾选单题）；
+        # 板块与知识点用标签输入框：标签平级、可叠加、可删除，作为并列筛选（用户需求）
+        section = self._new_section_input()
+        knowledge = self._new_knowledge_input()
         difficulty = self._new_difficulty_combo()
         count = QSpinBox()
         count.setRange(1, 999)
@@ -280,10 +277,10 @@ class PaperGenerationView(QWidget):
         form.addRow("", hit)
         body_layout.addLayout(form)
 
-        section.currentTextChanged.connect(
-            lambda _text="", target=question_type: self._on_section_changed(target)
+        section.changed.connect(
+            lambda target=question_type: self._on_section_changed(target)
         )
-        knowledge.currentTextChanged.connect(self._on_conditions_changed)
+        knowledge.changed.connect(self._on_conditions_changed)
         difficulty.currentIndexChanged.connect(self._on_conditions_changed)
 
         # 追加的配置表：显示当前题型已添加的条目（不含题目正文）
@@ -485,21 +482,22 @@ class PaperGenerationView(QWidget):
             )
             or []
         )
-        for combo in self._type_sections.values():
-            ui_utils.reload_combo_candidates(combo, list(self._sections_map))
+        for section_input in self._type_sections.values():
+            section_input.set_candidates(list(self._sections_map))
         for question_type in _TYPE_ORDER:
             self._refresh_knowledge_candidates(question_type)
         self.refresh_hit_counts()
 
     def _section_of(self, question_type: QuestionType) -> str:
-        """读取某题型选定的知识点板块（可多个，用"、"拼接；不限返回空串）。"""
-        return "、".join(
-            split_sections(self._type_sections[question_type].currentText())
-        )
+        """读取某题型选定的知识点板块标签（多个用"、"拼接；未选返回空串）。"""
+        return "、".join(self._type_sections[question_type].values())
 
     def _refresh_knowledge_candidates(self, question_type: QuestionType) -> None:
-        """按该题型选定的板块刷新知识点候选（多个板块取并集，未选则用科目全部）。"""
-        selected = split_sections(self._type_sections[question_type].currentText())
+        """按该题型选定的板块刷新知识点候选（多个板块取并集，未选则用科目全部）。
+
+        候选池与已选知识点标签无关（用户需求：候选仅随当前输入刷新）。
+        """
+        selected = self._type_sections[question_type].values()
         if selected:
             points = [
                 point
@@ -508,12 +506,12 @@ class PaperGenerationView(QWidget):
             ]
         else:
             points = list(self._subject_points)
-        ui_utils.reload_combo_candidates(
-            self._type_knowledge[question_type], list(dict.fromkeys(points))
+        self._type_knowledge[question_type].set_candidates(
+            list(dict.fromkeys(points))
         )
 
     def _on_section_changed(self, question_type: QuestionType) -> None:
-        """板块变化：按板块过滤该题型的知识点候选并刷新命中量。"""
+        """板块标签变化：刷新该题型的知识点候选并刷新命中量。"""
         self._refresh_knowledge_candidates(question_type)
         self._on_conditions_changed()
 
@@ -532,11 +530,11 @@ class PaperGenerationView(QWidget):
             table,
             question_type,
             self._section_of(question_type),
-            knowledge.currentText().strip(),
+            "，".join(knowledge.values()),
             Difficulty(difficulty),
             self._type_count[question_type].value(),
         )
-        knowledge.setEditText("")
+        knowledge.set_values([])
         self._on_conditions_changed()
 
     def _append_row(
@@ -719,10 +717,9 @@ class PaperGenerationView(QWidget):
             label.setText("命中：—")
             return
         section_text = self._section_of(question_type)
-        text_input = self._type_knowledge[question_type].currentText()
-        points = self.parse_knowledge(text_input)
+        points = self._type_knowledge[question_type].values()
         hits = self._count_hits(
-            question_type, section_text, Difficulty(difficulty), text_input
+            question_type, section_text, Difficulty(difficulty), "、".join(points)
         )
         text = "命中：—" if hits is None else f"命中：{hits} 道"
         limits: list[str] = []
@@ -854,12 +851,13 @@ class PaperGenerationView(QWidget):
         if not items:
             return
         first = items[0]
-        section_combo = self._type_sections[question_type]
         if first.section:
-            # 板块可多个，整段回填（用户需求）
-            section_combo.setEditText("、".join(split_sections(first.section)))
-        self._type_knowledge[question_type].setEditText(
-            "，".join(first.knowledge_points or [])
+            # 板块可多个，按标签整段回填（用户需求）
+            self._type_sections[question_type].set_values(
+                split_sections(first.section)
+            )
+        self._type_knowledge[question_type].set_values(
+            list(first.knowledge_points or [])
         )
 
     # --------------------------------------------------------------- 生成

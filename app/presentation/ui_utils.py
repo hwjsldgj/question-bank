@@ -1,4 +1,4 @@
-"""表现层共享工具：枚举标签、统一对话框与受限服务调用。
+"""表现层共享工具：枚举标签、统一对话框、多值输入控件与受限服务调用。
 
 集中封装界面层的重复逻辑，供主窗口与三个视图复用：
 
@@ -7,6 +7,7 @@
   ``raise NotImplementedError("TODO(...)")``，界面必须捕获后给出可读提示，
   避免尚未实现的业务导致程序崩溃
 - 耗时操作期间的等待光标（需求 R17 第 3 条：展示进行中状态）
+- 表格行距、可编辑多值下拉框与标签式多值输入框（TagInput）
 
 依赖：PySide6.QtCore、PySide6.QtWidgets、app.domain.enums、app.domain.errors
 被使用：app.presentation.main_window、app.presentation.views.question_bank_view、
@@ -18,12 +19,20 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, QStringListModel
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QStringListModel, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QCompleter,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QLayoutItem,
+    QLineEdit,
     QMessageBox,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -297,3 +306,204 @@ def select_combo_data(combo: QComboBox, value: Any) -> None:
         if combo.itemData(index) == value:
             combo.setCurrentIndex(index)
             return
+
+
+class _FlowLayout(QLayout):
+    """自动换行的流式布局：标签可叠加成多行（Qt 官方 FlowLayout 的精简版）。"""
+
+    def __init__(self, parent: QWidget | None = None, margin: int = 0, spacing: int = 4) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+
+    def addItem(self, item: QLayoutItem) -> None:  # noqa: N802 - Qt 命名约定
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:  # noqa: N802 - Qt 命名约定
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:  # noqa: N802 - Qt 命名约定
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientation:  # noqa: N802 - Qt 命名约定
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt 命名约定
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt 命名约定
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:  # noqa: N802 - Qt 命名约定
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt 命名约定
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802 - Qt 命名约定
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        return size + QSize(
+            margins.left() + margins.right(), margins.top() + margins.bottom()
+        )
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        """按行摆放子项，超出宽度时换行；返回所需高度。"""
+        margins = self.contentsMargins()
+        area = rect.adjusted(
+            margins.left(), margins.top(), -margins.right(), -margins.bottom()
+        )
+        x, y, line_height = area.x(), area.y(), 0
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + self.spacing()
+            if next_x - self.spacing() > area.right() and line_height > 0:
+                x = area.x()
+                y = y + line_height + self.spacing()
+                next_x = x + hint.width() + self.spacing()
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + margins.bottom()
+
+
+class TagInput(QWidget):
+    """标签式多值输入框（用户需求：搜索选标签、标签可叠加可删除、并列筛选）。
+
+    - 输入即在下拉里给出候选标签；候选只由当前输入文本过滤，
+      已选标签不会从候选中消失（用户需求：候选仅随当前输入刷新）
+    - 选中候选或回车把当前输入加入已选标签，输入框清空后可继续输入
+    - 标签平级、可叠加（自动换行）、点标签上的 × 删除
+    - 多个标签是并列关系，调用方按"命中任一即匹配"使用
+    """
+
+    #: 用户增删标签时发出（程序化 :meth:`set_values` 不发）
+    changed = Signal()
+
+    def __init__(self, placeholder: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._values: list[str] = []
+        self._candidates: list[str] = []
+
+        self._tag_host = QWidget(self)
+        self._tag_layout = _FlowLayout(self._tag_host)
+        self._edit = QLineEdit(self)
+        self._edit.setPlaceholderText(placeholder)
+        self._completer = QCompleter([], self._edit)
+        self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._completer.setCompletionMode(
+            QCompleter.CompletionMode.PopupCompletion
+        )
+        self._edit.setCompleter(self._completer)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(self._tag_host)
+        layout.addWidget(self._edit)
+
+        self._completer.activated.connect(self._on_candidate_activated)
+        self._edit.returnPressed.connect(self._on_return_pressed)
+        self._tag_host.setVisible(False)
+
+    # ------------------------------------------------------------------ 取值
+
+    def values(self) -> list[str]:
+        """已选标签（按加入顺序）。"""
+        return list(self._values)
+
+    def set_values(self, values: Any) -> None:
+        """整体替换已选标签（程序化调用，不发 ``changed``）。"""
+        self._values = []
+        for value in values or []:
+            self._append_value(value)
+        self._render_tags()
+
+    def candidates(self) -> list[str]:
+        """当前候选标签池。"""
+        return list(self._candidates)
+
+    def set_candidates(self, candidates: Any) -> None:
+        """刷新候选标签池（保留已选标签与当前输入）。"""
+        self._candidates = [str(value) for value in candidates or []]
+        self._completer.setModel(
+            QStringListModel(self._candidates, self._completer)
+        )
+
+    def clear_input(self) -> None:
+        """清空输入框（不影响已选标签）。"""
+        self._edit.clear()
+
+    def placeholder(self) -> str:
+        """输入框的占位提示文本。"""
+        return self._edit.placeholderText()
+
+    # ------------------------------------------------------------------ 交互
+
+    def _on_candidate_activated(self, text: str) -> None:
+        """下拉候选中选中一项：加入已选标签，可继续输入下一个。"""
+        self._add_value(text)
+
+    def _on_return_pressed(self) -> None:
+        """回车：把当前输入加入已选标签（候选里没有的也可手写）。"""
+        self._add_value(self._edit.text())
+
+    def _add_value(self, raw: Any) -> None:
+        value = str(raw).strip()
+        if value and value not in self._values:
+            self._values.append(value)
+            self._render_tags()
+            self.changed.emit()
+        self.clear_input()
+        self._edit.setFocus()
+
+    def _append_value(self, raw: Any) -> None:
+        value = str(raw).strip()
+        if value and value not in self._values:
+            self._values.append(value)
+
+    def _remove_value(self, value: str) -> None:
+        if value in self._values:
+            self._values.remove(value)
+            self._render_tags()
+            self.changed.emit()
+
+    def _render_tags(self) -> None:
+        """重建标签行：每个标签 = 文本 + × 删除按钮。"""
+        while self._tag_layout.count():
+            item = self._tag_layout.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        for value in self._values:
+            self._tag_layout.addWidget(self._build_tag(value))
+        self._tag_host.setVisible(bool(self._values))
+
+    def _build_tag(self, value: str) -> QWidget:
+        """构建单个标签（文本 + 删除按钮）。"""
+        tag = QFrame(self._tag_host)
+        tag.setFrameShape(QFrame.Shape.StyledPanel)
+        layout = QHBoxLayout(tag)
+        layout.setContentsMargins(6, 0, 2, 0)
+        layout.setSpacing(2)
+        layout.addWidget(QLabel(value, tag))
+        remove = QToolButton(tag)
+        remove.setText("×")
+        remove.setAutoRaise(True)
+        remove.setToolTip(f"删除标签：{value}")
+        remove.clicked.connect(
+            lambda _checked=False, name=value: self._remove_value(name)
+        )
+        layout.addWidget(remove)
+        return tag

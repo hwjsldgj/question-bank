@@ -118,9 +118,9 @@ PaperGenerationView -> PaperComposer.generate
 PaperGenerationView -> PaperExporter.export          （在后台线程执行，progress 回主线程显示）
     -> ScoreValidator.validate             分值完整性校验（缺分值阻止导出）
     -> MdExporter / PdfExporter            按格式渲染（两部分 / 分区小计 / 总分 / 答案页）；
-                                          答案页每个答案前插入分页标记；
-                                          PDF 由 MdExporter 产出的同名 .md 用 pymd2pdf 转换，
-                                          中文用 ThemeConfig 指定系统中文 TTF（避免乱码）
+                                          答案页前插入分页标记（.pagebreak）；
+                                          PDF：MD -> 带 MathJax 与打印 CSS 的 HTML ->
+                                          Edge 无头打印（中文由 CSS 字体指定，避免乱码）
 ```
 
 ### 3.4 AI 辨识链（用户需求：模块化输出、按需给出、一次返回）

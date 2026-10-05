@@ -1,4 +1,4 @@
-"""MdExporter 单元测试：Markdown 排版、知识点板块、答案分页与中文字体。
+"""MdExporter 单元测试：Markdown 格式（对齐参考稿）、答案分页与 PDF 的 HTML 方案。
 
 导出会在目标目录写文件，用 pytest 的 ``tmp_path`` 作为导出目录。
 
@@ -9,6 +9,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.application.score_calculator import ScoreCalculator
 from app.domain.entities.configs import ExportOptions
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement
@@ -16,7 +18,7 @@ from app.domain.entities.paper import Paper, Section
 from app.domain.entities.question import Option, Question
 from app.domain.enums import Difficulty, QuestionType, SectionKind
 from app.infrastructure.exporters.md_exporter import PAGE_BREAK, MdExporter
-from app.infrastructure.exporters.pdf_exporter import resolve_chinese_font
+from app.infrastructure.exporters.pdf_exporter import render_html, resolve_browser
 
 
 def _single_question(section: str) -> Question:
@@ -65,18 +67,22 @@ def _read(path: str) -> str:
 
 
 def test_export_writes_markdown_with_knowledge_section(tmp_path) -> None:
-    """导出文件为同名 .md，内容为 Markdown 并带上题面的知识点板块（用户需求）。"""
+    """导出文件为同名 .md，格式与参考稿一致（用户需求）。"""
     path = MdExporter().export(_paper(_single_question("代数")), str(tmp_path))
-    text = _read(path)
+    lines = _read(path).splitlines()
 
     assert path.endswith(".md")
-    assert text.startswith("# 试卷")
-    assert "**总分：2 分**" in text
-    assert "知识点板块：代数" in text
-    assert "1. 下列方程是一元二次方程的是？" in text
-    assert "   - B. x^2-1=0" in text
-    assert "# 答案页" in text
-    assert "1. B" in text
+    assert lines[0] == "# 试卷"
+    assert lines[2] == "**总分：2 分**"
+    assert lines[4] == "## 一、选择题部分（单项选择）"
+    assert lines[6] == "共 1 题，每题 2 分，小计 2 分。  "  # 两个空格 = Markdown 硬换行
+    assert lines[7] == "知识点板块：代数。"
+    assert lines[9] == "1. 下列方程是一元二次方程的是？  "
+    assert lines[10] == "   A. x+1=0  "
+    assert lines[11] == "   B. x^2-1=0"  # 块内末行不加硬换行
+    assert "# 答案页" in lines
+    assert "1. B  " in lines
+    assert "   解析：含二次项" in lines
 
 
 def test_export_without_section_omits_the_line(tmp_path) -> None:
@@ -96,29 +102,34 @@ def test_export_creates_default_dir_when_missing(tmp_path) -> None:
     assert Path(path).parent == target
 
 
-def test_answer_page_has_pagebreak_before_each_answer(tmp_path) -> None:
-    """答案页在每个答案前插入单独一行的分页标记（用户需求：答案分页）。"""
+def test_answer_page_starts_on_new_page(tmp_path) -> None:
+    """答案页前插入单独一行的分页标记（参考稿格式，用户需求：答案分页）。"""
     paper = _paper(_single_question("代数"))
     path = MdExporter().export(paper, str(tmp_path))
     lines = _read(path).splitlines()
 
-    assert PAGE_BREAK in lines  # 必须单独成行，pymd2pdf 才会编译为 PageBreak
-    answer_index = lines.index("# 答案页")
-    assert PAGE_BREAK in lines[answer_index:]  # 答案页前也分页
-    first_answer = next(
-        index for index, line in enumerate(lines) if line.startswith("1. B")
-    )
-    assert lines[answer_index + 1 : first_answer].count(PAGE_BREAK) >= 1
-    # 分页标记前后都是空行，保证独占一行
-    for index, line in enumerate(lines):
-        if line == PAGE_BREAK:
-            assert lines[index - 1] == "" and lines[index + 1] == ""
+    assert lines.count(PAGE_BREAK) == 1  # 只在答案页前分页
+    index = lines.index(PAGE_BREAK)
+    assert lines[index - 1] == "" and lines[index + 1] == ""  # 独占一行
+    assert lines[index + 2] == "# 答案页"
+    # 答案页内不再重复分页
+    assert PAGE_BREAK not in lines[index + 2 :]
 
 
-def test_chinese_font_is_resolved_when_available() -> None:
-    """能解析出可用中文字体时给出逻辑名与 TTF 路径（用户需求：中文不乱码）。"""
-    font = resolve_chinese_font()
-    if font is None:  # 无中文字体的环境（如精简 Linux 容器）跳过
-        return
-    name, path = font
-    assert name and Path(path).is_file()
+def test_html_render_has_mathjax_and_pagebreak_css(tmp_path) -> None:
+    """PDF 走参考实现的 HTML 方案：MathJax、中文字体与 .pagebreak 分页 CSS 齐备。"""
+    html = render_html(_read(MdExporter().export(_paper(_single_question("代数")), str(tmp_path))))
+    assert "<!DOCTYPE html>" in html
+    assert "mathjax" in html.lower()          # 公式渲染
+    assert "Microsoft YaHei" in html          # 中文字体（CSS 指定，不会乱码）
+    assert ".pagebreak" in html               # 分页规则
+    assert "page-break-after: always" in html
+
+
+def test_pdf_browser_is_resolved_or_reported() -> None:
+    """能定位到 Edge 可执行文件；找不到时由导出流程给出可读提示。"""
+    browser = resolve_browser()
+    if browser is None:
+        pytest.skip("本机未安装 Edge，跳过浏览器路径断言")
+    assert Path(browser).is_file()
+    assert browser.lower().endswith("msedge.exe")

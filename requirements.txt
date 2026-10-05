@@ -1,6 +1,6 @@
 PySide6>=6.6
+Markdown>=3.5
 reportlab>=4.0
-pymd2pdf
 requests>=2.31
 
 # 开发 / 测试依赖

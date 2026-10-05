@@ -92,7 +92,7 @@ flowchart LR
 | `infrastructure/repositories/task_repository.py` | `database/connection`、`database/schema`（generation_tasks 等表）、`domain/entities/task` | `interfaces/repositories.TaskRepository` | `app/container.py` |
 | `infrastructure/ai/ai_client.py` | 标准库 `urllib`/`json`/`socket`、`domain/entities/configs.AIConfig`、`domain/errors` | `interfaces/ai_client.AIClient` | `app/container.py` |
 | `infrastructure/exporters/md_exporter.py` | 标准库 pathlib、`config/settings`（默认导出目录）、`domain/entities/{configs,paper,question}`、`domain/errors` | `interfaces/exporters.BaseExporter` | `app/container.py`（注册）、`infrastructure/exporters/pdf_exporter.py`（PDF 的 MD 来源） |
-| `infrastructure/exporters/pdf_exporter.py` | `pymd2pdf`（方法内惰性导入）、`md_exporter`（先生成 MD）、`config/settings`（转换缓存目录与中文字体候选） | `interfaces/exporters.BaseExporter` | `app/container.py`（注册）、`presentation/views/paper_generation_view`（后台线程调用，progress 显示进度） |
+| `infrastructure/exporters/pdf_exporter.py` | `markdown` 包（方法内惰性导入）、标准库 `subprocess`、`md_exporter`（先生成 MD）、`config/settings`（浏览器候选路径） | `interfaces/exporters.BaseExporter` | `app/container.py`（注册）、`presentation/views/paper_generation_view`（后台线程调用，progress 显示进度） |
 | `infrastructure/config_store.py` | `database/connection`、`database/schema`（settings 表）、`domain/entities/configs`、`config/settings`（默认值回退） | `interfaces/repositories.ConfigStore` | `app/container.py`、`presentation/views/settings_view` |
 | `infrastructure/image_store.py` | 标准库 `shutil`/`uuid`/`pathlib`、`domain/errors` | —（容器直接持有具体实现） | `app/container.py`、`presentation/views/question_bank_view` |
 | `infrastructure/repositories/question_op_repository.py` | `database/connection`、`database/schema`（question_operations 表）、`domain/entities/question_op`、`domain/enums` | `interfaces/repositories.QuestionOpRepository` | `app/container.py`（装配给 QuestionService / QuestionHistoryService） |
@@ -124,7 +124,8 @@ HistoryView.reuse_criteria_requested(criteria)
 |----|------|----------|------|
 | PySide6 | >=6.6 | `presentation/*`、`main.py` | 桌面 GUI |
 | reportlab | >=4.0 | `tests/test_paper_import.py` | 测试中生成样例 PDF |
-| pymd2pdf | 最新 | `infrastructure/exporters/pdf_exporter.py`（惰性导入，导入名 `md2pdf`） | Markdown 试卷转 PDF |
+| markdown | >=3.5 | `infrastructure/exporters/pdf_exporter.py`（惰性导入） | Markdown 试卷渲染为 HTML |
+| Microsoft Edge | 随系统 | `infrastructure/exporters/pdf_exporter.py`（`--headless=new --print-to-pdf`） | HTML 打印为 PDF |
 | requests | >=2.31 | （可选）AI 调用已改用标准库 urllib | AI API HTTP 访问（备选） |
 | pytest | >=8.0 | `tests/*` | 测试 |
 

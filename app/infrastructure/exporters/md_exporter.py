@@ -46,7 +46,8 @@ _TYPE_TITLES: dict[QuestionType, str] = {
 #: 中文序号（试卷部分编号）
 _ORDINALS = "一二三四五六七八九十"
 
-#: 分页标记：必须单独成行，pymd2pdf 会编译为 ReportLab PageBreak（用户需求：答案分页）
+#: 分页标记：必须单独成行；渲染成 HTML 后由 ``.pagebreak`` 规则分页
+#: （用户需求：答案分页，格式与参考稿 exports/试卷_20261005_223259.md 一致）
 PAGE_BREAK = '<div class="pagebreak"></div>'
 
 
@@ -92,7 +93,11 @@ class MdExporter(BaseExporter):
 
     @staticmethod
     def _render_section(section: Section, index: int, start_number: int) -> list[str]:
-        """渲染一个分区：标题（数量 / 分值）+ 逐题题面。"""
+        """渲染一个分区：标题（数量 / 分值 / 知识点板块）+ 逐题题面。
+
+        格式与参考稿 ``exports/试卷_20261005_223259.md`` 一致：
+        分区标题用全角括号标注题型，题面块内除末行外都以两个空格结尾（Markdown 硬换行）。
+        """
         ordinal = _ORDINALS[index - 1] if index <= len(_ORDINALS) else str(index)
         title = _SECTION_TITLES.get(section.section_kind, "试题")
         type_title = _TYPE_TITLES.get(section.question_type, "")
@@ -109,33 +114,34 @@ class MdExporter(BaseExporter):
                 name for q in section.questions for name in split_sections(q.section)
             )
         )
-        lines = [
-            f"## {ordinal}、{title} · {type_title}",
-            "",
-            f"共 {len(section.questions)} 题，{score_hint}小计 {subtotal:g} 分",
+        lines = [f"## {ordinal}、{title}（{type_title}）", ""]
+        summary = [
+            f"共 {len(section.questions)} 题，{score_hint}小计 {subtotal:g} 分。"
         ]
         if sections_used:
             # 知识点板块随题面导出（用户需求：导出内容带板块）
-            lines.append(f"知识点板块：{'、'.join(sections_used)}")
-        lines.append("")
+            summary.append(f"知识点板块：{'、'.join(sections_used)}。")
+        lines.extend(["  \n".join(summary), ""])
+
         for offset, question in enumerate(section.questions):
             number = start_number + offset
-            lines.append(f"{number}. {question.stem}")
-            for option in question.options:
-                lines.append(f"   - {option.key}. {option.text}")
+            block = [f"{number}. {question.stem}"]
+            block.extend(
+                f"   {option.key}. {option.text}" for option in question.options
+            )
             if question.image_path:
-                lines.append(f"   ![题目图片]({question.image_path})")
-            lines.append("")
+                block.append(f"   ![题目图片]({question.image_path})")
+            lines.extend(["  \n".join(block), ""])
         return lines
 
     @staticmethod
     def _render_answer_page(paper: Paper) -> list[str]:
         """渲染卷末答案页：逐题答案与解析，编号与题面一致。
 
-        每个答案前插入独立一行的 ``<div class="pagebreak"></div>``，
-        pymd2pdf 会把它编译为 ReportLab 分页（用户需求：答案分页）。
+        答案页前插入独立一行的 ``<div class="pagebreak"></div>``（参考稿格式），
+        转为 HTML/CSS 后由 ``.pagebreak`` 规则分页（用户需求：答案分页）。
         """
-        lines = ["---", "", PAGE_BREAK, "", "# 答案页", ""]
+        lines = [PAGE_BREAK, "", "# 答案页", ""]
         number = 0
         for index, section in enumerate(paper.sections, start=1):
             ordinal = _ORDINALS[index - 1] if index <= len(_ORDINALS) else str(index)
@@ -145,16 +151,10 @@ class MdExporter(BaseExporter):
             for question in section.questions:
                 number += 1
                 entry = answers.get(question.id)
-                lines.extend(
-                    [
-                        PAGE_BREAK,
-                        "",
-                        f"{number}. {entry.answer if entry else '（缺答案）'}",
-                    ]
-                )
+                block = [f"{number}. {entry.answer if entry else '（缺答案）'}"]
                 if entry is not None and entry.solution:
-                    lines.append(f"   - 解析：{entry.solution}")
-            lines.append("")
+                    block.append(f"   解析：{entry.solution}")
+                lines.extend(["  \n".join(block), ""])
         return lines
 
     @staticmethod

@@ -383,10 +383,10 @@ def test_search_filters_by_knowledge_section(window) -> None:
     assert "代数" in sections
     assert "代数、几何" in sections  # 多板块题也能被单个板块筛出
 
-    # 板块框可输入多个板块（逗号 / 顿号分隔）
+    # 板块框可输入多个板块（逗号 / 顿号分隔）：命中任一板块即匹配
     bank._search_section.setEditText("代数、几何")
     bank._on_search()
-    assert bank._result_table.rowCount() == len(sections)
+    assert bank._result_table.rowCount() == 3
 
 
 def test_entry_form_accepts_multiple_knowledge_sections(window) -> None:
@@ -402,10 +402,12 @@ def test_entry_form_accepts_multiple_knowledge_sections(window) -> None:
 
     model = bank._knowledge_completer.model()
     candidates = [model.index(row, 0).data() for row in range(model.rowCount())]
-    assert len(candidates) == len(set(candidates)) > 0
-    # 科目全部知识点中，两个板块的细分知识点都在候选里
-    all_points = bank._question_service.list_knowledge_points("数学")
-    assert set(candidates) <= set(all_points)
+    # 所选两个板块的细分知识点都在候选里（取并集且去重）
+    sections = bank._question_service.list_sections("数学")
+    expected = list(sections.get("代数", [])) + list(sections.get("几何", []))
+    assert expected
+    assert set(candidates) == set(expected)
+    assert len(candidates) == len(set(candidates))
 
 
 def test_history_summary_includes_knowledge_section(window) -> None:
@@ -546,7 +548,7 @@ def test_stats_follow_configuration(window) -> None:
         [stats.item(row, column).text() for column in range(stats.columnCount())]
         for row in range(stats.rowCount())
     ]
-    assert rows == [["单选题", "中", "集合", "1", "1"]]
+    assert rows == [["单选题", "中", "不限", "集合", "1", "1"]]
 
     # 该题型配置表同样显示命中题数，且题型列标明题型
     table = view._type_tables[QuestionType.SINGLE]

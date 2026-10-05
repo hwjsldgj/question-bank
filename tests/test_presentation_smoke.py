@@ -89,11 +89,10 @@ def _set_row_count(
     """在配置表中找到 (知识点, 难度) 行并写入数量，未找到返回 False。"""
     table = view._type_tables[question_type]
     for row in range(table.rowCount()):
-        if table.item(row, 1).text() != point:
+        current = view._row_values(table, row)
+        if current[0] != point or current[1] != difficulty:
             continue
-        if table.cellWidget(row, 2).currentData() != difficulty:
-            continue
-        table.cellWidget(row, 3).setValue(count)
+        table.item(row, 3).setText(str(count))
         return True
     return False
 

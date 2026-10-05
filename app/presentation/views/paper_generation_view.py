@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSpinBox,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -79,6 +80,43 @@ _CONFIG_TABLE_HEIGHT = 160
 
 #: 试卷预览表格高度 = 原始高度 × 本系数（用户需求：高度为原 3 倍）
 _PREVIEW_HEIGHT_FACTOR = 3
+
+#: 难度标签 -> 枚举（配置行以标签文本存储，便于直接用表格编辑）
+_DIFFICULTY_BY_LABEL: dict[str, Difficulty] = {
+    ui_utils.DIFFICULTY_LABELS[difficulty]: difficulty for difficulty in _DIFFICULTIES
+}
+
+
+class _DifficultyDelegate(QStyledItemDelegate):
+    """难度列编辑器：只能选择易 / 中 / 难。
+
+    用委托按需创建编辑器而不是常驻控件：知识点多时配置表可达数百行，
+    常驻控件会让科目切换卡住（用户反馈的"选择科目无响应"）。
+    """
+
+    def createEditor(self, parent, option, index):  # noqa: N802 - Qt 命名约定
+        """返回难度下拉框编辑器。"""
+        combo = QComboBox(parent)
+        for difficulty in _DIFFICULTIES:
+            combo.addItem(ui_utils.DIFFICULTY_LABELS[difficulty])
+        return combo
+
+
+class _CountDelegate(QStyledItemDelegate):
+    """数量列编辑器：0-999 的整数输入框。"""
+
+    def createEditor(self, parent, option, index):  # noqa: N802 - Qt 命名约定
+        """返回数量输入框编辑器。"""
+        editor = QSpinBox(parent)
+        editor.setRange(0, 999)
+        return editor
+
+    def setEditorData(self, editor, index) -> None:  # noqa: N802 - Qt 命名约定
+        """把单元格数值写入编辑器（文本转整数，非法值按 0 处理）。"""
+        try:
+            editor.setValue(int(index.data(Qt.ItemDataRole.EditRole) or 0))
+        except (TypeError, ValueError):
+            editor.setValue(0)
 
 
 class PaperGenerationView(QWidget):
@@ -141,15 +179,6 @@ class PaperGenerationView(QWidget):
         return group
 
     @staticmethod
-    def _new_difficulty_combo() -> QComboBox:
-        """构建只含三级难度的下拉框（组卷不接受"待确认"）。"""
-        combo = QComboBox()
-        for difficulty in _DIFFICULTIES:
-            combo.addItem(ui_utils.DIFFICULTY_LABELS[difficulty], difficulty)
-        ui_utils.select_combo_data(combo, Difficulty.MEDIUM)
-        return combo
-
-    @staticmethod
     def _new_subject_combo() -> QComboBox:
         """构建科目下拉框：科目只能从设置中维护的列表选择（用户需求）。"""
         combo = QComboBox()
@@ -170,12 +199,20 @@ class PaperGenerationView(QWidget):
         body_layout = QVBoxLayout(body)
         table = QTableWidget(0, 4)
         table.setHorizontalHeaderLabels(["序号", "知识点", "难度", "数量"])
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.SelectedClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.AnyKeyPressed
+        )
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         table.setMaximumHeight(_CONFIG_TABLE_HEIGHT)
+        table.setItemDelegateForColumn(2, _DifficultyDelegate(table))
+        table.setItemDelegateForColumn(3, _CountDelegate(table))
+        table.itemChanged.connect(self._on_conditions_changed)
         body_layout.addWidget(table)
 
         remove_button = QPushButton("删除选中行")
@@ -338,45 +375,99 @@ class PaperGenerationView(QWidget):
             self._question_service.list_knowledge_points, self._subject, default=None
         ) or []
         for table in self._type_tables.values():
-            if force:
-                table.setRowCount(0)
-            known = {
-                table.item(row, 1).text() for row in range(table.rowCount())
-            }
-            for point in points:
-                if point in known:
-                    continue
-                for difficulty in _DIFFICULTIES:
-                    self._append_row(table, point, difficulty, 0)
-            self._renumber(table)
+            rows = self._collect_rows(table, points, force)
+            self._fill_table(table, rows)
+
+    def _collect_rows(
+        self, table: QTableWidget, points: list[str], force: bool
+    ) -> list[tuple[str, Difficulty, int]]:
+        """计算配置表的全部行：已有行 + 新知识点 × 三级难度，数量默认 0。"""
+        if force:
+            return [
+                (point, difficulty, 0)
+                for point in points
+                for difficulty in _DIFFICULTIES
+            ]
+        rows = [self._row_values(table, row) for row in range(table.rowCount())]
+        known = {point for point, _difficulty, _count in rows}
+        rows.extend(
+            (point, difficulty, 0)
+            for point in points
+            if point not in known
+            for difficulty in _DIFFICULTIES
+        )
+        return rows
+
+    def _fill_table(
+        self, table: QTableWidget, rows: list[tuple[str, Difficulty, int]]
+    ) -> None:
+        """一次性写入配置表全部行（批量赋值，避免逐行插入触发信号与重绘）。"""
+        table.blockSignals(True)
+        table.setRowCount(len(rows))
+        for row, (point, difficulty, count) in enumerate(rows):
+            self._write_row(table, row, point, difficulty, count)
+        table.blockSignals(False)
 
     def _append_row(
         self, table: QTableWidget, point: str, difficulty: Difficulty, count: int
     ) -> None:
-        """追加一条配置行（序号自动编号，难度与数量用控件承载）。"""
+        """追加一条配置行（序号自动编号，难度与数量在单元格内编辑）。"""
         row = table.rowCount()
-        table.insertRow(row)
-        table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-        table.setItem(row, 1, QTableWidgetItem(point))
+        table.setRowCount(row + 1)
+        self._write_row(table, row, point, difficulty, count)
 
-        combo = self._new_difficulty_combo()
-        ui_utils.select_combo_data(combo, difficulty)
-        combo.currentIndexChanged.connect(self._on_conditions_changed)
-        table.setCellWidget(row, 2, combo)
+    @staticmethod
+    def _write_row(
+        table: QTableWidget,
+        row: int,
+        point: str,
+        difficulty: Difficulty,
+        count: int,
+    ) -> None:
+        """写入一行配置：序号 / 知识点只读，难度与数量可编辑。"""
+        index_item = QTableWidgetItem(str(row + 1))
+        index_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        point_item = QTableWidgetItem(point)
+        difficulty_item = QTableWidgetItem(ui_utils.DIFFICULTY_LABELS[difficulty])
+        count_item = QTableWidgetItem(str(count))
+        count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        for item in (index_item, point_item):
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        for column, item in enumerate(
+            (index_item, point_item, difficulty_item, count_item)
+        ):
+            table.setItem(row, column, item)
 
-        spin = QSpinBox()
-        spin.setRange(0, 999)
-        spin.setValue(count)
-        spin.valueChanged.connect(self._on_conditions_changed)
-        table.setCellWidget(row, 3, spin)
+    @staticmethod
+    def _row_values(table: QTableWidget, row: int) -> tuple[str, Difficulty, int]:
+        """读取一行配置：``(知识点, 难度, 数量)``；难度无法识别时返回 None。"""
+        point_item = table.item(row, 1)
+        difficulty_item = table.item(row, 2)
+        if point_item is None or difficulty_item is None:
+            return ("", None, 0)
+        return (
+            point_item.text(),
+            _DIFFICULTY_BY_LABEL.get(difficulty_item.text()),
+            PaperGenerationView._item_count(table.item(row, 3)),
+        )
+
+    @staticmethod
+    def _item_count(item: QTableWidgetItem | None) -> int:
+        """读取数量单元格数值（非法文本按 0 处理）。"""
+        try:
+            return int(item.text()) if item is not None else 0
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _renumber(table: QTableWidget) -> None:
         """重排配置表序号列（删除行后调用）。"""
+        table.blockSignals(True)
         for row in range(table.rowCount()):
             item = table.item(row, 0)
             if item is not None:
                 item.setText(str(row + 1))
+        table.blockSignals(False)
 
     def _remove_selected_rows(self, table: QTableWidget) -> None:
         """删除配置表中选中的行（用户需求：配置行可手动删除）。"""
@@ -390,17 +481,10 @@ class PaperGenerationView(QWidget):
         """读取配置表的有效行：``(知识点, 难度, 数量)``。"""
         rows: list[tuple[str, Difficulty, int]] = []
         for row in range(table.rowCount()):
-            point_item = table.item(row, 1)
-            combo = table.cellWidget(row, 2)
-            spin = table.cellWidget(row, 3)
-            if point_item is None or combo is None or spin is None:
-                continue
-            difficulty = combo.currentData()
+            point, difficulty, count = self._row_values(table, row)
             if difficulty is None:
                 continue
-            rows.append(
-                (point_item.text(), Difficulty(difficulty), int(spin.value()))
-            )
+            rows.append((point, difficulty, count))
         return rows
 
     def _on_subject_changed(self) -> None:
@@ -542,24 +626,20 @@ class PaperGenerationView(QWidget):
         self, table: QTableWidget, items: list[TypeRequirement]
     ) -> None:
         """把历史条件的各条要求在配置表中回填（不存在组合时补行）。"""
+        rows = [self._row_values(table, row) for row in range(table.rowCount())]
         positions = {
-            (table.item(row, 1).text(), table.cellWidget(row, 2).currentData()): row
-            for row in range(table.rowCount())
-            if table.item(row, 1) is not None
-            and table.cellWidget(row, 2) is not None
-            and table.cellWidget(row, 2).currentData() is not None
+            (point, difficulty): index
+            for index, (point, difficulty, _count) in enumerate(rows)
         }
         for item in items:
             for point in item.knowledge_points or [""]:
-                row = positions.get((point, item.difficulty))
-                if row is None:
-                    self._append_row(table, point, item.difficulty, item.count)
-                    positions[(point, item.difficulty)] = table.rowCount() - 1
+                key = (point, item.difficulty)
+                if key in positions:
+                    rows[positions[key]] = (point, item.difficulty, int(item.count))
                     continue
-                spin = table.cellWidget(row, 3)
-                if spin is not None:
-                    spin.setValue(max(0, int(item.count)))
-        self._renumber(table)
+                positions[key] = len(rows)
+                rows.append((point, item.difficulty, int(item.count)))
+        self._fill_table(table, rows)
 
     # --------------------------------------------------------------- 生成
 

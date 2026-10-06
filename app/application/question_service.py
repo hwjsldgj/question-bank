@@ -701,7 +701,21 @@ class QuestionService:
                 prompt = f"{prompt}\n{extra}"
         if not include_solution:
             prompt += "\n注意：本次不要输出解题解析，solution 请留空字符串。"
-        data = self._ai_client.complete(prompt, recognize_schema(effective))
+
+        # 用户需求：能走本地的就走本地。
+        # AI 辨识是多字段一次调用，本地模型只做难度；因此仅当"只勾了难度"时走本地。
+        local_clf = getattr(self._ai_client, "_local_classifier", None)
+        if local_clf is not None and effective == [RecognizeModule.DIFFICULTY]:
+            try:
+                options_text = "；".join(f"{o.key}. {o.text}" for o in options) or "无"
+                local_result = local_clf.predict(stem=stem, options=options_text, answer="")
+                data = {"difficulty": local_result}
+            except Exception as e:
+                print(f"[本地辨识] 出错，降级走远程：{e}")
+                data = self._ai_client.complete(prompt, recognize_schema(effective))
+        else:
+            data = self._ai_client.complete(prompt, recognize_schema(effective))
+
         report = self._normalize_recognition(data, effective, options, subjects)
         if not include_solution and RecognizeModule.SOLUTION in requested:
             report.fields["solution"] = ""

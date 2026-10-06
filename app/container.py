@@ -107,7 +107,19 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     config_store: ConfigStore = SQLiteConfigStore(db)
 
     # AI 客户端按"配置提供者"构造：设置保存后后续调用立即使用新配置（R15-3）
-    ai_client: AIClient = OpenAICompatibleAIClient(config_store.load_ai_config)
+    local_classifier = None
+    try:
+        from app.infrastructure.ai.local_difficulty_classifier import LocalDifficultyClassifier
+        from app.config.settings import LOCAL_DIFFICULTY_MODEL_DIR
+        local_classifier = LocalDifficultyClassifier(LOCAL_DIFFICULTY_MODEL_DIR)
+        print(f"[container] 本地难度模型已加载：{LOCAL_DIFFICULTY_MODEL_DIR}")
+    except Exception as e:
+        print(f"[container] 本地难度模型不可用：{e}")
+
+    ai_client: AIClient = OpenAICompatibleAIClient(
+        config_store.load_ai_config,
+        local_classifier=local_classifier,
+    )
 
     scoring_config: ScoringConfig = config_store.load_scoring_config()
 
@@ -119,7 +131,10 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     score_validator = ScoreValidator()
 
     # 应用服务装配
-    difficulty_service = DifficultyService(ai_client, config_store, question_repository)
+    difficulty_service = DifficultyService(
+        ai_client, config_store, question_repository,
+        local_classifier=local_classifier,
+    )
     question_service = QuestionService(
         question_repository,
         question_validator,

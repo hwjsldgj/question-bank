@@ -2,7 +2,8 @@
 
 对应设计文档 "Data Models" 章节，每个文件一个聚合根或值对象：
 
-- ``question``      Question：题目（核心实体）+ Option / QuestionFilter
+- ``question``      Question：题目（核心实体）+ Option / QuestionFilter + 题干指纹
+- ``duplicate``     DuplicateGroup：题库自动去重的重复题分组（保留最早录入的一道）
 - ``usage_record``  UsageRecord：题目使用记录（近期重复抑制的数据基础）
 - ``criteria``      PaperCriteria：组卷条件（两部分均可选）
 - ``paper``         Paper / Section：试卷与分区

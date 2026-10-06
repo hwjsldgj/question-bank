@@ -202,3 +202,6 @@ DEFAULT_PROMPT_CONFIG = PromptConfig(
         "难度：{difficulty}\n数量：{count}\n"
     ),
 )
+
+
+LOCAL_DIFFICULTY_MODEL_DIR = "models/difficulty_model"

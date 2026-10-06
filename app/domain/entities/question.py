@@ -11,6 +11,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
+import unicodedata
 
 from app.domain.enums import (
     Difficulty,
@@ -132,6 +133,28 @@ def split_sections(text: str | None) -> list[str]:
     """
     parts = [part.strip() for part in re.split(r"[,，、;；\s]+", text or "")]
     return list(dict.fromkeys(part for part in parts if part))
+
+
+def stem_fingerprint(stem: str | None) -> str:
+    """题干指纹：题库自动去重时判定"两道题题干是否相同"的依据（用户需求）。
+
+    归一化步骤：
+
+    1. Unicode NFKC 归一化：全角 / 半角、兼容字形（如 ``Ａ`` 与 ``A``）统一
+    2. 转小写（``casefold``），忽略英文大小写差异
+    3. 剔除标点（``P*``）、空白与分隔符（``Z*``）、控制与格式字符（``C*``），
+       保留文字、数字与数学符号（``+ - = × ÷ √`` 等不参与忽略，避免
+       ``x+1`` 与 ``x1`` 被误判为同一题）
+
+    :param stem: 题干文本；None 或空串返回空串（无有效题干，调用方应跳过）
+    :return: 归一化后的指纹字符串
+    """
+    text = unicodedata.normalize("NFKC", stem or "").casefold()
+    return "".join(
+        char
+        for char in text
+        if not unicodedata.category(char).startswith(("P", "Z", "C"))
+    )
 
 
 @dataclass

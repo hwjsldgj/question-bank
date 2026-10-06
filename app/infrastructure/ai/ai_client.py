@@ -1,4 +1,4 @@
-"""AI 客户端基础设施：OpenAI 兼容 HTTP API 实现。
+﻿"""AI 客户端基础设施：OpenAI 兼容 HTTP API 实现。
 
 实现接口：app.interfaces.ai_client.AIClient
 依赖：标准库 urllib / json（不引入第三方 HTTP 依赖）、
@@ -26,11 +26,32 @@ from app.interfaces.ai_client import AIClient
 class OpenAICompatibleAIClient(AIClient):
     """OpenAI 兼容 AI API 客户端（/chat/completions 协议）。"""
 
-    def __init__(self, config: AIConfig | Callable[[], AIConfig]) -> None:
+    def __init__(self, config: AIConfig | Callable[[], AIConfig], local_classifier=None) -> None:
         """注入 AI 配置或配置提供者（每次调用前重新读取，需求 R15 第 5 条）。"""
         self._provider = config if callable(config) else (lambda: config)
+        self._local_classifier = local_classifier
+
+    @staticmethod
+    def _is_difficulty_prompt(prompt: str) -> bool:
+        return "教辅难度评估专家" in prompt
+
+    @staticmethod
+    def _extract_question(prompt: str):
+        def grab(label):
+            m = re.search(rf"{label}：(.+?)(?=\n(?:选项|答案|关联知识点|题型|题干)：|$)", prompt, re.DOTALL)
+            return m.group(1).strip() if m else ""
+        return grab("题干"), grab("选项"), grab("答案")
 
     def complete(self, prompt: str, response_schema: dict | None = None) -> dict:
+        # 若本地模型可用且是难度请求，走本地（save 时的 AI 分析也会走本地）
+        if self._local_classifier is not None and self._is_difficulty_prompt(prompt):
+            try:
+                stem, options, answer = self._extract_question(prompt)
+                result = self._local_classifier.predict(stem=stem, options=options, answer=answer)
+                return {"difficulty": result}
+            except Exception as e:
+                print(f"[ai_client] 本地难度模型出错，降级走远程: {e}")
+        # 否则走远程
         """调用 /chat/completions 并解析结构化响应。
 
         失败语义（需求 R4 第 3 条 / R15 第 4 条）：超时、网络错误、
@@ -50,7 +71,9 @@ class OpenAICompatibleAIClient(AIClient):
         raise AIServiceError(f"AI 服务调用失败（已重试）：{last_error}")
 
     def is_configured(self) -> bool:
-        """配置完整性判断（base_url / api_key / model 均非空）。"""
+        """本地模型可用时也返回 True；否则检查远程配置。"""
+        if self._local_classifier is not None:
+            return True
         return self._provider().is_configured()
 
     # ------------------------------------------------------------------ 内部
@@ -161,3 +184,4 @@ class OpenAICompatibleAIClient(AIClient):
         if isinstance(data, dict):
             return data
         return {"data": data}
+

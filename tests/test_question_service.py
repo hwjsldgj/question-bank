@@ -207,7 +207,8 @@ def test_statistics_and_knowledge_points(service) -> None:
     service.create_question(_single_question())
     fill = _single_question()
     fill.knowledge_points = ["因式分解"]
-    service.create_question(fill)
+    # 两题题干相同：本用例验证概览与知识点字典，显式跳过自动去重拦截
+    service.create_question(fill, allow_duplicate=True)
 
     stats = service.statistics()
     assert stats["total"] == 2
@@ -227,7 +228,8 @@ def test_batch_operations_and_image_cleanup(container, service, tmp_path) -> Non
     relative = container.image_store.save(source)
 
     with_image = service.create_question(_single_question(image=relative))
-    plain = service.create_question(_single_question())
+    # 题干相同：本用例验证图片清理，显式跳过自动去重拦截
+    plain = service.create_question(_single_question(), allow_duplicate=True)
 
     changed = service.set_quality_flag_many(
         [with_image.id, plain.id, "missing-id"], QualityFlag.QUALITY
@@ -266,7 +268,8 @@ def test_reanalyze_difficulties_skips_manual(container) -> None:
     manual = _single_question()
     manual.difficulty = Difficulty.EASY
     manual.difficulty_source = DifficultySource.MANUAL
-    saved_manual = service.create_question(manual)
+    # 题干相同：本用例验证"人工难度不被覆盖"，显式跳过自动去重拦截
+    saved_manual = service.create_question(manual, allow_duplicate=True)
 
     summary = service.reanalyze_difficulties(service.all_question_ids(), True)
     assert summary == {"total": 2, "updated": 1, "skipped": 1, "failed": 0}
@@ -381,7 +384,10 @@ def test_ai_actions_require_confirmation(container) -> None:
     # 确认后：才调用 AI 分析难度
     confirmed = _single_question()
     confirmed.difficulty = Difficulty.PENDING
-    analyzed = local.create_question(confirmed, analyze_difficulty=True)
+    # 题干与上一题相同：本用例验证 AI 难度分析，显式跳过自动去重拦截
+    analyzed = local.create_question(
+        confirmed, analyze_difficulty=True, allow_duplicate=True
+    )
     assert analyzed.difficulty is Difficulty.HARD
     assert fake.prompts
 
@@ -523,10 +529,11 @@ def test_count_available_with_knowledge_points(container, service) -> None:
     service.create_question(_single_question())  # 知识点：一元二次方程
     other = _single_question()
     other.knowledge_points = ["因式分解"]
-    service.create_question(other)
+    # 后两题与第一题题干相同：本用例验证按知识点统计，显式跳过自动去重拦截
+    service.create_question(other, allow_duplicate=True)
     both = _single_question()
     both.knowledge_points = ["一元二次方程", "因式分解"]
-    service.create_question(both)
+    service.create_question(both, allow_duplicate=True)
 
     assert service.count_available("数学", Difficulty.MEDIUM, QuestionType.SINGLE) == 3
     assert (

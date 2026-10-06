@@ -10,6 +10,8 @@
   各字段为独立模块：按需勾选、只拼装所需提示词、一次调用返回（模块化输出）
 - 用户需求：保存 / 导入前逐项检查各模块填写情况，并可让 AI 填充缺失项（题干除外）
 - 用户需求：题库操作台账（导入历史 / 编辑历史）
+- 用户需求：题库自动去重（题干归一化后相同即视为重复题：入库拦截 + 全库扫描清理，
+  每组保留最早录入的一道）
 
 依赖（构造注入，全部为抽象）：
 - app.interfaces.repositories.QuestionRepository
@@ -34,12 +36,14 @@ from app.config.settings import (
     DEFAULT_PROMPT_CONFIG,
     DEFAULT_SUBJECTS,
 )
+from app.domain.entities.duplicate import DuplicateGroup, group_duplicates
 from app.domain.entities.knowledge_section import KnowledgeSection
 from app.domain.entities.question import (
     Option,
     Question,
     QuestionFilter,
     split_sections,
+    stem_fingerprint,
 )
 from app.domain.entities.question_op import QuestionOpRecord
 from app.domain.enums import (
@@ -51,7 +55,11 @@ from app.domain.enums import (
     QuestionType,
     RecognizeModule,
 )
-from app.domain.errors import AIServiceError, QuestionValidationError
+from app.domain.errors import (
+    AIServiceError,
+    DuplicateQuestionError,
+    QuestionValidationError,
+)
 from app.domain.validators.question_validator import QuestionValidator
 from app.interfaces.ai_client import AIClient
 from app.interfaces.repositories import (
@@ -208,6 +216,28 @@ class RecognitionReport:
         return not self.issues
 
 
+@dataclass
+class DeduplicateReport:
+    """全库自动去重结果（用户需求：题库自动去重）。
+
+    :param groups: 命中的重复分组（每组保留最早录入的一道）
+    :param deleted: 实际删除的重复题（``groups`` 中除保留项外的全部题目）
+    """
+
+    groups: list[DuplicateGroup] = field(default_factory=list)
+    deleted: list[Question] = field(default_factory=list)
+
+    @property
+    def group_count(self) -> int:
+        """命中的重复分组数。"""
+        return len(self.groups)
+
+    @property
+    def deleted_count(self) -> int:
+        """实际删除的重复题数量。"""
+        return len(self.deleted)
+
+
 class QuestionService:
     """题目服务：题库维护的统一入口。"""
 
@@ -240,20 +270,31 @@ class QuestionService:
     # ------------------------------------------------------------------ CRUD
 
     def create_question(
-        self, draft: Question, analyze_difficulty: bool = False
+        self,
+        draft: Question,
+        analyze_difficulty: bool = False,
+        allow_duplicate: bool = False,
+        difficulty_prefer: str = "auto",
     ) -> Question:
         """新增题目：校验通过后落库（需求 R1）。
 
         AI 难度分析必须经用户确认：仅当 ``analyze_difficulty=True`` 时才会调用
         AI（用户需求：所有使用 AI 的内容都需手动确认）。
 
+        自动去重（用户需求）：题干归一化后与题库中已有题目相同时拒绝入库，
+        避免重复题进入题库。
+
         :param draft: 待保存题目草稿
         :param analyze_difficulty: 用户是否已确认调用 AI 分析难度
+        :param allow_duplicate: 用户在"仍然保存"弹窗中确认后传 True，跳过查重
+        :raises app.domain.errors.DuplicateQuestionError: 题库中已有题干相同的题目
         """
         self._normalize_enums(draft)
         self._validator.validate(draft)
+        if not allow_duplicate:
+            self._reject_duplicate(draft)
         saved = self._repository.save(draft)
-        self._analyze_if_automatic(saved, analyze_difficulty)
+        self._analyze_if_automatic(saved, analyze_difficulty, difficulty_prefer)
         self._record(
             QuestionOpAction.CREATE,
             saved,
@@ -262,11 +303,21 @@ class QuestionService:
         return saved
 
     def update_question(
-        self, question_id: str, patch: dict, analyze_difficulty: bool = False
+        self,
+        question_id: str,
+        patch: dict,
+        analyze_difficulty: bool = False,
+        allow_duplicate: bool = False,
+        difficulty_prefer: str = "auto",
     ) -> Question:
         """编辑题目：合并字段、校验后更新，保留 id 与使用记录（需求 R1 第 3 条）。
 
+        自动去重（用户需求）：修改后的题干与**其他**题目相同时拒绝保存
+        （与自身比较不算重复）。
+
         :param analyze_difficulty: 用户是否已确认调用 AI 分析难度
+        :param allow_duplicate: 用户在"仍然保存"弹窗中确认后传 True，跳过查重
+        :raises app.domain.errors.DuplicateQuestionError: 题库中已有题干相同的题目
         """
         current = self._repository.get(question_id)
         if current is None:
@@ -278,8 +329,10 @@ class QuestionService:
         current.id = question_id
         self._normalize_enums(current)
         self._validator.validate(current)
+        if not allow_duplicate:
+            self._reject_duplicate(current, exclude_id=question_id)
         updated = self._repository.update(current)
-        self._analyze_if_automatic(updated, analyze_difficulty)
+        self._analyze_if_automatic(updated, analyze_difficulty, difficulty_prefer)
         # 换图后清理旧图片（无其他题目引用时）
         if old.image_path and old.image_path != updated.image_path:
             self._cleanup_image(old.image_path)
@@ -365,15 +418,24 @@ class QuestionService:
         return [self._parse_block(block) for block in blocks]
 
     def batch_commit(
-        self, drafts: list[Question], analyze_difficulty: bool = False
+        self,
+        drafts: list[Question],
+        analyze_difficulty: bool = False,
+        allow_duplicate: bool = False,
     ) -> list[Question]:
         """批量写入确认后的候选题目（需求 R2 第 3 条）。
 
+        自动去重（用户需求）：题干与题库题目重复、或与本次批次中更靠前的候选题
+        重复的，一律跳过不入库（返回值中不含这些题目，界面据
+        :meth:`duplicate_drafts` 的预检结果提示跳过数量）。
+
         :param analyze_difficulty: 用户是否已确认对入库题目调用 AI 分析难度
+        :param allow_duplicate: 用户确认后传 True，跳过查重（整批不查重）
         """
         saved_questions: list[Question] = []
         batch_id = uuid.uuid4().hex[:12]
         failures: list[str] = []
+        known: dict[str, Question] = {} if allow_duplicate else self._stem_index()
         for index, draft in enumerate(drafts, start=1):
             try:
                 self._normalize_enums(draft)
@@ -381,7 +443,13 @@ class QuestionService:
             except QuestionValidationError as exc:
                 failures.append(f"第 {index} 题：{exc}")
                 continue
+            if not allow_duplicate:
+                key = stem_fingerprint(draft.stem)
+                if key and key in known:
+                    continue
             saved = self._repository.save(draft)
+            if not allow_duplicate:
+                known[stem_fingerprint(saved.stem)] = saved
             self._analyze_if_automatic(saved, analyze_difficulty)
             self._record(
                 QuestionOpAction.IMPORT,
@@ -395,6 +463,84 @@ class QuestionService:
                 f"共 {len(failures)} 道题未通过校验：" + "；".join(failures)
             )
         return saved_questions
+
+    # ------------------------------------------------------------- 自动去重
+
+    def find_duplicate(
+        self, draft: Question, exclude_id: str | None = None
+    ) -> Question | None:
+        """在题库中查找与给定题干重复的题目（用户需求：自动去重）。
+
+        判定口径：题干经 :func:`app.domain.entities.question.stem_fingerprint`
+        归一化后完全相同即视为重复（忽略空白、标点、全角半角与大小写差异）。
+
+        :param draft: 待检查的题目草稿
+        :param exclude_id: 编辑场景下排除自身的题目 id
+        :return: 命中的已有题目；无重复或题干为空时返回 None
+        """
+        key = stem_fingerprint(draft.stem)
+        if not key:
+            return None
+        return self._stem_index(exclude_id).get(key)
+
+    def duplicate_drafts(
+        self, drafts: list[Question]
+    ) -> list[tuple[int, Question, Question | None]]:
+        """批量候选题查重（用户需求：批量导入前提示将要跳过的重复题）。
+
+        :return: ``[(序号, 候选题, 命中的已有题目)]``；命中的已有题目为 None
+            表示该候选题与**本次批次中更靠前**的候选题重复
+        """
+        index = self._stem_index()
+        in_batch: set[str] = set()
+        results: list[tuple[int, Question, Question | None]] = []
+        for position, draft in enumerate(drafts, start=1):
+            key = stem_fingerprint(draft.stem)
+            if not key:
+                continue
+            if key in in_batch:
+                results.append((position, draft, None))
+                continue
+            existing = index.get(key)
+            if existing is not None:
+                results.append((position, draft, existing))
+                continue
+            in_batch.add(key)
+        return results
+
+    def scan_duplicates(self) -> list[DuplicateGroup]:
+        """全库扫描题干重复的题目（用户需求：题库自动去重）。
+
+        :return: 重复分组列表，每组保留最早录入的一道；无重复时返回空列表
+        """
+        return group_duplicates(self._repository.search(QuestionFilter()))
+
+    def deduplicate(
+        self, groups: list[DuplicateGroup] | None = None, confirmed: bool = False
+    ) -> DeduplicateReport:
+        """删除重复题目，每组只保留最早录入的一道（用户需求：题库自动去重）。
+
+        :param groups: 待清理的重复分组（通常来自 :meth:`scan_duplicates`）；
+            None 表示先全库扫描再清理
+        :param confirmed: 用户是否已确认删除；批量删除属破坏性操作，默认拒绝执行
+        :return: 去重报告（命中的分组与实际删除的题目）
+        :raises app.domain.errors.QuestionValidationError: 未经确认
+        """
+        if not confirmed:
+            raise QuestionValidationError("全库去重会删除重复题目，需要出题者确认后执行")
+        targets = self.scan_duplicates() if groups is None else list(groups)
+        report = DeduplicateReport(groups=targets)
+        for group in targets:
+            for question in group.duplicates:
+                self._repository.delete(question.id)
+                self._cleanup_image(question.image_path)
+                self._record(
+                    QuestionOpAction.DELETE,
+                    question,
+                    detail=f"自动去重：题干与题目 {group.keeper.id} 重复",
+                )
+                report.deleted.append(question)
+        return report
 
     # ------------------------------------------------------------- 检索统计
 
@@ -426,6 +572,47 @@ class QuestionService:
     def ai_configured(self) -> bool:
         """AI 服务是否已配置（未配置时界面禁用"AI 辨识"按钮）。"""
         return bool(self._ai_client is not None and self._ai_client.is_configured())
+
+    def local_difficulty_available(self) -> bool:
+        """本地难度模型是否可用。"""
+        clf = getattr(self._ai_client, "_local_classifier", None)
+        return clf is not None
+
+    def reanalyze_difficulties_local(self, question_ids: list) -> dict:
+        """用本地模型批量重析难度（不依赖远程 API，人工难度不覆盖）。"""
+        from app.domain.enums import Difficulty, DifficultySource
+
+        summary = {"total": len(question_ids), "updated": 0, "skipped": 0, "failed": 0}
+
+        local_clf = getattr(self._difficulty_service, "_local_classifier", None)
+        if local_clf is None:
+            # 尝试从 ai_client 上取
+            local_clf = getattr(self._ai_client, "_local_classifier", None)
+        if local_clf is None:
+            raise RuntimeError("本地难度模型未加载，无法使用本地重析")
+
+        for qid in question_ids:
+            question = self._repository.get(qid)
+            if question is None:
+                summary["failed"] += 1
+                continue
+            if question.difficulty_source is DifficultySource.MANUAL:
+                summary["skipped"] += 1
+                continue
+            try:
+                options_text = " ".join(f"{o.key}. {o.text}" for o in question.options)
+                answer_text = " ".join(question.answer)
+                result = local_clf.predict(
+                    stem=question.stem,
+                    options=options_text,
+                    answer=answer_text,
+                )
+                question.difficulty = _LOCAL_DIFF_MAP[result]
+                self._repository.update(question)
+                summary["updated"] += 1
+            except Exception:
+                summary["failed"] += 1
+        return summary
 
     def recognize_draft(
         self,
@@ -618,7 +805,11 @@ class QuestionService:
             elif module is RecognizeModule.STEM:
                 filled = bool((question.stem or "").strip())
             elif module is RecognizeModule.OPTIONS:
-                filled = bool(question.options)
+                # 填空题 / 解答题没有选项，视为已填；选择题才检查
+                if question.type in (QuestionType.FILL, QuestionType.SOLUTION):
+                    filled = True
+                else:
+                    filled = bool(question.options)
             else:
                 filled = bool((question.solution or "").strip())
             states.append((module, filled))
@@ -813,7 +1004,42 @@ class QuestionService:
         question.section = "、".join(split_sections(question.section))
         return question
 
-    def _analyze_if_automatic(self, question: Question, enabled: bool = False) -> None:
+    def _stem_index(self, exclude_id: str | None = None) -> dict[str, Question]:
+        """题库题干指纹 -> 题目（自动去重查重用，同一指纹保留最早录入的一道）。
+
+        ``search`` 返回的是"新 -> 旧"，倒序遍历即"旧 -> 新"，
+        配合 ``setdefault`` 让最早录入的那道成为命中结果。
+        """
+        index: dict[str, Question] = {}
+        for question in reversed(self._repository.search(QuestionFilter())):
+            if question.id == exclude_id:
+                continue
+            key = stem_fingerprint(question.stem)
+            if key and key not in index:
+                index[key] = question
+        return index
+
+    def _reject_duplicate(self, draft: Question, exclude_id: str | None = None) -> None:
+        """题干与题库已有题目重复时拒绝入库（用户需求：自动去重拦截）。
+
+        :raises app.domain.errors.DuplicateQuestionError: 命中重复题（消息含定位信息）
+        """
+        existing = self.find_duplicate(draft, exclude_id)
+        if existing is not None:
+            raise DuplicateQuestionError(self._duplicate_message(existing))
+
+    @staticmethod
+    def _duplicate_message(existing: Question) -> str:
+        """重复题拦截文案：给出已入库题目的 id 与题干摘要，便于出题者核对。"""
+        stem = " ".join((existing.stem or "").split())
+        excerpt = stem if len(stem) <= 40 else stem[:40] + "…"
+        return (
+            f"题库中已存在题干相同的题目（题目 ID：{existing.id}）：{excerpt}\n"
+            "如确需保留为新题，请修改题干；自动去重会忽略空白、标点、"
+            "全角半角与大小写差异。"
+        )
+
+    def _analyze_if_automatic(self, question: Question, enabled: bool = False, prefer: str = "auto") -> None:
         """在用户已确认的前提下调用 AI 分析难度。
 
         用户需求：所有使用 AI 的内容都需手动确认，因此默认 ``enabled=False``
@@ -827,7 +1053,7 @@ class QuestionService:
             return
         if question.difficulty is not Difficulty.PENDING:
             return
-        difficulty = self._difficulty_service.analyze_silent(question)
+        difficulty = self._difficulty_service.analyze_silent(question, prefer=prefer)
         question.difficulty = difficulty
         if difficulty is not Difficulty.PENDING:
             self._repository.update(question)

@@ -7,7 +7,7 @@
   选中科目后联动其知识点板块，选中板块后只补全该板块的细分知识点
 - 批量粘贴：粘贴多题文本 -> 解析预览（"待修正"行标红）-> 确认批量入库
 - 检索：按科目（下拉）/ 知识点 / 难度 / 题型过滤，结果展示使用次数与最近使用时间，
-  并可对选中题目执行编辑 / 删除 / 质量标记
+  并可对选中题目执行编辑 / 删除 / 质量标记 / 全库去重
 
 用户需求补充：
 
@@ -16,6 +16,9 @@
 - "AI 辨识"按模块勾选（科目 / 知识点 / 题型 / 难度 / 质量标记 / 答案 / 解析），
   只把勾选的模块拼进一次 AI 调用并返回，未勾选的字段不会被覆盖；
   结果仅供参考，须由出题者人工确认后保存
+- 题库自动去重：题干归一化后相同即视为重复题。录入 / 编辑保存前提示并可"仍然保存"，
+  批量粘贴入库前列出将要跳过的重复题，检索页另有"全库去重"扫描重复分组，
+  确认后每组保留最早录入的一道并删除其余重复题
 
 所有业务操作经 ``app.application.question_service.QuestionService`` 完成；
 异常经 ``ui_utils.run_guarded`` 统一提示而不崩溃。
@@ -54,6 +57,7 @@ from PySide6.QtWidgets import (
 
 from app.application.question_service import RECOGNIZE_MODULES, QuestionService
 from app.config.settings import DEFAULT_SUBJECTS
+from app.domain.entities.duplicate import DuplicateGroup
 from app.domain.entities.question import (
     Option,
     Question,
@@ -334,6 +338,98 @@ class _PasteDraftEditor(QDialog):
         if ui_utils.confirm(self, f"确定要删除第 {self._index} 道候选题吗？"):
             self._deleted = True
             self.reject()
+
+
+class _DuplicateReviewDialog(QDialog):
+    """全库去重预览：列出题干重复的题目分组，确认后删除多余项（用户需求）。
+
+    每组保留最早录入的一道（标为"保留"），其余标为"删除"；取消则不做任何改动。
+    """
+
+    #: 预览表列：分组 / 处理 / 题目 ID / 科目 / 题型 / 难度 / 录入时间 / 题干
+    COLUMNS: tuple[str, ...] = (
+        "分组",
+        "处理",
+        "题目 ID",
+        "科目",
+        "题型",
+        "难度",
+        "录入时间",
+        "题干",
+    )
+
+    def __init__(self, parent: QWidget, groups: list[DuplicateGroup]) -> None:
+        super().__init__(parent)
+        self._groups = list(groups)
+        self.setWindowTitle(
+            f"全库去重：{len(self._groups)} 组重复，"
+            f"待删除 {self.duplicate_count()} 道"
+        )
+        self.setMinimumSize(960, 420)
+        self._build_ui()
+
+    def duplicate_count(self) -> int:
+        """待删除的重复题总数（每组除保留项外的全部题目）。"""
+        return sum(len(group.duplicates) for group in self._groups)
+
+    def _build_ui(self) -> None:
+        """构建说明文字 + 重复题清单 + 确认 / 取消按钮。"""
+        root = QVBoxLayout(self)
+        root.addWidget(
+            QLabel(
+                "重复判定口径：题干归一化后完全相同（忽略空白、标点、全角半角"
+                "与大小写差异）。\n"
+                f"共 {len(self._groups)} 组、{self.duplicate_count()} 道重复题；"
+                "每组保留最早录入的一道，其余在确认后删除。"
+            )
+        )
+        table = QTableWidget(0, len(self.COLUMNS))
+        table.setHorizontalHeaderLabels(list(self.COLUMNS))
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.horizontalHeader().setSectionResizeMode(
+            len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
+        )
+        ui_utils.make_rows_compact(table)
+        self._fill_table(table)
+        root.addWidget(table)
+
+        button_row = QHBoxLayout()
+        delete_button = QPushButton(
+            f"删除 {self.duplicate_count()} 道重复题（保留最早录入）"
+        )
+        delete_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("取消")
+        cancel_button.clicked.connect(self.reject)
+        button_row.addWidget(delete_button)
+        button_row.addStretch(1)
+        button_row.addWidget(cancel_button)
+        root.addLayout(button_row)
+
+    def _fill_table(self, table: QTableWidget) -> None:
+        """按组渲染：保留项正常显示，待删除项标红。"""
+        for number, group in enumerate(self._groups, start=1):
+            for question in [group.keeper, *group.duplicates]:
+                keep = question is group.keeper
+                row = table.rowCount()
+                table.insertRow(row)
+                values = [
+                    f"第 {number} 组",
+                    "保留" if keep else "删除",
+                    question.id,
+                    question.subject,
+                    ui_utils.QUESTION_TYPE_LABELS.get(question.type, ""),
+                    ui_utils.DIFFICULTY_LABELS.get(question.difficulty, ""),
+                    question.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                    if question.created_at
+                    else "—",
+                    question.stem,
+                ]
+                for column, value in enumerate(values):
+                    item = QTableWidgetItem(str(value))
+                    if not keep:
+                        item.setForeground(QColor("#b00020"))
+                    table.setItem(row, column, item)
 
 
 class QuestionBankView(QWidget):
@@ -723,6 +819,17 @@ class QuestionBankView(QWidget):
             "对选中题目（未选中则全库）重新调用 AI 分析难度；人工设置的难度不会被覆盖"
         )
         reanalyze_button.clicked.connect(self._on_reanalyze_selected)
+        local_reanalyze_button = QPushButton("批量重析难度（本地）")
+        local_reanalyze_button.setToolTip(
+            "对选中题目（未选中则全库）使用本地模型重新分析难度；离线可用，速度快"
+        )
+        local_reanalyze_button.clicked.connect(self._on_reanalyze_selected_local)
+        dedup_button = QPushButton("全库去重")
+        dedup_button.setToolTip(
+            "扫描题干重复的题目（忽略空白、标点与全角半角差异），"
+            "每组保留最早录入的一道，确认后删除其余重复题"
+        )
+        dedup_button.clicked.connect(self._on_deduplicate)
         for button in (
             edit_button,
             delete_button,
@@ -730,6 +837,8 @@ class QuestionBankView(QWidget):
             low_button,
             normal_button,
             reanalyze_button,
+            local_reanalyze_button,
+            dedup_button,
         ):
             action_row.addWidget(button)
         action_row.addStretch(1)
@@ -1343,23 +1452,38 @@ class QuestionBankView(QWidget):
             return False
         return True
 
-    def _confirm_difficulty_ai(self, draft: Question) -> bool:
-        """保存前询问是否调用 AI 分析难度（用户需求：AI 使用需手动确认）。
+    def _confirm_difficulty_ai(self, draft: Question):
+        """保存前让用户选择难度分析方式：AI / 本地 / 跳过。
 
-        :return: True 表示用户同意调用 AI（且难度确实待确认、AI 已配置）
+        :return: "ai" / "local" / None（跳过）
         """
-        if not self._question_service.ai_configured():
-            return False
         if draft.difficulty is not Difficulty.PENDING:
-            return False
-        return ui_utils.confirm_action(
+            return None
+
+        ai_ok = self._question_service.ai_configured()
+        local_ok = self._question_service.local_difficulty_available()
+
+        if not ai_ok and not local_ok:
+            return None
+
+        actions = []
+        if ai_ok:
+            actions.append(("ai", "AI 分析"))
+        if local_ok:
+            actions.append(("local", "本地模型分析"))
+        actions.append(("skip", "跳过"))
+
+        choice = ui_utils.choose_action(
             self,
-            "该题难度仍为「待确认」。\n\n是否调用 AI 分析难度？"
-            "（结果仅供参考，可随时手工修改）",
-            title="AI 难度分析",
-            accept_text="AI 分析难度",
-            reject_text="跳过",
+            "该题难度仍为「待确认」。\n\n请选择分析方式：",
+            title="难度分析",
+            actions=actions,
         )
+        if choice == "ai":
+            return "ai"
+        elif choice == "local":
+            return "local"
+        return None
 
     def _on_save_clicked(self) -> None:
         """保存或更新题目（需求 R1）。
@@ -1370,12 +1494,20 @@ class QuestionBankView(QWidget):
           列出填写状态，弹出窗口询问是否让 AI 填充缺失项（AI 填充 / 手动补齐 / 取消）；
         - 难度仍为「待确认」时再询问一次是否调用 AI 分析难度。
         所有 AI 调用都需用户在弹窗中确认。
+
+        自动去重（用户需求）：题干与题库已有题目重复时提示并默认拦截，
+        用户确认"仍然保存"后才以 ``allow_duplicate=True`` 入库。
         """
         draft = self._build_draft()
         if not self._ensure_required_fields(draft):
             return
         draft = self._build_draft()
-        analyze_difficulty = self._confirm_difficulty_ai(draft)
+        allow_duplicate = self._confirm_duplicate(draft)
+        if allow_duplicate is None:
+            return
+        prefer = self._confirm_difficulty_ai(draft)
+        analyze_difficulty = prefer is not None
+        prefer = prefer or "auto"
         if self._editing_id:
             ok, _ = ui_utils.run_guarded(
                 self,
@@ -1383,6 +1515,8 @@ class QuestionBankView(QWidget):
                 self._editing_id,
                 self._build_patch(draft),
                 analyze_difficulty,
+                allow_duplicate,
+                prefer,
                 success_message="题目已更新",
             )
         else:
@@ -1391,10 +1525,12 @@ class QuestionBankView(QWidget):
                 self._question_service.create_question,
                 draft,
                 analyze_difficulty,
+                allow_duplicate,
+                prefer,
                 success_message=(
                     "题目已保存"
                     if not analyze_difficulty
-                    else "题目已保存，AI 难度分析结果仅供参考"
+                    else "题目已保存，难度分析结果仅供参考"
                 ),
             )
         if ok:
@@ -1402,6 +1538,33 @@ class QuestionBankView(QWidget):
             self.reload_questions()
             self.reload_knowledge_points()
             self.questions_changed.emit()
+
+    def _confirm_duplicate(self, draft: Question) -> bool | None:
+        """保存前的自动去重检查（用户需求）。
+
+        :return: ``True`` 用户确认"仍然保存"（跳过查重）、``False`` 无重复题、
+            ``None`` 命中重复题且用户取消保存
+        """
+        existing = ui_utils.safe_call(
+            self._question_service.find_duplicate,
+            draft,
+            self._editing_id,
+            default=None,
+        )
+        if existing is None:
+            return False
+        excerpt = " ".join((existing.stem or "").split())[:60]
+        if ui_utils.confirm_action(
+            self,
+            "题库中已存在题干相同的题目：\n\n"
+            f"题目 ID：{existing.id}\n科目：{existing.subject}\n题干：{excerpt}\n\n"
+            "自动去重会忽略空白、标点、全角半角与大小写差异。\n是否仍然保存？",
+            title="重复题目",
+            accept_text="仍然保存",
+            reject_text="取消",
+        ):
+            return True
+        return None
 
     # ------------------------------------------------------------- 批量粘贴
 
@@ -1429,6 +1592,9 @@ class QuestionBankView(QWidget):
         """批量写入确认后的候选题（需求 R2 第 3 条）。
 
         入库前再检查一次（兜底）；若解析预览时已问过且必填项齐全，则不重复弹窗。
+
+        自动去重（用户需求）：先给出去重预检结果并确认，重复题（与题库重复或
+        本次粘贴内重复）在入库时被自动跳过。
         """
         if not self._paste_drafts:
             ui_utils.info(self, "请先点击“解析预览”确认候选题。")
@@ -1446,21 +1612,59 @@ class QuestionBankView(QWidget):
                 "请在「录入 / 编辑」中手工修正后重新解析预览再提交。",
             )
             return
+        duplicates = ui_utils.safe_call(
+            self._question_service.duplicate_drafts, self._paste_drafts, default=None
+        ) or []
+        if duplicates and not self._confirm_skip_duplicates(duplicates):
+            return
+        message = "候选题目已批量入库"
+        if duplicates:
+            message += f"（自动去重跳过 {len(duplicates)} 道重复题）"
         ok, saved = ui_utils.run_guarded(
             self,
             self._question_service.batch_commit,
             self._paste_drafts,
-            success_message="候选题目已批量入库",
+            success_message=message,
         )
         if not ok:
             return
         self._paste_drafts = []
         self._preview_table.setRowCount(0)
         self._paste_edit.clear()
-        self._paste_status.setText(f"已入库 {len(saved or [])} 道题目")
+        skipped = f"，跳过重复题 {len(duplicates)} 道" if duplicates else ""
+        self._paste_status.setText(f"已入库 {len(saved or [])} 道题目{skipped}")
         self.reload_questions()
         self.reload_knowledge_points()
         self.questions_changed.emit()
+
+    def _confirm_skip_duplicates(
+        self, duplicates: list[tuple[int, Question, Question | None]]
+    ) -> bool:
+        """批量导入前的去重确认（用户需求）：列出将要跳过的重复题。
+
+        :param duplicates: ``duplicate_drafts`` 的结果
+        :return: 用户是否确认跳过这些重复题并继续入库
+        """
+        lines: list[str] = []
+        for position, _draft, existing in duplicates[:10]:
+            if existing is None:
+                reason = "与本次粘贴中更靠前的同题干候选题重复"
+            else:
+                reason = f"与题库中已有题目重复（题目 ID：{existing.id}）"
+            lines.append(f"第 {position} 题：{reason}")
+        if len(duplicates) > len(lines):
+            lines.append(f"…另有 {len(duplicates) - len(lines)} 道重复题")
+        return ui_utils.confirm_action(
+            self,
+            f"自动去重：共 {len(self._paste_drafts)} 道候选题，"
+            f"其中 {len(duplicates)} 道与已有题目题干相同（忽略空白、标点、"
+            "全角半角与大小写差异）。\n\n"
+            + "\n".join(lines)
+            + "\n\n是否跳过这些重复题并入库其余候选题？",
+            title="批量导入去重",
+            accept_text="跳过重复题并入库",
+            reject_text="取消",
+        )
 
     def _incomplete_drafts(self) -> list[tuple[int, Question]]:
         """返回逐项检查中仍有缺失项的候选题 ``[(序号, 题目)]``。"""
@@ -1905,6 +2109,38 @@ class QuestionBankView(QWidget):
             )
             self.reload_questions()
 
+    def _on_deduplicate(self) -> None:
+        """全库去重：扫描题干重复的题目，确认后清理（用户需求：题库自动去重）。
+
+        每组保留最早录入的一道；删除的题目同时清理图片并写入题库操作台账。
+        """
+        ok, groups = ui_utils.run_guarded(self, self._question_service.scan_duplicates)
+        if not ok:
+            return
+        if not groups:
+            ui_utils.info(
+                self,
+                "未发现重复题目（按题干判定，忽略空白、标点、全角半角与大小写差异）。",
+            )
+            return
+        dialog = _DuplicateReviewDialog(self, groups)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        ok, report = ui_utils.run_guarded(
+            self, self._question_service.deduplicate, groups, True
+        )
+        if not ok or report is None:
+            return
+        self.reload_questions()
+        self.reload_knowledge_points()
+        self.questions_changed.emit()
+        # 状态文本放在刷新之后：reload_questions 会重写状态区为"共 N 道题"
+        self.show_status(
+            f"全库去重完成：清理 {report.group_count} 组，"
+            f"删除 {report.deleted_count} 道重复题（每组保留最早录入的一道）",
+            8000,
+        )
+
     def _on_reanalyze_selected(self) -> None:
         """批量重析难度：先确认再调用 AI（用户需求：AI 使用需手动确认）。"""
         questions = self._selected_questions()
@@ -1945,6 +2181,47 @@ class QuestionBankView(QWidget):
             return
         self.show_status(
             f"难度重析完成：更新 {summary['updated']} 道，"
+            f"跳过人工难度 {summary['skipped']} 道，失败 {summary['failed']} 道",
+            8000,
+        )
+        self.reload_questions()
+
+    def _on_reanalyze_selected_local(self) -> None:
+        """批量重析难度（本地模型）：不依赖远程 API。"""
+        questions = self._selected_questions()
+        if questions:
+            ids = [question.id for question in questions]
+            prompt = f"是否对选中的 {len(ids)} 道题用本地模型重新分析难度？（人工难度不会被覆盖）"
+        else:
+            ids = ui_utils.safe_call(
+                self._question_service.all_question_ids, default=None
+            ) or []
+            if not ids:
+                ui_utils.info(self, "题库为空，无可重析的题目。")
+                return
+            prompt = (
+                f"未选择题目，是否对全库 {len(ids)} 道题用本地模型重新分析难度？"
+                "（人工难度不会被覆盖）"
+            )
+
+        if not ui_utils.confirm_action(
+            self,
+            prompt,
+            title="本地难度分析",
+            accept_text="本地分析",
+            reject_text="取消",
+        ):
+            return
+
+        ok, summary = ui_utils.run_guarded(
+            self,
+            self._question_service.reanalyze_difficulties_local,
+            ids,
+        )
+        if not ok or not summary:
+            return
+        self.show_status(
+            f"本地难度重析完成：更新 {summary['updated']} 道，"
             f"跳过人工难度 {summary['skipped']} 道，失败 {summary['failed']} 道",
             8000,
         )

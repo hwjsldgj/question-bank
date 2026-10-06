@@ -17,6 +17,15 @@ class QuestionValidationError(DomainError):
     """题目结构不符合题型规则（需求 R3），例如单选题答案数不为 1。"""
 
 
+class DuplicateQuestionError(QuestionValidationError):
+    """题库中已存在题干相同的题目（用户需求：题库自动去重拦截）。
+
+    由 :class:`app.application.question_service.QuestionService` 在录入 / 编辑 /
+    批量入库前抛出，避免重复题进入题库；界面捕获后可提示"仍然保存"，
+    用户在弹窗中确认后由调用方传 ``allow_duplicate=True`` 跳过查重。
+    """
+
+
 class CriteriaValidationError(DomainError):
     """组卷条件非法（需求 R7），例如所有部分均被停用或数量非正整数。"""
 

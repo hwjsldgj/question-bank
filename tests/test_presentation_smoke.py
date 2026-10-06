@@ -110,6 +110,22 @@ def _add_row(
     )
 
 
+def _bank_draft(stem: str):
+    """构造一道合法单选题（题库去重用例用）。"""
+    from app.domain.entities.question import Option, Question
+
+    return Question(
+        id="",
+        subject="数学",
+        knowledge_points=["集合"],
+        type=QuestionType.SINGLE,
+        stem=stem,
+        options=[Option("A", "1"), Option("B", "2")],
+        answer=["A"],
+        difficulty=Difficulty.MEDIUM,
+    )
+
+
 def test_config_and_summary_table_heights(window) -> None:
     """配置表与中间汇总表高度为原中间汇总表的两倍（用户需求）。"""
     view = window.paper_generation_view
@@ -770,3 +786,60 @@ def test_config_changed_does_not_crash(window) -> None:
     """配置变更信号触发状态栏与科目下拉刷新，界面不崩溃。"""
     window.settings_view.config_changed.emit()
     assert window._ai_status_label.text().startswith("AI：")
+
+
+def test_bank_has_dedup_entry_and_prompts_on_duplicate(window, monkeypatch) -> None:
+    """题库页提供"全库去重"入口；保存前查重命中时弹窗，取消则中止保存（用户需求）。"""
+    from PySide6.QtWidgets import QPushButton
+
+    bank = window.question_bank_view
+    service = bank._question_service
+    assert "全库去重" in {button.text() for button in bank.findChildren(QPushButton)}
+
+    service.create_question(_bank_draft("x^2-1=0 的解是？"))
+
+    probes: list[str] = []
+    monkeypatch.setattr(
+        ui_utils,
+        "confirm_action",
+        lambda parent, text, **kwargs: probes.append(text) or False,
+    )
+    # 仅空白 / 标点不同也命中重复 -> 取消返回 None（调用方据此中止保存）
+    assert bank._confirm_duplicate(_bank_draft("x^2 - 1 = 0的解是?")) is None
+    assert probes and "已存在题干相同的题目" in probes[0]
+    assert bank._confirm_duplicate(_bank_draft("全新的题干")) is False
+
+
+def test_bank_dedup_scans_and_cleans_duplicates(window, monkeypatch) -> None:
+    """"全库去重"：扫描重复分组，确认后每组保留最早录入的一道（用户需求）。"""
+    from PySide6.QtWidgets import QDialog
+
+    from app.domain.entities.question import QuestionFilter
+    from app.presentation.views.question_bank_view import _DuplicateReviewDialog
+
+    bank = window.question_bank_view
+    service = bank._question_service
+    monkeypatch.setattr(ui_utils, "info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ui_utils, "confirm_action", lambda *args, **kwargs: True)
+
+    kept = service.create_question(_bank_draft("重复题干"))
+    service.create_question(_bank_draft("重复题干  "), allow_duplicate=True)
+    unique = service.create_question(_bank_draft("唯一题干"))
+
+    dialog_rows: list[int] = []
+    monkeypatch.setattr(
+        _DuplicateReviewDialog,
+        "exec",
+        lambda self: dialog_rows.append(self.duplicate_count())
+        or QDialog.DialogCode.Accepted,
+    )
+    bank._on_deduplicate()
+
+    assert dialog_rows == [1]  # 1 组重复、1 道待删除
+    remaining = {question.id for question in service.search(QuestionFilter())}
+    assert remaining == {kept.id, unique.id}
+    assert service.scan_duplicates() == []
+    assert bank._search_status.text().startswith(
+        "全库去重完成：清理 1 组，删除 1 道重复题"
+    )
+

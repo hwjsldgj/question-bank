@@ -182,3 +182,6 @@ exports/
 *.lz
 *.lzma
 *.iso
+
+# 本地模型文件（训练产物，不进 git）
+models/

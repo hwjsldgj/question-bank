@@ -47,14 +47,18 @@ class DifficultyService:
         ai_client: AIClient,
         config_store: ConfigStore | None = None,
         question_repository=None,
+        local_classifier=None,
     ) -> None:
         """注入 AI 客户端、提示词配置来源与（可选）题目仓储（批量重分析用）。"""
         self._ai_client = ai_client
         self._config_store = config_store
         self._repository = question_repository
+        self._local_classifier = local_classifier
 
-    def analyze(self, question: Question) -> Difficulty:
-        """分析单道题目的难度（需求 R4 第 1 条）。
+    def analyze(self, question: Question, prefer: str = "auto") -> Difficulty:
+        """分析单道题目的难度。
+
+        :param prefer: "auto"（本地优先）/ "ai"（强制走 AI）/ "local"（强制本地）
 
         提示词 = 固定分析框架 + 用户可编辑的「难度」模块提示词片段：难度只维护
         一处提示词，AI 辨识与难度分析（含批量重析）共用同一段输出要求
@@ -62,6 +66,24 @@ class DifficultyService:
 
         :raises app.domain.errors.AIServiceError: 调用失败或结果非法
         """
+        # prefer="ai" 时跳过本地；否则尝试本地
+        if prefer != "ai" and self._local_classifier is not None:
+            try:
+                options_text = " ".join(f"{o.key}. {o.text}" for o in question.options)
+                answer_text = " ".join(question.answer)
+                result = self._local_classifier.predict(
+                    stem=question.stem,
+                    options=options_text,
+                    answer=answer_text,
+                )
+                return _DIFFICULTY_WORDS[result]
+            except Exception:
+                pass
+
+        # prefer="local" 时不允许走远程，直接抛错降级
+        if prefer == "local":
+            raise AIServiceError("本地模型不可用，无法按 local 优先级分析难度")
+
         prompts = load_prompt_config(self._config_store)
         default_fragment = DEFAULT_MODULE_PROMPTS.get("difficulty", "")
         fragment = render(
@@ -81,13 +103,13 @@ class DifficultyService:
         data = self._ai_client.complete(prompt)
         return self._to_difficulty(data)
 
-    def analyze_silent(self, question: Question) -> Difficulty:
+    def analyze_silent(self, question: Question, prefer: str = "auto") -> Difficulty:
         """analyze 的降级包装：任何失败均返回 PENDING 而不抛出异常。
 
         供题目入库主流程使用，保证 AI 故障不阻塞录入（需求 R4 第 3 条）。
         """
         try:
-            return self.analyze(question)
+            return self.analyze(question, prefer=prefer)
         except Exception:  # noqa: BLE001 - AI 故障不阻塞入库
             return Difficulty.PENDING
 

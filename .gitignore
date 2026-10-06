@@ -185,3 +185,9 @@ exports/
 
 # 本地模型文件（训练产物，不进 git）
 models/
+
+# 临时补丁脚本
+patch*.py
+fix_*.py
+diag.py
+apply_local_model.py

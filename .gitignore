@@ -191,3 +191,6 @@ patch*.py
 fix_*.py
 diag.py
 apply_local_model.py
+
+# 数据库备份
+question_bank_backup_*.db

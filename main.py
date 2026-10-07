@@ -1,8 +1,15 @@
-﻿"""自动出题与组卷工具 —— 程序入口。
+"""自动出题与组卷工具 —— 程序入口。
 
-启动流程：Windows 风格旋转圆点动画 -> 后台线程加载容器 -> 主线程创建主窗口。
-动画使用 Windows 自带的 Segoe Boot 字体（segoe_slboot.ttf），
-字体缺失时降级为纯文字提示。
+启动流程：
+  1. 显示启动画面（Windows 风格旋转动画）
+  2. 后台线程构建容器（装配各种 repo/service，不加载模型）
+  3. 容器就绪 -> 主窗口立即显示、启动画面关闭
+  4. 主窗口显示后，后台线程预热本地难度模型
+  5. 状态栏报告模型加载状态
+
+依赖：app.container.build_container、app.infrastructure.database.schema、
+      app.presentation.main_window.MainWindow
+被使用：命令行 ``python main.py``
 """
 
 import os
@@ -17,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 class _Loader(QThread):
     """后台加载容器，完成后发出信号。"""
 
-    loaded = Signal(object, object)  # (container, error)
+    loaded = Signal(object, object)
 
     def run(self) -> None:
         try:
@@ -32,17 +39,40 @@ class _Loader(QThread):
             self.loaded.emit(None, exc)
 
 
+class _ModelWarmer(QThread):
+    """后台预热本地难度模型（触发懒加载）。"""
+
+    finished_ok = Signal()
+    failed = Signal(str)
+
+    def __init__(self, container):
+        super().__init__()
+        self._container = container
+
+    def run(self) -> None:
+        try:
+            clf = getattr(self._container.ai_client, "_local_classifier", None)
+            if clf is None:
+                self.finished_ok.emit()
+                return
+            ensure = getattr(clf, "ensure_loaded", None)
+            if ensure is not None:
+                ensure()
+            self.finished_ok.emit()
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            self.failed.emit(str(exc))
+
+
 class _Splash(QWidget):
     """Windows 开机风格：用 Segoe Boot 字体绘制旋转圆点动画。"""
 
-    # Windows 启动字体路径（多个候选）
     FONT_PATHS = [
         r"C:\Windows\Boot\Fonts\segoe_slboot.ttf",
         r"C:\Windows\Boot\Fonts\segoen_slboot.ttf",
     ]
-
-    # 动画字符序列（Windows 10/11 通用）
-    CHAR_SEQUENCE = [chr(c) for c in range(0xE052, 0xE0C9)]
+    CHAR_START = 0xE052
+    CHAR_END = 0xE0C8
 
     def __init__(self) -> None:
         super().__init__()
@@ -55,10 +85,10 @@ class _Splash(QWidget):
         self._font_family = None
         self._load_font()
 
-        self._frame_index = 0
+        self._frame = self.CHAR_START
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._next_frame)
-        self._timer.start(25)  # 约 40fps，动画流畅
+        self._timer.start(30)
 
     def _load_font(self) -> None:
         for path in self.FONT_PATHS:
@@ -70,23 +100,21 @@ class _Splash(QWidget):
             families = QFontDatabase.applicationFontFamilies(font_id)
             if families:
                 self._font_family = families[0]
-                print(f"[splash] 已加载开机动画字体: {self._font_family}")
                 return
-        print("[splash] 未找到 Windows 开机字体，将使用备用动画")
 
     def _next_frame(self) -> None:
-        self._frame_index = (self._frame_index + 1) % len(self.CHAR_SEQUENCE)
+        self._frame += 1
+        if self._frame > self.CHAR_END:
+            self._frame = self.CHAR_START
         self.update()
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        # 背景
         painter.fillRect(self.rect(), QColor("#1a5490"))
 
-        # 主标题
         painter.setPen(QColor("#ffffff"))
         painter.setFont(QFont("Microsoft YaHei", 19, QFont.Weight.Bold))
         painter.drawText(
@@ -95,68 +123,72 @@ class _Splash(QWidget):
             "高考数学题 AI 分析器",
         )
 
-        # 分隔线
         painter.setPen(QPen(QColor("#3a7cb8"), 1))
         painter.drawLine(150, 92, 330, 92)
 
-        # 旋转圆点动画（居中）
         if self._font_family:
-            # 字号设为 32，可根据喜好微调
             painter.setFont(QFont(self._font_family, 32))
             painter.setPen(QColor("#ffffff"))
-            # 绘制区域：水平居中，垂直方向留出空间
-            center_rect = self.rect().adjusted(0, 110, 0, -80)
             painter.drawText(
-                center_rect,
+                self.rect().adjusted(0, 110, 0, -80),
                 Qt.AlignmentFlag.AlignCenter,
-                self.CHAR_SEQUENCE[self._frame_index],
+                chr(self._frame),
             )
         else:
-            # 字体缺失时的降级方案：简单的旋转圆弧
-            cx, cy, r = 240, 165, 24
-            painter.setPen(QPen(QColor("#2a6490"), 4))
-            painter.drawArc(cx - r, cy - r, 2 * r, 2 * r, 0, 360 * 16)
-            angle = (self._frame_index * 8) % 360
-            pen = QPen(QColor("#ffffff"), 4)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawArc(cx - r, cy - r, 2 * r, 2 * r, -angle * 16, 120 * 16)
+            import math
+            chars = ["高", "考", "数", "学"]
+            font = QFont("Microsoft YaHei", 30, QFont.Weight.Bold)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            widths = [fm.horizontalAdvance(c) for c in chars]
+            total = sum(widths) + 20 * (len(chars) - 1)
+            start_x = (self.width() - total) / 2.0
+            phase = (self._frame - self.CHAR_START) / 40.0
+            for i, ch in enumerate(chars):
+                local = (phase - i * 0.25) % 1.0
+                b = 0.3 + 0.7 * math.exp(-((local * 4) ** 2))
+                painter.setPen(QColor(int(255 * b), int(255 * b), int(255 * b)))
+                painter.drawText(QPointF(start_x, 175), ch)
+                start_x += widths[i] + 20
 
-        # 副标题
         painter.setPen(QColor("#cfd8e3"))
         painter.setFont(QFont("Microsoft YaHei", 11))
         painter.drawText(
-            self.rect().adjusted(0, 215, 0, 0),
+            self.rect().adjusted(0, 210, 0, 0),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "正在加载本地模型…",
+            "正在启动…",
         )
 
-        # 底部提示
         painter.setPen(QColor("#8fa8c4"))
         painter.setFont(QFont("Microsoft YaHei", 9))
         painter.drawText(
             self.rect().adjusted(0, 0, 0, -18),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-            "首次启动约 10~15 秒 · 数据仅存本机",
+            "本地运行 · 数据仅存本机",
         )
 
 
 def main() -> int:
+    import time
+    import random
+
     app = QApplication(sys.argv)
 
+    # 1. 立即显示启动画面
     splash = _Splash()
     splash.show()
     app.processEvents()
 
-    state: dict = {"window": None, "loader": None}
+    # 记录 splash 起始时间；最小显示时长 1s ± 0.2s
+    splash_t0 = time.monotonic()
+    min_show = 1.0 + random.uniform(-0.2, 0.2)
+    state: dict = {"window": None, "loader": None, "warmer": None}
 
-    def _show_main(container, error) -> None:
+    def _on_loaded(container, error) -> None:
+        """容器装配完成（主线程回调）。"""
         if error is not None:
-            splash.hide()
-            QMessageBox.critical(
-                None, "启动失败",
-                f"本地模型加载失败：\n\n{error}",
-            )
+            splash.close()
+            QMessageBox.critical(None, "启动失败", f"容器装配失败：\n\n{error}")
             app.quit()
             return
 
@@ -164,26 +196,53 @@ def main() -> int:
             from app.presentation.main_window import MainWindow
 
             window = MainWindow(container)
-            window.show()
-            window.raise_()
-            window.activateWindow()
-            state["window"] = window
-            splash.hide()
-            splash.deleteLater()
         except Exception:  # noqa: BLE001
             tb = traceback.format_exc()
             print(tb, file=sys.stderr)
-            splash.hide()
+            splash.close()
             QMessageBox.critical(None, "创建主窗口失败", tb)
             app.quit()
+            return
 
-    def on_loaded(container, error) -> None:
-        QTimer.singleShot(0, lambda: _show_main(container, error))
+        state["window"] = window
 
-    loader = _Loader()
-    loader.loaded.connect(on_loaded)
-    state["loader"] = loader
-    loader.start()
+        def _show_window_and_warm() -> None:
+            """关闭启动画面、显示主窗口、启动模型预热。"""
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            splash.close()
+
+            # 主窗口显示后，后台预热模型
+            window.show_status("本地模型后台加载中…", 0)
+            warmer = _ModelWarmer(container)
+            state["warmer"] = warmer
+
+            def on_warm_ok():
+                window.show_status("本地模型已就绪", 3000)
+
+            def on_warm_fail(msg):
+                window.show_status(f"本地模型加载失败：{msg}", 8000)
+
+            warmer.finished_ok.connect(on_warm_ok)
+            warmer.failed.connect(on_warm_fail)
+            warmer.start()
+
+        # 计算剩余停留时间：至少显示 min_show 秒
+        elapsed = time.monotonic() - splash_t0
+        remaining_ms = int(max(0.0, min_show - elapsed) * 1000)
+        QTimer.singleShot(remaining_ms, _show_window_and_warm)
+
+    def _kick_loader() -> None:
+        loader = _Loader()
+        loader.loaded.connect(
+            lambda c, e: QTimer.singleShot(0, lambda: _on_loaded(c, e))
+        )
+        state["loader"] = loader
+        loader.start()
+
+    # 让 splash 先渲染一次，再启动 loader
+    QTimer.singleShot(50, _kick_loader)
 
     return app.exec()
 

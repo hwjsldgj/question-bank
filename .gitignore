@@ -194,3 +194,14 @@ apply_local_model.py
 
 # 数据库备份
 question_bank_backup_*.db
+
+# 娴嬭瘯/璇婃柇涓存椂鏂囦欢
+diag_*.py
+test_*.py
+exports*/
+_ptmp*/
+_pytest_tmp*/
+_tmp_*/
+pytest-cache-files-*/
+pytest-of-*/
+__pycache__/

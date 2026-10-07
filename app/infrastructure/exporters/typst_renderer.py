@@ -7,6 +7,8 @@
 被使用：app.infrastructure.exporters.md_exporter、app.container
 """
 
+import re
+
 import subprocess
 from pathlib import Path
 
@@ -25,7 +27,7 @@ class TypstRenderer:
         typst_exe: str = TYPST_EXE,
         gaokao_root: str = TYPST_GAOKAO_ROOT,
         figures_dir: str = EXPORT_FIGURES_DIR,
-        ppi: int = 150,
+        ppi: int = 200,
     ) -> None:
         self._typst_exe = typst_exe
         self._gaokao_root = Path(gaokao_root) if gaokao_root else None
@@ -36,6 +38,44 @@ class TypstRenderer:
     def is_available(self) -> bool:
         """Typst 编译器是否可用。"""
         return bool(self._typst_exe) and Path(self._typst_exe).exists()
+
+    def _strip_missing_images(self, source: str) -> str:
+        """把指向不存在文件的 image("...") 删掉（避免 Typst 编译失败）。"""
+        if not source or self._gaokao_root is None:
+            return source
+
+        def _check(m):
+            path = m.group(1)
+            if path.startswith("/"):
+                real = self._gaokao_root / path.lstrip("/")
+            else:
+                real = None
+                for y in self._gaokao_root.iterdir():
+                    if y.is_dir() and y.name.isdigit():
+                        c = y / path
+                        if c.exists():
+                            real = c
+                            break
+            if real is not None and real.exists() and real.stat().st_size > 1000:
+                return m.group(0)
+            return ""
+
+        return re.sub(
+            r'image\("([^"]+)"(?:\s*,[^)]*)?\)',
+            _check,
+            source,
+        )
+
+    @staticmethod
+    def _prefix_image_paths(source: str, year: str) -> str:
+        """把 image("assets/xxx") 改成 image("/<year>/assets/xxx")，让 --root 能解析。"""
+        if not source or not year:
+            return source
+        return re.sub(
+            r'image\("(?!\/)([^"]+)"',
+            lambda m: f'image("/{year}/{m.group(1)}"',
+            source,
+        )
 
     @staticmethod
     def _extract_header(source: str) -> str:
@@ -100,8 +140,28 @@ class TypstRenderer:
         if self._gaokao_root is None:
             return None
 
-        # 用第一题的 header
-        header = self._extract_header(items[0][1])
+        # 合并所有题的 header（去重），避免引用不到函数
+        headers = []
+        for qid, src, _ in items:
+            mm = re.match(r"^(\d{4})_", qid)
+            yr = mm.group(1) if mm else None
+            if yr:
+                src = self._prefix_image_paths(src, yr)
+            src = self._strip_missing_images(src)
+            h = self._extract_header(src)
+            if h and h not in headers:
+                headers.append(h)
+        header = "\n\n".join(headers)
+
+        # 修正每个 item 的 src 里的 image 路径
+        new_items = []
+        for qid, src, label in items:
+            mm = re.match(r"^(\d{4})_", qid)
+            yr = mm.group(1) if mm else None
+            if yr:
+                src = self._prefix_image_paths(src, yr)
+            new_items.append((qid, src, label))
+        items = new_items
 
         # 用 grid 两行布局：第一行图，第二行题号
         figs_cells = []
@@ -130,8 +190,7 @@ class TypstRenderer:
         )
 
         # 写临时文件
-        tmp_dir = self._gaokao_root / "_export_tmp"
-        tmp_dir.mkdir(exist_ok=True)
+        tmp_dir = self._tmp_dir_for(group_id)
         tmp_typ = tmp_dir / (group_id + ".typ")
         tmp_typ.write_text(source, encoding="utf-8")
 
@@ -158,44 +217,65 @@ class TypstRenderer:
             return "figures/" + group_id + ".png"
         return None
 
-    def render(self, question_id: str, typst_source: str, output_dir=None, label: str = None) -> str | None:
-        """渲染 Typst 代码为 PNG，返回相对路径；失败返回 None。
+    def _tmp_dir_for(self, question_id: str) -> Path:
+        """返回临时 .typ 应放置的目录：优先与原 .typ 同目录（让 image 相对路径生效）。"""
+        m = re.match(r"^(\d{4})_", question_id)
+        if m and self._gaokao_root:
+            year = m.group(1)
+            year_dir = self._gaokao_root / year
+            if year_dir.is_dir():
+                tmp_dir = year_dir / "_render_tmp"
+                tmp_dir.mkdir(exist_ok=True)
+                return tmp_dir
+        # 回退
+        tmp_dir = self._gaokao_root / "_export_tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        return tmp_dir
 
-        :param output_dir: 导出目标目录；图片写到 <output_dir>/figures/。None 时用默认。
-        :param label: 图下方文字（如 "第 5 题"）；None 时不加。
+    def render(
+        self, question_id: str, typst_source: str,
+        output_dir=None, label: str = None,
+        option_labels: list = None,
+        only_first_n: int = None,
+    ) -> str | None:
+        """渲染 Typst 代码为 PNG，所有图横向排一行，题号标在下方。
+
+        :param only_first_n: 只渲染前 N 个 figure（用于只要题干图的情况）。
         """
         if not self.is_available() or not typst_source:
             return None
-
         if self._gaokao_root is None:
             return None
 
-        # 提取 header 和所有 figure 调用
+        # 修正 image 相对路径
+        m = re.match(r"^(\d{4})_", question_id)
+        year = m.group(1) if m else None
+        if year:
+            typst_source = self._prefix_image_paths(typst_source, year)
+
+        typst_source = self._strip_missing_images(typst_source)
+
         header = self._extract_header(typst_source)
         figs = self._extract_all_figure_calls(typst_source)
         if not figs:
             return None
 
-        # 构造渲染源码：header + set page + 横排 figs（可能多个）+ 题号
-        source = header + "\n\n"
-        source += "#set page(width: auto, height: auto, margin: 4pt)\n"
-        source += "#set align(center)\n\n"
+        # 只取前 N 个
+        if only_first_n is not None and only_first_n > 0:
+            figs = figs[:only_first_n]
 
-        if len(figs) == 1:
-            source += figs[0] + "\n"
-        else:
-            # 多图横排
-            cells = ["[\n    " + f.replace("\n", "\n    ") + "\n  ]" for f in figs]
-            source += (
-                "#grid(\n  columns: " + str(len(figs)) + ",\n  gutter: 0.6em,\n  "
-                + ",\n  ".join(cells) + ",\n)\n"
-            )
+        row = self._build_fig_row(figs, [label] if label else None)
 
-        if label:
-            source += "#v(0.1em)\n#text(size: 7pt)[" + label + "]\n"
+        source = (
+            header
+            + "\n\n"
+            + "#set page(width: auto, height: auto, margin: 4pt)\n"
+            + "#set align(center)\n\n"
+            + row
+            + "\n"
+        )
 
-        tmp_dir = self._gaokao_root / "_export_tmp"
-        tmp_dir.mkdir(exist_ok=True)
+        tmp_dir = self._tmp_dir_for(question_id)
         tmp_typ = tmp_dir / f"{question_id}.typ"
         tmp_typ.write_text(source, encoding="utf-8")
 
@@ -221,3 +301,103 @@ class TypstRenderer:
         if result.returncode == 0 and out_png.exists():
             return f"figures/{question_id}.png"
         return None
+
+    def render_single(self, output_id: str, fig_call: str, header: str, output_dir=None) -> str | None:
+        """单独渲染一个 #figure(...) 为 PNG。"""
+        if not self.is_available() or self._gaokao_root is None:
+            return None
+
+        # 修正 image 相对路径
+        m = re.match(r"^(\d{4})_", output_id)
+        year = m.group(1) if m else None
+        if year:
+            fig_call = self._prefix_image_paths(fig_call, year)
+            header = self._prefix_image_paths(header, year)
+
+        fig_call = self._strip_missing_images(fig_call)
+        header = self._strip_missing_images(header)
+
+        source = (
+            header + "\n\n"
+            + "#set page(width: auto, height: auto, margin: 4pt)\n"
+            + "#set align(center)\n\n"
+            + fig_call + "\n"
+        )
+
+        tmp_dir = self._tmp_dir_for(output_id)
+        tmp_typ = tmp_dir / f"{output_id}.typ"
+        tmp_typ.write_text(source, encoding="utf-8")
+
+        figures_dir = Path(output_dir) / "figures" if output_dir else self._figures_dir
+        figures_dir.mkdir(parents=True, exist_ok=True)
+        out_png = figures_dir / f"{output_id}.png"
+
+        cmd = [
+            self._typst_exe, "compile",
+            "--root", str(self._gaokao_root),
+            "--format", "png",
+            "--ppi", str(self._ppi),
+            str(tmp_typ), str(out_png),
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=120,
+            )
+        except Exception:
+            return None
+
+        if result.returncode == 0 and out_png.exists():
+            return f"figures/{output_id}.png"
+        return None
+
+    def render_option_figures(self, question_id: str, typst_source: str,
+                               option_labels: list, output_dir=None) -> list:
+        """选项图逐个单独渲染，返回 [(label, path), ...]。
+
+        从 typst_source 中取**最后 len(option_labels) 个** figure 作为选项图
+        （前面的 figure 视为题干图）。
+        """
+        if not typst_source or not option_labels:
+            return None
+        header = self._extract_header(typst_source)
+        figs = self._extract_all_figure_calls(typst_source)
+        n_opt = len(option_labels)
+        if len(figs) < n_opt:
+            return None
+
+        opt_figs = figs[-n_opt:]
+        results = []
+        for fig, lbl in zip(opt_figs, option_labels):
+            sub_id = f"{question_id}__opt{lbl}"
+            path = self.render_single(sub_id, fig, header, output_dir)
+            if path:
+                results.append((lbl, path))
+        return results if len(results) == n_opt else None
+
+    def count_figures(self, typst_source: str) -> int:
+        """返回 typst_source 里的 figure 数量。"""
+        if not typst_source:
+            return 0
+        return len(self._extract_all_figure_calls(typst_source))
+
+    @staticmethod
+    def _build_fig_row(figs: list, labels: list = None, *extra) -> str:
+        """N 个 figure 横排一行，下方可选 label 行。"""
+        n = len(figs)
+        parts = []
+        parts.append("#grid(")
+        parts.append("  columns: " + str(n) + ",")
+        parts.append("  gutter: 0.6em,")
+        parts.append("  row-gutter: 0.15em,")
+        for f in figs:
+            body = f.replace("\n", "\n        ")
+            parts.append("  [\n        " + body + "\n      ],")
+        if labels:
+            for lbl in labels:
+                parts.append("  text(size: 7pt)[" + lbl + "],")
+        parts.append(")")
+        return "\n".join(parts)
+
+
+

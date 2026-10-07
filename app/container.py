@@ -109,10 +109,14 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     # AI 客户端按"配置提供者"构造：设置保存后后续调用立即使用新配置（R15-3）
     local_classifier = None
     try:
-        from app.infrastructure.ai.local_difficulty_classifier import LocalDifficultyClassifier
+        from app.infrastructure.ai.lazy_local_classifier import LazyLocalClassifier
         from app.config.settings import LOCAL_DIFFICULTY_MODEL_DIR
-        local_classifier = LocalDifficultyClassifier(LOCAL_DIFFICULTY_MODEL_DIR)
-        print(f"[container] 本地难度模型已加载：{LOCAL_DIFFICULTY_MODEL_DIR}")
+        proxy = LazyLocalClassifier(LOCAL_DIFFICULTY_MODEL_DIR)
+        if proxy.is_available():
+            local_classifier = proxy
+            print(f"[container] 本地难度模型（延迟加载）：{LOCAL_DIFFICULTY_MODEL_DIR}")
+        else:
+            print(f"[container] 本地难度模型文件不存在，忽略")
     except Exception as e:
         print(f"[container] 本地难度模型不可用：{e}")
 
@@ -175,9 +179,9 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         print(f"[container] Typst 渲染器不可用：{e}")
         typst_renderer = None
 
+    # MD 是 PDF 的中间产物，不对外暴露；只注册 PDF
     md_exporter = MdExporter(renderer=typst_renderer)
     exporters: dict[ExportFormat, BaseExporter] = {
-        ExportFormat.MD: md_exporter,
         ExportFormat.PDF: PdfExporter(md_exporter),
     }
     paper_exporter = PaperExporter(exporters, score_validator)

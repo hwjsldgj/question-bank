@@ -61,8 +61,38 @@ MathJax = {{
   table {{ border-collapse: collapse; width: 100%; page-break-inside: avoid; }}
   th, td {{ border: 1px solid #999; padding: 6px 8px; }}
   code {{ background: #f5f5f5; padding: 2px 4px; border-radius: 3px; }}
-  /* 图片尺寸：约 2.5cm 高，宽度自适应 */
-  img {{ max-height: 2.5cm; max-width: 100%; vertical-align: middle; }}
+  /* 图片：居中显示，宽度不超过 70%，高度自适应 */
+  img {{
+    display: block;
+    margin: 0.5em auto;
+    max-width: 100%;
+    height: auto;
+    max-height: 4cm;
+  }}
+  /* 选项图横排 */
+  .fig-row {{
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 1.2em;
+    margin: 0.5em 0;
+    page-break-inside: avoid;
+  }}
+  .fig-item {{
+    text-align: center;
+    flex: 0 0 auto;
+  }}
+  .fig-item img {{
+    display: inline-block;
+    margin: 0;
+    max-height: 3.5cm;
+    width: auto;
+  }}
+  .fig-label {{
+    font-size: 8pt;
+    margin-top: 0.15em;
+    color: #333;
+  }}
   .pagebreak {{ page-break-after: always; break-after: page; }}
 </style>
 </head>
@@ -148,7 +178,7 @@ class PdfExporter(BaseExporter):
             raise ExportError(f"打印 PDF 未生成文件：{pdf_path}")
 
         # 用户需求：只保留 PDF 文件，MD 是中间产物，直接删掉
-        md_path.unlink(missing_ok=True)
+        # md_path.unlink(missing_ok=True)  # 临时诊断：保留 MD
         notify_progress(progress, f"PDF 已生成：{pdf_path}")
         return str(pdf_path)
 

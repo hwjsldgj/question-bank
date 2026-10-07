@@ -1,4 +1,4 @@
-# AI Tools
+ï»¿# AI Tools
 .claude
 .gemini
 .opencode
@@ -183,16 +183,13 @@ exports/
 *.lzma
 *.iso
 
-# ±¾µØÄ£ĞÍÎÄ¼ş£¨ÑµÁ·²úÎï£¬²»½ø git£©
 models/
 
-# ÁÙÊ±²¹¶¡½Å±¾
 patch*.py
 fix_*.py
 diag.py
 apply_local_model.py
 
-# Êı¾İ¿â±¸·İ
 question_bank_backup_*.db
 
 # æµ‹è¯•/è¯Šæ–­ä¸´æ—¶æ–‡ä»¶
@@ -218,3 +215,35 @@ questions/
 # æµ‹è¯•è¯Šæ–­
 diag_*.py
 test_*.py
+
+# æœ¬åœ°æ¨¡å‹æ–‡ä»¶ï¼ˆè®­ç»ƒäº§ç‰©ï¼Œä¸è¿› gitï¼‰
+models/
+
+# ä¸´æ—¶è¡¥ä¸è„šæœ¬
+patch*.py
+fix_*.py
+diag.py
+apply_local_model.py
+
+# æ•°æ®åº“å¤‡ä»½
+question_bank_backup_*.db
+
+# æµ‹è¯•/è¯Šæ–­ä¸´æ—¶æ–‡ä»¶
+diag_*.py
+test_*.py
+exports*/
+_ptmp*/
+_pytest_tmp*/
+_tmp_*/
+pytest-cache-files-*/
+pytest-of-*/
+__pycache__/
+
+# å·¥å…·/ç¼“å­˜
+.cache/
+.dshwolf/
+data/
+dbcheck/
+questions/
+
+typst_assets/

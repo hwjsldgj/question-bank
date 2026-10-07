@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>今日工作日报 2026-10-07</title>
+<style>
+@page { size: A4; margin: 1.8cm 1.5cm; }
+body { font-family: "Microsoft YaHei", "SimHei", sans-serif; color: #2c3e50; line-height: 1.7; font-size: 11pt; max-width: 900px; margin: 0 auto; padding: 20px; }
+h1 { color: #1a5490; font-size: 22pt; text-align: center; margin-bottom: 0.2em; border-bottom: 3px solid #1a5490; padding-bottom: 0.3em; }
+h2 { color: #1a5490; font-size: 15pt; margin-top: 1.5em; border-left: 4px solid #4a90d9; padding-left: 0.5em; }
+h3 { color: #34495e; font-size: 12pt; margin-top: 1em; }
+.subtitle { text-align: center; color: #7f8c8d; font-size: 11pt; margin-bottom: 2em; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 10pt; }
+th, td { border: 1px solid #bdc3c7; padding: 0.5em 0.7em; text-align: left; }
+th { background: #ecf0f1; color: #1a5490; font-weight: bold; }
+td.num { text-align: center; }
+.kpi-box { display: inline-block; width: 22%; margin: 0.5em 1%; padding: 0.8em; border-radius: 6px; text-align: center; color: white; vertical-align: top; }
+.kpi-box .val { font-size: 20pt; font-weight: bold; }
+.kpi-box .lbl { font-size: 9pt; opacity: 0.9; }
+.kpi-1 { background: #4a90d9; }
+.kpi-2 { background: #52a675; }
+.kpi-3 { background: #d97a4a; }
+.kpi-4 { background: #9b59b6; }
+img { max-width: 100%; display: block; margin: 1em auto; border: 1px solid #ddd; border-radius: 4px; }
+ul, ol { padding-left: 1.5em; }
+li { margin: 0.3em 0; }
+code { background: #f4f4f4; padding: 0.1em 0.4em; border-radius: 3px; font-family: Consolas, monospace; font-size: 10pt; }
+.box { background: #f8f9fa; border-left: 4px solid #4a90d9; padding: 0.8em 1em; margin: 1em 0; border-radius: 4px; }
+.warn { background: #fef5e7; border-left-color: #f39c12; }
+.footer { text-align: center; color: #95a5a6; font-size: 9pt; margin-top: 3em; border-top: 1px solid #ddd; padding-top: 1em; }
+</style>
+</head>
+<body>
+
+<h1>今日工作日报</h1>
+<div class="subtitle">2026-10-07 · 生成于 2026-10-07 22:43</div>
+
+<h2>一、今日概览</h2>
+<div>
+  <div class="kpi-box kpi-1"><div class="val">2680</div><div class="lbl">题库总题数</div></div>
+  <div class="kpi-box kpi-2"><div class="val">444</div><div class="lbl">含图题数</div></div>
+  <div class="kpi-box kpi-3"><div class="val">0.84</div><div class="lbl">知识点 F1</div></div>
+  <div class="kpi-box kpi-4"><div class="val">0.73</div><div class="lbl">难度 F1</div></div>
+</div>
+
+<h2>二、今日 Git 提交</h2>
+<img src="chart_today_timeline.png" alt="提交时间线">
+
+<h3>提交清单</h3>
+<table>
+<thead><tr><th>时间</th><th>类型</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td>09:47</td><td>feat</td><td>启动画面（Windows 风格旋转动画 + 后台线程加载）</td></tr>
+<tr><td>09:50</td><td>chore</td><td>移除误创建的空文件</td></tr>
+<tr><td>11:06</td><td>feat</td><td>导入 2236 道高考题库 + 修复跨线程 SQLite 连接</td></tr>
+<tr><td>12:31</td><td>feat</td><td>含图题导出渲染 Typst 图 + 相邻图合并 + 题号对齐 + 题型中文</td></tr>
+<tr><td>14:44</td><td>feat</td><td>含图题导出完善 + 本地模型懒加载 + 图片路径修正 + LFS 容错</td></tr>
+<tr><td>14:44</td><td>chore</td><td>忽略无意义的 typst_assets（LFS 指针）</td></tr>
+<tr><td>14:46</td><td>chore</td><td>.gitignore 忽略工具缓存/测试诊断目录</td></tr>
+<tr><td>22:06</td><td>feat</td><td>调试 tab 加 5 个开关 + 导出区简化 + AI 状态提示优化</td></tr>
+<tr><td>22:25</td><td>feat</td><td>组卷页表格动态高度（空 3 行，有内容按行数展开）</td></tr>
+<tr><td>22:39</td><td>docs</td><td>添加工作日志与待完成工作清单</td></tr>
+</tbody>
+</table>
+
+<h2>三、数据成果</h2>
+
+<h3>题库构成</h3>
+<img src="chart_today_pool.png" alt="题库构成">
+
+<h3>难度分布</h3>
+<img src="chart_today_difficulty.png" alt="难度分布">
+
+<h3>题型分布</h3>
+<img src="chart_today_types.png" alt="题型分布">
+
+<h3>知识点板块 Top 10</h3>
+<img src="chart_today_sections.png" alt="知识点板块">
+
+<h2>四、本地 AI 模型</h2>
+<table>
+<thead><tr><th>模型</th><th class="num">指标</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>知识点分类（16 类）</td><td class="num">k_macro = 0.84</td><td>RoBERTa 微调</td></tr>
+<tr><td>难度分类（3 类）</td><td class="num">d_f1 = 0.73</td><td>RoBERTa 微调</td></tr>
+</tbody>
+</table>
+<div class="box">
+<strong>本地部署特性：</strong>
+<ul>
+<li>懒加载（不阻塞启动）</li>
+<li>离线运行（不联网）</li>
+<li>单题推理 &lt; 1 秒（CPU）</li>
+</ul>
+</div>
+
+<h2>五、功能清单</h2>
+
+<h3>新增功能</h3>
+<ol>
+<li><strong>含图题渲染导出</strong>：Typst 代码 → PNG，导出时即时生成</li>
+<li><strong>相邻含图题自动合并</strong>：两题都无选项图时合并成一张</li>
+<li><strong>选项图逐个渲染</strong>：4 张选项图 HTML 横排</li>
+<li><strong>独立"调试"tab</strong>：5 个开关（保留 MD / 启动预热 / 禁用本地 / 禁用 API / 禁用全部 AI）</li>
+<li><strong>组卷页动态高度</strong>：3 张表空 3 行，有内容展开</li>
+<li><strong>AI 状态提示优化</strong>：区分"未配置" vs "已禁用"</li>
+<li><strong>Windows 风格启动动画</strong>：旋转圆点 + 主窗口立即可用</li>
+</ol>
+
+<h3>Bug 修复</h3>
+<ol>
+<li>跨线程 SQLite 连接（check_same_thread=False）</li>
+<li>BOM 残留（2 个文件）</li>
+<li>LFS 图片指针容错（跳过损坏图）</li>
+<li>AI 辨识吞题问题（相邻合并时第 2 题丢失）</li>
+<li>题型判定错误（原只有 1 道解答题，修正为 500+）</li>
+</ol>
+
+<h2>六、遗留问题</h2>
+<table>
+<thead><tr><th>优先级</th><th>任务</th><th class="num">投入</th></tr></thead>
+<tbody>
+<tr><td>P0</td><td>难度模型精度优化（困难类偏少）</td><td class="num">1~2h</td></tr>
+<tr><td>P0</td><td>导入知识点模型（复制难度模型套路）</td><td class="num">2~3h</td></tr>
+<tr><td>P0</td><td>统一 AI 入口（按钮整合）</td><td class="num">半天</td></tr>
+<tr><td>P1</td><td>知识点三级映射表</td><td class="num">1h</td></tr>
+<tr><td>P1</td><td>找回 2 道被删的题（Git LFS 图）</td><td class="num">1h</td></tr>
+<tr><td>P2</td><td>打包成 exe</td><td class="num">半天~1天</td></tr>
+</tbody>
+</table>
+
+<div class="footer">
+本报告由 make_daily_report.py 自动生成 · 2026-10-07 22:43
+</div>
+
+</body>
+</html>

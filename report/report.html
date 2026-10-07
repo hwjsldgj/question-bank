@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>高考数学题 AI 标注项目报告</title>
+<style>
+@page { size: A4; margin: 2cm 1.8cm; }
+body { font-family: "Microsoft YaHei", "SimHei", sans-serif; color: #2c3e50; line-height: 1.6; font-size: 11pt; max-width: 900px; margin: 0 auto; padding: 20px; }
+h1 { color: #1a5490; font-size: 22pt; text-align: center; margin-bottom: 0.2em; border-bottom: 3px solid #1a5490; padding-bottom: 0.3em; }
+h2 { color: #1a5490; font-size: 15pt; margin-top: 1.5em; border-left: 4px solid #4a90d9; padding-left: 0.5em; }
+h3 { color: #34495e; font-size: 12pt; margin-top: 1em; }
+.subtitle { text-align: center; color: #7f8c8d; font-size: 11pt; margin-bottom: 2em; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 10pt; }
+th, td { border: 1px solid #bdc3c7; padding: 0.5em 0.7em; text-align: left; }
+th { background: #ecf0f1; color: #1a5490; font-weight: bold; }
+td.num { text-align: center; }
+.kpi-box { display: inline-block; width: 22%; margin: 0.5em 1%; padding: 0.8em; border-radius: 6px; text-align: center; color: white; vertical-align: top; }
+.kpi-box .val { font-size: 20pt; font-weight: bold; }
+.kpi-box .lbl { font-size: 9pt; opacity: 0.9; }
+.kpi-1 { background: #4a90d9; }
+.kpi-2 { background: #52a675; }
+.kpi-3 { background: #d97a4a; }
+.kpi-4 { background: #9b59b6; }
+img { max-width: 100%; display: block; margin: 1em auto; border: 1px solid #ddd; border-radius: 4px; }
+ul, ol { padding-left: 1.5em; }
+li { margin: 0.3em 0; }
+code { background: #f4f4f4; padding: 0.1em 0.4em; border-radius: 3px; font-family: Consolas, monospace; font-size: 10pt; }
+.box { background: #f8f9fa; border-left: 4px solid #4a90d9; padding: 0.8em 1em; margin: 1em 0; border-radius: 4px; }
+.warn { background: #fef5e7; border-left-color: #f39c12; }
+.footer { text-align: center; color: #95a5a6; font-size: 9pt; margin-top: 3em; border-top: 1px solid #ddd; padding-top: 1em; }
+</style>
+</head>
+<body>
+
+<h1>高考数学题 AI 标注项目</h1>
+<div class="subtitle">工作报告 · 2026-10-06</div>
+
+<h2>一、项目概述</h2>
+<p>本项目面向高中数学教学场景，构建一套<strong>本地化、离线可用</strong>的 AI 模型，为 2200+ 道高考数学真题自动标注<strong>知识点</strong>与<strong>难度等级</strong>，并接入 PySide6 桌面应用，为教师出题与组卷提供智能辅助。</p>
+
+<div class="box">
+<strong>核心目标：</strong>不依赖云 API，纯本地运行，秒级响应，保护数据隐私。
+</div>
+
+<h2>二、关键指标</h2>
+<div>
+  <div class="kpi-box kpi-1"><div class="val">2236</div><div class="lbl">标注题目</div></div>
+  <div class="kpi-box kpi-2"><div class="val">0.84</div><div class="lbl">知识点 F1</div></div>
+  <div class="kpi-box kpi-3"><div class="val">0.73</div><div class="lbl">难度 F1</div></div>
+  <div class="kpi-box kpi-4"><div class="val">&lt;1s</div><div class="lbl">单题推理</div></div>
+</div>
+
+<h2>三、数据流水线</h2>
+<img src="chart_pipeline.png" alt="数据流水线">
+<p>数据来源于 2016-2026 年共 130 份高考数学卷，经切题、去重、标注、融合四步处理，最终产出 1814 条高质量训练数据。</p>
+
+<h2>四、模型效果对比</h2>
+<img src="chart_models.png" alt="模型效果">
+<p>项目初期尝试"让小模型解题提取慌张特征"的技术路线（F1 仅 0.51~0.56），后调整策略为"直接用 RoBERTa 做文本分类"，知识点与难度双双突破 0.7。</p>
+
+<h3>技术路线对比</h3>
+<table>
+<thead><tr><th>方案</th><th>思路</th><th class="num">F1</th><th>结论</th></tr></thead>
+<tbody>
+<tr><td>0.5B + 12维行为特征</td><td>小模型解题，提取熵/重复率等"慌张特征"，训线性分类器</td><td class="num">0.56</td><td>信号弱</td></tr>
+<tr><td>1.5B + 12维行为特征</td><td>换更大模型，同样的特征工程</td><td class="num">0.51</td><td>反而更差</td></tr>
+<tr><td><strong>RoBERTa 多任务</strong></td><td><strong>直接文本分类，不再提特征</strong></td><td class="num"><strong>0.73/0.84</strong></td><td><strong>成功</strong></td></tr>
+</tbody>
+</table>
+
+<h2>五、知识点分布</h2>
+<img src="chart_knowledge.png" alt="知识点分布">
+<p>16 类知识点中，"函数"、"解析几何"、"不等式"位列前三，符合高中数学的知识结构；"算法与推理证明"样本极少（2 条），是模型学习的短板。</p>
+
+<h2>六、难度分布</h2>
+<img src="chart_difficulty.png" alt="难度分布">
+<div class="box warn">
+<strong>遗留问题：</strong>难度"困难"类样本仅 88 条（占 6.1%），远低于真实高考的合理比例（15-20%）。这是当前难度模型的主要短板。
+</div>
+
+<h2>七、技术栈</h2>
+<table>
+<thead><tr><th>层级</th><th>技术</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>数据层</td><td>Python + pandas + SQLite</td><td>题库管理、清洗、去重</td></tr>
+<tr><td>标注层</td><td>qwen3.7-plus / qwen3.6-plus API</td><td>知识点与难度的初步标注</td></tr>
+<tr><td>训练层</td><td>超算（PyTorch + HuggingFace）</td><td>模型微调</td></tr>
+<tr><td>模型层</td><td>RoBERTa-base-chinese</td><td>文本分类骨干</td></tr>
+<tr><td>推理层</td><td>本地 CPU（PyTorch）</td><td>离线秒级推理</td></tr>
+<tr><td>应用层</td><td>PySide6 桌面应用</td><td>GUI 界面</td></tr>
+</tbody>
+</table>
+
+<h2>八、时间线</h2>
+<table>
+<thead><tr><th>时段</th><th>工作内容</th></tr></thead>
+<tbody>
+<tr><td>08:00 - 10:00</td><td>题库整理、解析原始 JSON、去重与划分</td></tr>
+<tr><td>10:00 - 12:00</td><td>大模型知识点标注（16 类，2236 条）</td></tr>
+<tr><td>12:00 - 14:00</td><td>难度标注与三模型融合（qwen7 + qwen6 + 本地）</td></tr>
+<tr><td>14:00 - 16:00</td><td>超算环境配置、模型训练</td></tr>
+<tr><td>16:00 - 18:00</td><td>本地部署、应用接入调试</td></tr>
+<tr><td>18:00 - 22:00</td><td>PySide6 应用集成、三选一弹窗、Git 收尾</td></tr>
+</tbody>
+</table>
+
+<h2>九、踩坑记录</h2>
+<ol>
+<li><strong>pandas 3.0 兼容性</strong>：<code>groupby.apply</code> 返回值类型变化，导致 <code>KeyError</code>；改用显式循环。</li>
+<li><strong>llama.cpp logprobs 字段</strong>：新版返回 <code>top_logprobs</code> 而非 <code>probs</code>，导致熵特征全为 0。</li>
+<li><strong>大模型 API 限流</strong>：qwen3.6-plus 硬限 1 req/s，2000+ 题跑 30 分钟。</li>
+<li><strong>HF 镜像超时</strong>：base 模型加载联网检查，本地缓存后改离线模式解决。</li>
+<li><strong>多任务训练知识头崩盘</strong>：难度头梯度压制知识头，第 8 轮知识 F1 从 0.84 跌到 0.14；<strong>拆成两个独立模型后解决</strong>。</li>
+<li><strong>Git 行尾符问题</strong>：PowerShell <code>Set-Content</code> 把 LF 改 CRLF，diff 虚报 3500 行改动；<code>core.autocrlf true</code> 解决。</li>
+<li><strong>难度 2 类样本不足</strong>：三模型都偏向判 0，最终 2 类占比仅 6.1%。</li>
+</ol>
+
+<h2>十、代码改动</h2>
+<h3>新增</h3>
+<ul>
+<li><code>app/infrastructure/ai/local_difficulty_classifier.py</code> — 本地难度分类器</li>
+<li><code>models/base_model/</code> — RoBERTa base 权重（本地加载）</li>
+<li><code>models/difficulty_model/</code> — 微调后的难度模型（390MB）</li>
+</ul>
+<h3>修改</h3>
+<ul>
+<li><code>app/infrastructure/ai/ai_client.py</code> — 难度请求拦截走本地</li>
+<li><code>app/container.py</code> — 装配本地分类器</li>
+<li><code>app/application/difficulty_service.py</code> — 本地优先 + prefer 参数</li>
+<li><code>app/application/question_service.py</code> — 批量本地重析 + AI 辨识走本地</li>
+<li><code>app/presentation/views/question_bank_view.py</code> — 本地按钮 + 保存时三选一</li>
+</ul>
+
+<h2>十一、遗留问题与明日计划</h2>
+<h3>遗留</h3>
+<ul>
+<li>难度"困难"类识别不准（数据量瓶颈）</li>
+<li>启动 13 秒偏慢（torch 导入 + 400MB 模型加载）</li>
+<li>知识点模型尚未接入应用</li>
+<li>2000 题库尚未导入</li>
+</ul>
+<h3>明日计划</h3>
+<ol>
+<li>统一 AI 入口（按钮整合）</li>
+<li>接入知识点模型</li>
+<li>导入 2000 题库</li>
+<li>启动时增加"正在加载本地模型"弹窗</li>
+<li>知识点三级体系映射表</li>
+<li>2000 题库字段清洗</li>
+</ol>
+
+<div class="footer">
+本报告由 make_pdf_report.py 自动生成 · 数据来源：question-bank 项目 · 生成时间：2026-10-06
+</div>
+
+</body>
+</html>

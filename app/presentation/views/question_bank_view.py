@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -462,10 +463,34 @@ class QuestionBankView(QWidget):
         """构建三个子页签。"""
         root = QVBoxLayout(self)
         self._inner_tabs = QTabWidget(self)
-        self._inner_tabs.addTab(self._build_editor_tab(), "录入 / 编辑")
-        self._inner_tabs.addTab(self._build_paste_tab(), "批量粘贴")
+        # 录入 / 批量粘贴：内容可能超过屏幕，各自包滚动
+        self._inner_tabs.addTab(
+            self._wrap_scroll(self._build_editor_tab()), "录入 / 编辑"
+        )
+        self._inner_tabs.addTab(
+            self._wrap_scroll(self._build_paste_tab()), "批量粘贴"
+        )
+        # 检索：外层不滚动，表格内部自己滚动（用户需求）
         self._inner_tabs.addTab(self._build_search_tab(), "检索")
         root.addWidget(self._inner_tabs)
+
+    @staticmethod
+    def _wrap_scroll(widget: QWidget) -> QScrollArea:
+        """给子页签包一层滚动区域（录入 / 批量粘贴内容可能超过屏幕）。"""
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(widget)
+        return area
+
+    @staticmethod
+    def _wrap_scroll(widget: QWidget) -> QScrollArea:
+        """给子页签包一层滚动区域（录入 / 批量粘贴内容可能超过屏幕）。"""
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(widget)
+        return area
 
     def _build_editor_tab(self) -> QWidget:
         """构建录入 / 编辑表单页。"""

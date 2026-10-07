@@ -205,3 +205,13 @@ DEFAULT_PROMPT_CONFIG = PromptConfig(
 
 
 LOCAL_DIFFICULTY_MODEL_DIR = "models/difficulty_model"
+
+
+# Typst 可执行文件路径（用于导出时渲染含图题）
+TYPST_EXE = r"C:\Users\90579\AppData\Local\Microsoft\WinGet\Packages\Typst.Typst_Microsoft.Winget.Source_8wekyb3d8bbwe\typst-x86_64-pc-windows-msvc\typst.exe"
+
+# 原始 gaokao 数据根目录（Typst 编译时作为 --root）
+TYPST_GAOKAO_ROOT = r"C:\Users\90579\Desktop\Documents\school\miscSchool\gaokao"
+
+# 导出时渲染图片的临时目录（相对工作区）
+EXPORT_FIGURES_DIR = "exports/figures"

@@ -48,8 +48,8 @@ class SQLiteQuestionRepository(QuestionRepository):
             conn.execute(
                 "INSERT INTO questions (id, subject, section, knowledge_points, type, stem, "
                 "options, answer, solution, difficulty, difficulty_source, quality_flag, "
-                "source, image_path, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "source, image_path, typst_source, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._to_row(question),
             )
             self._sync_knowledge_points(conn, question)
@@ -63,7 +63,7 @@ class SQLiteQuestionRepository(QuestionRepository):
                 "UPDATE questions SET subject = ?, section = ?, knowledge_points = ?, type = ?, "
                 "stem = ?, options = ?, answer = ?, solution = ?, difficulty = ?, "
                 "difficulty_source = ?, quality_flag = ?, source = ?, image_path = ?, "
-                "updated_at = ? WHERE id = ?",
+                "typst_source = ?, updated_at = ? WHERE id = ?",
                 (
                     question.subject,
                     question.section,
@@ -80,6 +80,7 @@ class SQLiteQuestionRepository(QuestionRepository):
                     question.quality_flag.value,
                     question.source.value,
                     question.image_path,
+                    question.typst_source,
                     question.updated_at.isoformat(timespec="seconds"),
                     question.id,
                 ),
@@ -226,6 +227,7 @@ class SQLiteQuestionRepository(QuestionRepository):
             self._enum_value(question.quality_flag, QualityFlag),
             self._enum_value(question.source, QuestionSource),
             question.image_path,
+            question.typst_source,
             question.created_at.isoformat(timespec="seconds")
             if question.created_at
             else None,
@@ -271,6 +273,7 @@ class SQLiteQuestionRepository(QuestionRepository):
             quality_flag=QualityFlag(row["quality_flag"]),
             source=QuestionSource(row["source"]),
             image_path=row["image_path"],
+            typst_source=(row["typst_source"] if "typst_source" in row.keys() else None),
             created_at=SQLiteQuestionRepository._parse_dt(row["created_at"]),
             updated_at=SQLiteQuestionRepository._parse_dt(row["updated_at"]),
         )

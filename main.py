@@ -49,7 +49,6 @@ class _Splash(QWidget):
         self.setWindowFlags(
             Qt.WindowType.SplashScreen
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setFixedSize(480, 300)
 
@@ -153,7 +152,7 @@ def main() -> int:
 
     def _show_main(container, error) -> None:
         if error is not None:
-            splash.close()
+            splash.hide()
             QMessageBox.critical(
                 None, "启动失败",
                 f"本地模型加载失败：\n\n{error}",
@@ -166,12 +165,15 @@ def main() -> int:
 
             window = MainWindow(container)
             window.show()
+            window.raise_()
+            window.activateWindow()
             state["window"] = window
-            splash.close()
+            splash.hide()
+            splash.deleteLater()
         except Exception:  # noqa: BLE001
             tb = traceback.format_exc()
             print(tb, file=sys.stderr)
-            splash.close()
+            splash.hide()
             QMessageBox.critical(None, "创建主窗口失败", tb)
             app.quit()
 

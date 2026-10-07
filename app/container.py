@@ -163,7 +163,19 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     )
 
     # 导出：MD 为源文件，PDF 由同一份 MD 转换（用户需求）
-    md_exporter = MdExporter()
+    try:
+        from app.infrastructure.exporters.typst_renderer import TypstRenderer
+        typst_renderer = TypstRenderer()
+        if typst_renderer.is_available():
+            print("[container] Typst 渲染器就绪（导出含图题时即时渲染）")
+        else:
+            print("[container] 未找到 typst.exe，含图题将不渲染")
+            typst_renderer = None
+    except Exception as e:  # noqa: BLE001
+        print(f"[container] Typst 渲染器不可用：{e}")
+        typst_renderer = None
+
+    md_exporter = MdExporter(renderer=typst_renderer)
     exporters: dict[ExportFormat, BaseExporter] = {
         ExportFormat.MD: md_exporter,
         ExportFormat.PDF: PdfExporter(md_exporter),

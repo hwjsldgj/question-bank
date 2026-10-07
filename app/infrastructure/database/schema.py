@@ -36,6 +36,7 @@ QUESTIONS_TABLE = """
         quality_flag      TEXT NOT NULL DEFAULT 'normal',
         source            TEXT NOT NULL DEFAULT 'bank',
         image_path        TEXT,
+        typst_source      TEXT,
         created_at        TEXT,
         updated_at        TEXT
     )

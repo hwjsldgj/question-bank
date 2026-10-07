@@ -61,6 +61,8 @@ MathJax = {{
   table {{ border-collapse: collapse; width: 100%; page-break-inside: avoid; }}
   th, td {{ border: 1px solid #999; padding: 6px 8px; }}
   code {{ background: #f5f5f5; padding: 2px 4px; border-radius: 3px; }}
+  /* 图片尺寸：约 2.5cm 高，宽度自适应 */
+  img {{ max-height: 2.5cm; max-width: 100%; vertical-align: middle; }}
   .pagebreak {{ page-break-after: always; break-after: page; }}
 </style>
 </head>
@@ -141,8 +143,12 @@ class PdfExporter(BaseExporter):
             self._print_pdf(html_path, pdf_path)
         finally:
             html_path.unlink(missing_ok=True)
+
         if not pdf_path.is_file():
             raise ExportError(f"打印 PDF 未生成文件：{pdf_path}")
+
+        # 用户需求：只保留 PDF 文件，MD 是中间产物，直接删掉
+        md_path.unlink(missing_ok=True)
         notify_progress(progress, f"PDF 已生成：{pdf_path}")
         return str(pdf_path)
 

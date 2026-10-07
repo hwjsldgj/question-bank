@@ -88,6 +88,9 @@ class Question:
     source: QuestionSource = QuestionSource.BANK
     """题目来源：bank（手工录入）/ ai（AI 补题，需求 R10）。"""
 
+    typst_source: str | None = None
+    """题目的原始 Typst 渲染源码；导出时即时渲染为图片插入试卷。"""
+
     image_path: str | None = None
     """题目图片的本地相对路径（相对数据库所在目录，如 ``images/xxx.png``）。
 

@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._container = container
         self.setWindowTitle("自动出题与组卷工具")
-        self.resize(1220, 860)
+        self._resize_to_screen()
 
         self._build_views()
         self._build_tabs()
@@ -82,7 +82,11 @@ class MainWindow(QMainWindow):
             self.settings_view,
         ]
         for view, title in zip(self._tab_views, TAB_TITLES):
-            self._tabs.addTab(self._wrap_scroll(view), title)
+            # 题库管理页：外层不滚动，让表格自身滚动（用户需求）
+            if view is self.question_bank_view:
+                self._tabs.addTab(view, title)
+            else:
+                self._tabs.addTab(self._wrap_scroll(view), title)
         self.setCentralWidget(self._tabs)
 
     @staticmethod
@@ -212,6 +216,18 @@ class MainWindow(QMainWindow):
             "含分值与总分、卷末附答案页的 MD / PDF 试卷。\n\n"
             "需求与设计见 .monkeycode/specs/question-paper-generator/",
         )
+
+    def _resize_to_screen(self) -> None:
+        """窗口尺寸自适应屏幕：不超过可用区域的 90%，并给最小尺寸兜底。"""
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1220, 860)
+            return
+        avail = screen.availableGeometry()
+        w = min(1220, int(avail.width() * 0.9))
+        h = min(860, int(avail.height() * 0.9))
+        self.resize(max(w, 800), max(h, 600))
+        self.setMinimumSize(800, 600)
 
     def _center_on_screen(self) -> None:
         """将窗口移动到主屏中央。"""

@@ -112,6 +112,12 @@ _SUMMARY_TABLE_HEIGHT = 120
 #: 配置表与中间汇总表的高度 = 原中间汇总表高度 × 2（用户需求：两者都加高）
 _TABLE_HEIGHT = _SUMMARY_TABLE_HEIGHT * 2
 
+#: 配置表空表时的最小行数（用户需求：空表显示 3 行高度）
+_CONFIG_MIN_ROWS = 3
+
+#: 配置表最大显示行数（超过后内部滚动，避免撑坏布局）
+_CONFIG_MAX_ROWS = 12
+
 #: 试卷预览表格高度 = 原始高度 × 本系数（用户需求：高度为原 3 倍）
 _PREVIEW_HEIGHT_FACTOR = 3
 
@@ -311,8 +317,8 @@ class PaperGenerationView(QWidget):
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        table.setMaximumHeight(_TABLE_HEIGHT)
-        table.setMinimumHeight(_TABLE_HEIGHT)
+        # 高度改为动态：空时 3 行，有内容时按行数展开（见 _auto_resize_table）
+        self._auto_resize_table(table)
         table.setItemDelegateForColumn(4, _DifficultyDelegate(table))
         table.setItemDelegateForColumn(5, _CountDelegate(table))
         table.itemChanged.connect(self._on_conditions_changed)
@@ -364,9 +370,9 @@ class PaperGenerationView(QWidget):
         self._stats_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.Stretch
         )
-        self._stats_table.setMinimumHeight(_TABLE_HEIGHT)
-        self._stats_table.setMaximumHeight(_TABLE_HEIGHT)
+        # 高度动态：空 3 行，有内容按行数展开（见 _auto_resize_table）
         ui_utils.make_rows_compact(self._stats_table)
+        self._auto_resize_table(self._stats_table, min_rows=3, max_rows=20)
         layout.addWidget(self._stats_table)
         return group
 
@@ -389,10 +395,9 @@ class PaperGenerationView(QWidget):
         self._result_table.horizontalHeader().setSectionResizeMode(
             3, QHeaderView.ResizeMode.Stretch
         )
-        # 高度为原 3 倍（用户需求）
-        self._result_table.setMinimumHeight(
-            self._result_table.sizeHint().height() * _PREVIEW_HEIGHT_FACTOR
-        )
+        # 高度动态：空 3 行，有内容按行数展开（见 _auto_resize_table）
+        ui_utils.make_rows_compact(self._result_table)
+        self._auto_resize_table(self._result_table, min_rows=3, max_rows=20)
         ui_utils.make_rows_compact(self._result_table)
         layout.addWidget(self._result_table)
 
@@ -534,6 +539,36 @@ class PaperGenerationView(QWidget):
         """科目变化：刷新板块 / 知识点候选与命中量（配置行保持不动）。"""
         self.reload_knowledge_points()
 
+    def _auto_resize_table(
+        self,
+        table: QTableWidget,
+        min_rows: int = _CONFIG_MIN_ROWS,
+        max_rows: int = _CONFIG_MAX_ROWS,
+    ) -> None:
+        """按内容动态调整表格高度：空表 min_rows 行，有内容按行数展开。
+
+        用固定行高（fontMetrics 行距 + 4）计算总高，避免实测行高不一致
+        导致"有内容反而比空表矮"。
+        """
+        rows = table.rowCount()
+        effective_rows = max(min_rows, min(rows, max_rows))
+
+        # 用 fontMetrics 固定每行高度，避免实测值不同
+        fm = table.fontMetrics()
+        line_h = fm.lineSpacing()
+        row_h = line_h + 4  # 上下 padding
+
+        # 表头高度：用 fontMetrics 估算，不依赖实测
+        header_h = line_h + 10
+
+        # 表格边框 + 余量
+        padding = 8
+        total = header_h + row_h * effective_rows + padding
+
+        table.setMinimumHeight(total)
+        table.setMaximumHeight(total)
+
+
     def _add_from_controls(self, question_type: QuestionType) -> None:
         """把当前条件（知识点板块 / 知识点 / 难度 / 数量）追加为配置表的一行。"""
         knowledge = self._type_knowledge[question_type]
@@ -550,6 +585,7 @@ class PaperGenerationView(QWidget):
             self._type_count[question_type].value(),
         )
         knowledge.set_values([])
+        self._auto_resize_table(table)
         self._on_conditions_changed()
 
     def _append_row(
@@ -647,6 +683,7 @@ class PaperGenerationView(QWidget):
         for row in rows:
             table.removeRow(row)
         self._renumber(table)
+        self._auto_resize_table(table)
         self._on_conditions_changed()
 
     def _read_rows(
@@ -667,6 +704,9 @@ class PaperGenerationView(QWidget):
         """配置变化：切换分组可用性并触发命中量与统计的防抖刷新。"""
         for question_type, enabled in self._type_enabled.items():
             self._type_bodies[question_type].setEnabled(enabled.isChecked())
+        # 三个表都重算高度（配置表在各自 _add/_remove 里已经调过）
+        self._auto_resize_table(self._stats_table, min_rows=3, max_rows=20)
+        self._auto_resize_table(self._result_table, min_rows=3, max_rows=20)
         self._hit_timer.start()
 
     def _count_hits(
@@ -720,6 +760,10 @@ class PaperGenerationView(QWidget):
             table.blockSignals(False)
             self._update_hit_label(question_type)
         self._render_stats(stats)
+
+        # 刷新后重算两张表的高度
+        self._auto_resize_table(self._stats_table, min_rows=3, max_rows=20)
+        self._auto_resize_table(self._result_table, min_rows=3, max_rows=20)
 
     def _update_hit_label(self, question_type: QuestionType) -> None:
         """刷新当前题型条件控件的命中量标签（含指定板块与知识点）。"""
@@ -857,6 +901,7 @@ class PaperGenerationView(QWidget):
                 int(item.count),
             )
         table.blockSignals(False)
+        self._auto_resize_table(table)
         self._apply_controls_from_items(question_type, items)
 
     def _apply_controls_from_items(

@@ -31,7 +31,8 @@
 from pathlib import Path
 import threading
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -425,29 +426,32 @@ class PaperGenerationView(QWidget):
         return group
 
     def _build_export_group(self) -> QGroupBox:
-        """构建导出区：格式 + 固定导出目录展示 + 导出按钮（用户需求）。"""
+        """构建导出区：固定导出目录展示 + 打开文件夹 + 导出按钮。"""
         group = QGroupBox("导出")
         layout = QHBoxLayout(group)
 
-        self._format_combo = QComboBox()
-        formats = ui_utils.safe_call(self._exporter.supported_formats, default=None)
-        if not formats:
-            formats = [ExportFormat.MD, ExportFormat.PDF]
-        for fmt in formats:
-            self._format_combo.addItem(
-                ui_utils.EXPORT_FORMAT_LABELS.get(fmt, str(fmt)), fmt
-            )
+        self._export_dir = Path(DEFAULT_EXPORT_DIR).resolve()
+        self._export_dir_label = QLabel(f"导出目录：{self._export_dir}")
+        layout.addWidget(self._export_dir_label, 1)
+
+        self._open_dir_button = QPushButton("打开文件夹")
+        self._open_dir_button.setToolTip("在资源管理器中打开导出目录")
+        self._open_dir_button.clicked.connect(self._on_open_export_dir)
+        layout.addWidget(self._open_dir_button)
 
         self._export_button = QPushButton("导出试卷")
+        self._export_button.setToolTip("导出为 PDF（含题目图与答案页）")
         self._export_button.clicked.connect(self._on_export)
-
-        layout.addWidget(QLabel("格式"))
-        layout.addWidget(self._format_combo)
-        layout.addWidget(
-            QLabel(f"导出目录：{Path(DEFAULT_EXPORT_DIR).resolve()}（程序自动创建）"), 1
-        )
         layout.addWidget(self._export_button)
         return group
+
+    def _on_open_export_dir(self) -> None:
+        """在系统资源管理器中打开导出目录（不存在时先创建）。"""
+        try:
+            self._export_dir.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._export_dir)))
+        except Exception as exc:  # noqa: BLE001
+            ui_utils.warning(self, f"打开文件夹失败：{exc}")
 
     # --------------------------------------------------------------- 配置行
 
@@ -1008,7 +1012,8 @@ class PaperGenerationView(QWidget):
         self._export_button.setEnabled(False)
         self._status.setText("正在导出…")
         self.status_message.emit("正在导出…", 0)
-        fmt = self._format_combo.currentData()
+        # 固定为 PDF（MD 是中间产物，不对外暴露）
+        fmt = ExportFormat.PDF
         threading.Thread(
             target=self._export_in_background,
             args=(self._paper, fmt),

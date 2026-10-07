@@ -86,8 +86,8 @@ SECTION_LABELS: dict[SectionKind, str] = {
 
 #: 导出格式 -> 中文标签
 EXPORT_FORMAT_LABELS: dict[ExportFormat, str] = {
-    ExportFormat.MD: "MD 文档（Markdown）",
-    ExportFormat.PDF: "PDF 文档（由 MD 转换）",
+    # MD 是 PDF 的中间产物，不对外暴露（用户需求）
+    ExportFormat.PDF: "PDF 文档",
 }
 
 #: 题库操作类型 -> 中文标签（导入历史 / 编辑历史）

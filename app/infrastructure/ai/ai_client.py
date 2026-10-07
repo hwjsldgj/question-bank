@@ -1,4 +1,4 @@
-﻿"""AI 客户端基础设施：OpenAI 兼容 HTTP API 实现。
+"""AI 客户端基础设施：OpenAI 兼容 HTTP API 实现。
 
 实现接口：app.interfaces.ai_client.AIClient
 依赖：标准库 urllib / json（不引入第三方 HTTP 依赖）、
@@ -26,10 +26,45 @@ from app.interfaces.ai_client import AIClient
 class OpenAICompatibleAIClient(AIClient):
     """OpenAI 兼容 AI API 客户端（/chat/completions 协议）。"""
 
-    def __init__(self, config: AIConfig | Callable[[], AIConfig], local_classifier=None) -> None:
-        """注入 AI 配置或配置提供者（每次调用前重新读取，需求 R15 第 5 条）。"""
+    def __init__(
+        self,
+        config: AIConfig | Callable[[], AIConfig],
+        local_classifier=None,
+        debug_config_provider=None,
+    ) -> None:
+        """注入 AI 配置、本地分类器、调试配置提供者。"""
         self._provider = config if callable(config) else (lambda: config)
         self._local_classifier = local_classifier
+        self._debug_provider = debug_config_provider
+
+    def _is_all_ai_disabled(self) -> bool:
+        """读调试配置：全部 AI 是否禁用。"""
+        if self._debug_provider is None:
+            return False
+        try:
+            return bool(self._debug_provider().disable_all_ai)
+        except Exception:
+            return False
+
+    def _is_local_disabled(self) -> bool:
+        """读调试配置：本地模型是否禁用。"""
+        if self._debug_provider is None:
+            return False
+        try:
+            dbg = self._debug_provider()
+            return bool(dbg.disable_all_ai or dbg.disable_local_model)
+        except Exception:
+            return False
+
+    def _is_api_disabled(self) -> bool:
+        """读调试配置：远程 API 是否禁用。"""
+        if self._debug_provider is None:
+            return False
+        try:
+            dbg = self._debug_provider()
+            return bool(dbg.disable_all_ai or dbg.disable_api)
+        except Exception:
+            return False
 
     @staticmethod
     def _is_difficulty_prompt(prompt: str) -> bool:
@@ -57,6 +92,10 @@ class OpenAICompatibleAIClient(AIClient):
         失败语义（需求 R4 第 3 条 / R15 第 4 条）：超时、网络错误、
         非 2xx 响应、重试耗尽、JSON 解析失败均抛出 AIServiceError。
         """
+        # 调试开关：远程 API 禁用
+        if self._is_api_disabled():
+            raise AIServiceError("远程 API 已在调试设置中禁用")
+
         config = self._provider()
         self._ensure_configured(config)
         last_error: Exception | None = None
@@ -71,9 +110,16 @@ class OpenAICompatibleAIClient(AIClient):
         raise AIServiceError(f"AI 服务调用失败（已重试）：{last_error}")
 
     def is_configured(self) -> bool:
-        """本地模型可用时也返回 True；否则检查远程配置。"""
-        if self._local_classifier is not None:
+        """综合判断：调试开关 > 本地模型 > 远程配置。"""
+        # 调试开关：全部禁用
+        if self._is_all_ai_disabled():
+            return False
+        # 本地未禁用 且 本地可用
+        if not self._is_local_disabled() and self._local_classifier is not None:
             return True
+        # 远程被禁用
+        if self._is_api_disabled():
+            return False
         return self._provider().is_configured()
 
     # ------------------------------------------------------------------ 内部

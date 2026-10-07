@@ -1,4 +1,4 @@
-﻿"""本地难度分类器：加载训练好的 RoBERTa 模型判断题目难度。"""
+"""本地难度分类器：加载训练好的 RoBERTa 模型判断题目难度。"""
 from pathlib import Path
 
 import torch

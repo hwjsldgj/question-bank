@@ -32,6 +32,7 @@ from app.interfaces.repositories import ConfigStore
 class SQLiteConfigStore(ConfigStore):
     """配置存储 SQLite 实现：settings 表键值对，值为 JSON 文本。"""
 
+    KEY_DEBUG = "debug_config"
     KEY_AI = "ai_config"
     KEY_SCORING = "scoring_config"
     KEY_PROMPT = "prompt_config"
@@ -41,6 +42,23 @@ class SQLiteConfigStore(ConfigStore):
     def __init__(self, db: DatabaseConnection) -> None:
         """注入数据库连接管理器。"""
         self._db = db
+
+    def load_debug_config(self) -> "DebugConfig":
+        """读取调试配置；无记录时返回默认值。"""
+        from app.domain.entities.configs import DebugConfig
+        raw = self._read_key(self.KEY_DEBUG)
+        if raw is None:
+            return DebugConfig()
+        try:
+            import json as _json
+            data = _json.loads(raw)
+        except (TypeError, ValueError):
+            return DebugConfig()
+        return DebugConfig(**self._filter_fields(DebugConfig, data))
+
+    def save_debug_config(self, config) -> None:
+        """保存调试配置（UPSERT）。"""
+        self._write_key(self.KEY_DEBUG, self._dump(config))
 
     def load_ai_config(self) -> AIConfig:
         """读取 AI 配置；无记录或解析失败时返回默认值（视为未配置）。"""

@@ -1215,7 +1215,7 @@ class QuestionBankView(QWidget):
         if not self._question_service.ai_configured():
             ui_utils.warning(
                 self,
-                "AI 服务未配置，请先到「设置 -> AI 设置」填写接口地址、API Key 与模型名称。",
+                self._question_service.ai_status_text() or "AI 服务不可用。",
             )
             return
         include_solution = self._wants_solution()
@@ -1417,8 +1417,7 @@ class QuestionBankView(QWidget):
                 return True
             ui_utils.warning(
                 self,
-                f"{text}\n\nAI 服务未配置，请手工补齐后保存，"
-                "或先在「设置 -> AI 设置」中配置。",
+                f"{text}\n\n" + (self._question_service.ai_status_text() or "AI 不可用。"),
             )
             return False
 
@@ -1745,8 +1744,7 @@ class QuestionBankView(QWidget):
                 return True
             ui_utils.warning(
                 self,
-                f"{text}\n\nAI 服务未配置，请先在「录入 / 编辑」中手工修正后重新导入，"
-                "或到「设置 -> AI 设置」配置 AI。",
+                f"{text}\n\n" + (self._question_service.ai_status_text() or "AI 不可用。"),
             )
             return False
 
@@ -2187,7 +2185,7 @@ class QuestionBankView(QWidget):
         if not self._question_service.ai_configured():
             ui_utils.warning(
                 self,
-                "AI 服务未配置，无法重析难度；请先在「设置 -> AI 设置」中配置。",
+                self._question_service.ai_status_text() or "AI 不可用，无法重析难度。",
             )
             return
         if not ui_utils.confirm_action(

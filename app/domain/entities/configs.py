@@ -76,6 +76,26 @@ class AIConfig:
 
 
 @dataclass
+class DebugConfig:
+    """调试配置（用户需求：设置中可临时打开导出中间产物）。"""
+
+    keep_export_md: bool = False
+    """导出 PDF 时是否保留中间 MD 文件（默认 False 直接删除）。"""
+
+    prewarm_local_model: bool = False
+    """启动时预热本地难度模型（默认 False；改为 True 时后台加载）。"""
+
+    disable_local_model: bool = False
+    """彻底禁用本地难度模型（任何情况下都不加载）。"""
+
+    disable_api: bool = False
+    """禁用远程 API 调用。"""
+
+    disable_all_ai: bool = False
+    """禁用全部 AI 功能（覆盖 disable_local_model 和 disable_api）。"""
+
+
+@dataclass
 class PromptConfig:
     """AI 提示词配置（用户需求：AI 设置中可修改提示词）。
 

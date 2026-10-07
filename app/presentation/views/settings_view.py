@@ -28,6 +28,7 @@ from pathlib import Path
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtGui import QFont, QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QDoubleSpinBox,
@@ -87,7 +88,93 @@ class SettingsView(QWidget):
         self._inner_tabs.addTab(self._build_scoring_tab(), "评分与冷却")
         self._inner_tabs.addTab(self._build_subject_tab(), "科目管理")
         self._inner_tabs.addTab(self._build_sections_tab(), "知识点板块")
+        self._inner_tabs.addTab(self._build_debug_tab(), "调试")
         root.addWidget(self._inner_tabs)
+
+    def _build_debug_tab(self) -> QWidget:
+        """构建调试设置页：临时开关，方便开发排查。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+
+        self._debug_keep_md = QCheckBox("导出 PDF 时保留中间 MD 文件")
+        self._debug_keep_md.setToolTip(
+            "开启后，每次导出 PDF 都会在 exports/ 目录同时保留 .md 源文件；"
+            "关闭后仅保留 PDF（默认）。"
+        )
+        form.addRow("保留中间 MD", self._debug_keep_md)
+
+        self._debug_prewarm = QCheckBox("启动时预热本地模型")
+        self._debug_prewarm.setToolTip(
+            "勾选后，启动时后台加载本地难度模型（多等 8~15 秒）；"
+            "不勾选（默认）时主窗口立刻可用，本地模型在首次调用时再加载。"
+        )
+        form.addRow("启动预热", self._debug_prewarm)
+
+        self._debug_disable_local = QCheckBox("彻底禁用本地模型")
+        self._debug_disable_local.setToolTip(
+            "勾选后，本地难度模型完全不加载（AI 难度分析不可用）。"
+        )
+        form.addRow("禁用本地模型", self._debug_disable_local)
+
+        self._debug_disable_api = QCheckBox("禁用远程 API")
+        self._debug_disable_api.setToolTip(
+            "开启后，所有远程 AI 调用（辨识 / 补题 / 难度）会直接拒绝。"
+        )
+        form.addRow("禁用远程 API", self._debug_disable_api)
+
+        self._debug_disable_all = QCheckBox("禁用全部 AI（覆盖上面两项）")
+        self._debug_disable_all.setToolTip(
+            "开启后，本地模型 + 远程 API 全部禁用。"
+        )
+        form.addRow("禁用全部 AI", self._debug_disable_all)
+
+        save_btn = QPushButton("保存调试配置")
+        save_btn.clicked.connect(self._on_save_debug)
+        form.addRow(save_btn)
+
+        note = QLabel(
+            "调试选项仅影响本机行为，可随时开关。"
+        )
+        note.setWordWrap(True)
+        form.addRow(note)
+
+        layout.addLayout(form)
+        layout.addStretch(1)
+
+        self._load_debug_config()
+        return page
+
+    def _load_debug_config(self) -> None:
+        """读取调试配置并回填表单。"""
+        try:
+            dcfg = self._config_store.load_debug_config()
+            self._debug_keep_md.setChecked(bool(dcfg.keep_export_md))
+            self._debug_prewarm.setChecked(bool(dcfg.prewarm_local_model))
+            self._debug_disable_local.setChecked(bool(dcfg.disable_local_model))
+            self._debug_disable_api.setChecked(bool(dcfg.disable_api))
+            self._debug_disable_all.setChecked(bool(dcfg.disable_all_ai))
+        except Exception as e:
+            print(f"[settings] 读取调试配置失败：{e}")
+
+    def _on_save_debug(self) -> None:
+        """保存调试配置。"""
+        from app.domain.entities.configs import DebugConfig
+        dcfg = DebugConfig(
+            keep_export_md=self._debug_keep_md.isChecked(),
+            prewarm_local_model=self._debug_prewarm.isChecked(),
+            disable_local_model=self._debug_disable_local.isChecked(),
+            disable_api=self._debug_disable_api.isChecked(),
+            disable_all_ai=self._debug_disable_all.isChecked(),
+        )
+        ok, _ = ui_utils.run_guarded(
+            self,
+            self._config_store.save_debug_config,
+            dcfg,
+            success_message="调试配置已保存",
+        )
+        if ok:
+            self.config_changed.emit()
 
     def _build_ai_tab(self) -> QWidget:
         """构建 AI 设置页：接口参数 + 提示词编辑（需求 R15 / 用户需求）。"""

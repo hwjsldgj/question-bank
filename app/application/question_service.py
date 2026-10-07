@@ -573,6 +573,29 @@ class QuestionService:
         """AI 服务是否已配置（未配置时界面禁用"AI 辨识"按钮）。"""
         return bool(self._ai_client is not None and self._ai_client.is_configured())
 
+    def ai_status_text(self) -> str:
+        """返回 AI 不可用时的可读说明（供 UI 弹窗使用）。
+
+        :return: 人类可读的错误说明；若 AI 实际可用则返回空串。
+        """
+        client = self._ai_client
+        if client is None:
+            return "未接入 AI 客户端。"
+        try:
+            if client._is_all_ai_disabled():
+                return "AI 功能已在「设置 -> 调试」中全部禁用。"
+            local_ok = (
+                not client._is_local_disabled()
+                and getattr(client, "_local_classifier", None) is not None
+            )
+            if local_ok:
+                return ""
+            if client._is_api_disabled():
+                return "远程 API 已在「设置 -> 调试」中禁用，且本地模型不可用。"
+        except Exception:
+            pass
+        return "AI 服务未配置，请先到「设置 -> AI 设置」填写接口地址、API Key 与模型名称。"
+
     def local_difficulty_available(self) -> bool:
         """本地难度模型是否可用。"""
         clf = getattr(self._ai_client, "_local_classifier", None)

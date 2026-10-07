@@ -207,13 +207,33 @@ def main() -> int:
         state["window"] = window
 
         def _show_window_and_warm() -> None:
-            """关闭启动画面、显示主窗口、启动模型预热。"""
+            """关闭启动画面、显示主窗口。
+
+            用户需求：启动时不预热本地模型，等真正调用（如 AI 难度分析）
+            时再由 LazyLocalClassifier 懒加载。这样启动速度最快。
+            """
             window.show()
             window.raise_()
             window.activateWindow()
             splash.close()
 
-            # 主窗口显示后，后台预热模型
+            # 读调试配置
+            try:
+                dbg = container.config_store.load_debug_config()
+            except Exception:
+                dbg = None
+
+            # 完全禁用
+            if dbg and (dbg.disable_all_ai or dbg.disable_local_model):
+                window.show_status("本地模型已禁用（调试选项）", 5000)
+                return
+
+            # 默认不预热；勾选 prewarm 才预热
+            if dbg is None or not dbg.prewarm_local_model:
+                window.show_status("就绪（本地模型将在首次调用时加载）", 5000)
+                return
+
+            # 启动预热
             window.show_status("本地模型后台加载中…", 0)
             warmer = _ModelWarmer(container)
             state["warmer"] = warmer

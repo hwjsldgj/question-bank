@@ -141,10 +141,15 @@ class PdfExporter(BaseExporter):
         self,
         md_exporter: MdExporter | None = None,
         browser_path: str | None = None,
+        config_store=None,
     ) -> None:
-        """注入 MD 导出器与浏览器路径（None 时按候选自动查找）。"""
+        """注入 MD 导出器与浏览器路径（None 时按候选自动查找）。
+
+        :param config_store: 可选，用于读取调试配置（是否保留中间 MD）。
+        """
         self._md_exporter = md_exporter or MdExporter()
         self._browser_path = browser_path
+        self._config_store = config_store
 
     def export(
         self,
@@ -178,7 +183,18 @@ class PdfExporter(BaseExporter):
             raise ExportError(f"打印 PDF 未生成文件：{pdf_path}")
 
         # 用户需求：只保留 PDF 文件，MD 是中间产物，直接删掉
-        # md_path.unlink(missing_ok=True)  # 临时诊断：保留 MD
+        # 设置里可打开"调试选项：保留中间 MD"（用户需求）
+        keep_md = False
+        if self._config_store is not None:
+            try:
+                keep_md = bool(self._config_store.load_debug_config().keep_export_md)
+            except Exception:
+                pass
+        if keep_md:
+            notify_progress(progress, f"调试模式：保留中间 MD 文件 {md_path}")
+        else:
+            md_path.unlink(missing_ok=True)
+
         notify_progress(progress, f"PDF 已生成：{pdf_path}")
         return str(pdf_path)
 

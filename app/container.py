@@ -123,6 +123,7 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     ai_client: AIClient = OpenAICompatibleAIClient(
         config_store.load_ai_config,
         local_classifier=local_classifier,
+        debug_config_provider=config_store.load_debug_config,
     )
 
     scoring_config: ScoringConfig = config_store.load_scoring_config()
@@ -182,7 +183,7 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     # MD 是 PDF 的中间产物，不对外暴露；只注册 PDF
     md_exporter = MdExporter(renderer=typst_renderer)
     exporters: dict[ExportFormat, BaseExporter] = {
-        ExportFormat.PDF: PdfExporter(md_exporter),
+        ExportFormat.PDF: PdfExporter(md_exporter, config_store=config_store),
     }
     paper_exporter = PaperExporter(exporters, score_validator)
     task_history_service = TaskHistoryService(task_repository)

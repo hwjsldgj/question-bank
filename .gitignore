@@ -207,3 +207,14 @@ pytest-of-*/
 __pycache__/
 
 typst_assets/
+
+# 工具/缓存
+.cache/
+.dshwolf/
+data/
+dbcheck/
+questions/
+
+# 测试诊断
+diag_*.py
+test_*.py

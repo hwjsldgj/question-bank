@@ -74,7 +74,7 @@ def test_export_writes_markdown_with_knowledge_section(tmp_path) -> None:
     assert path.endswith(".md")
     assert lines[0] == "# 试卷"
     assert lines[2] == "**总分：2 分**"
-    assert lines[4] == "## 一、选择题部分（单项选择）"
+    assert lines[4] == "## 一、选择题部分（单选题）"
     assert lines[6] == "共 1 题，每题 2 分，小计 2 分。  "  # 两个空格 = Markdown 硬换行
     assert lines[7] == "知识点板块：代数。"
     assert lines[9] == "1. 下列方程是一元二次方程的是？  "

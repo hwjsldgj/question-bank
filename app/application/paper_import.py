@@ -314,7 +314,7 @@ def extract_show_metadata(source: str) -> dict:
     :return: 包含 subject / year / type / name / regions 等字段的字典（缺失字段为空）
     """
     metadata: dict = {}
-    match = re.search(r"exam\.with\s*\\(", source)
+    match = re.search(r"exam\.with\s*\(", source)
     if not match:
         return metadata
     open_at = match.start() + match.group(0).rfind("(")

@@ -553,16 +553,18 @@ class PaperGenerationView(QWidget):
         rows = table.rowCount()
         effective_rows = max(min_rows, min(rows, max_rows))
 
-        # 用 fontMetrics 固定每行高度，避免实测值不同
-        fm = table.fontMetrics()
-        line_h = fm.lineSpacing()
-        row_h = line_h + 4  # 上下 padding
+        # 直接用 verticalHeader 的实际行高（与 make_rows_compact 设置一致）
+        row_h = table.verticalHeader().defaultSectionSize()
+        if row_h <= 0:
+            row_h = 18  # COMPACT_ROW_HEIGHT 兜底
 
-        # 表头高度：用 fontMetrics 估算，不依赖实测
-        header_h = line_h + 10
+        # 表头高度：实测优先，否则估算
+        header_h = table.horizontalHeader().height()
+        if header_h <= 0:
+            header_h = table.fontMetrics().lineSpacing() + 10
 
-        # 表格边框 + 余量
-        padding = 8
+        # 表格边框（上下各 1px）
+        padding = 2
         total = header_h + row_h * effective_rows + padding
 
         table.setMinimumHeight(total)
@@ -808,6 +810,7 @@ class PaperGenerationView(QWidget):
             ]
             for column, text in enumerate(texts):
                 self._stats_table.setItem(row, column, QTableWidgetItem(text))
+        self._auto_resize_table(self._stats_table, min_rows=3, max_rows=30)
 
     @staticmethod
     def _items_of(

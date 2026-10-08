@@ -148,6 +148,7 @@ class TypstRenderer:
             if yr:
                 src = self._prefix_image_paths(src, yr)
             src = self._strip_missing_images(src)
+            src = self._sanitize_typst_source(src)
             h = self._extract_header(src)
             if h and h not in headers:
                 headers.append(h)
@@ -201,6 +202,8 @@ class TypstRenderer:
         cmd = [
             self._typst_exe, "compile",
             "--root", str(self._gaokao_root),
+            "--pages", "1",
+
             "--format", "png",
             "--ppi", str(self._ppi),
             str(tmp_typ), str(out_png),
@@ -254,6 +257,7 @@ class TypstRenderer:
             typst_source = self._prefix_image_paths(typst_source, year)
 
         typst_source = self._strip_missing_images(typst_source)
+        typst_source = self._sanitize_typst_source(typst_source)
 
         header = self._extract_header(typst_source)
         figs = self._extract_all_figure_calls(typst_source)
@@ -286,6 +290,8 @@ class TypstRenderer:
         cmd = [
             self._typst_exe, "compile",
             "--root", str(self._gaokao_root),
+            "--pages", "1",
+
             "--format", "png",
             "--ppi", str(self._ppi),
             str(tmp_typ), str(out_png),
@@ -316,6 +322,8 @@ class TypstRenderer:
 
         fig_call = self._strip_missing_images(fig_call)
         header = self._strip_missing_images(header)
+        fig_call = self._sanitize_typst_source(fig_call)
+        header = self._sanitize_typst_source(header)
 
         source = (
             header + "\n\n"
@@ -335,6 +343,8 @@ class TypstRenderer:
         cmd = [
             self._typst_exe, "compile",
             "--root", str(self._gaokao_root),
+            "--pages", "1",
+
             "--format", "png",
             "--ppi", str(self._ppi),
             str(tmp_typ), str(out_png),
@@ -400,4 +410,133 @@ class TypstRenderer:
         return "\n".join(parts)
 
 
+
+# ===== sanitize patch =====
+
+# ===== end sanitize patch =====
+
+
+def _sanitize_typst_source(src):
+    """保留 imports + 被 #figure 递归引用到的 #let + #set page/align + 尾部图调用。
+    行扫描确定 #let 边界（比括号计数更鲁棒）；宽松收集标识符（含 name.attr 引用）。
+    单字母未定义参数兜底为 0。
+    """
+    import re as _re
+    if not src:
+        return src
+
+    lines = src.splitlines()
+    align_idx = None
+    for i, line in enumerate(lines):
+        if "#set align(center)" in line:
+            align_idx = i
+            break
+    if align_idx is None:
+        return src
+
+    head = lines[:align_idx]
+    tail = lines[align_idx + 1:]
+
+    # --- imports ---
+    imports = []
+    i = 0
+    while i < len(head) and not head[i].strip():
+        i += 1
+    while i < len(head) and head[i].lstrip().startswith("#import"):
+        start = i
+        d = head[i].count("(") - head[i].count(")")
+        i += 1
+        while i < len(head) and d > 0:
+            d += head[i].count("(") - head[i].count(")")
+            i += 1
+        imports.extend(head[start:i])
+
+    # --- #let 边界（行扫描）---
+    let_starts = [idx for idx, l in enumerate(head)
+                  if _re.match(r"^#let\s+[a-zA-Z_]", l)]
+    if not let_starts:
+        return src
+
+    lets = {}
+    let_order = []
+    for k in range(len(let_starts)):
+        start = let_starts[k]
+        end = let_starts[k + 1] if k + 1 < len(let_starts) else len(head)
+        block = head[start:end]
+        # 去掉尾部空行
+        while block and not block[-1].strip():
+            block.pop()
+        m = _re.match(r"^#let\s+([a-zA-Z_][a-zA-Z0-9_\-]*)", block[0])
+        if not m:
+            continue
+        name = m.group(1)
+        # 检查块括号平衡（忽略字符串内的括号，粗略处理）
+        depth = 0
+        balanced = True
+        for l in block:
+            # 去掉 $...$ 里的内容，避免数学公式里的括号干扰
+            l_clean = _re.sub(r"\$[^$]*\$", "", l)
+            depth += (l_clean.count("{") + l_clean.count("(") + l_clean.count("[")
+                      - l_clean.count("}") - l_clean.count(")") - l_clean.count("]"))
+        if depth != 0:
+            balanced = False
+        if balanced:
+            lets[name] = block
+            let_order.append(name)
+
+    # --- 递归收集 needed ---
+    id_re = _re.compile(r"[a-zA-Z_][a-zA-Z0-9_\-]*")
+    tail_ids = set(id_re.findall("\n".join(tail)))
+    needed = set()
+    frontier = set(tail_ids)
+    while frontier:
+        for name in list(frontier):
+            if name in lets and name not in needed:
+                needed.add(name)
+        new_frontier = set()
+        for name in needed:
+            for id_ in id_re.findall("\n".join(lets[name])):
+                if id_ in lets and id_ not in needed:
+                    new_frontier.add(id_)
+        frontier = new_frontier
+
+    # --- 保留需要的 #let，按原顺序 ---
+    kept = []
+    for name in let_order:
+        if name in needed:
+            kept.extend(lets[name])
+            kept.append("")
+
+    # --- 单字母参数兜底 ---
+    tail_text = "\n".join(tail)
+    all_kept = "\n".join(kept)
+    for mm in _re.finditer(
+        r"#figure\s*\(\s*([a-zA-Z_][a-zA-Z0-9_\-]*)\s*\(\s*([a-z])\s*\)\s*\)",
+        tail_text,
+    ):
+        var = mm.group(2)
+        has_def = (
+            _re.search(r"(?:^|\n)\s*" + _re.escape(var) + r"\s*=", all_kept)
+            or _re.search(r"#let\s+" + _re.escape(var) + r"\b", all_kept)
+            or _re.search(r"#let\s+" + _re.escape(var) + r"\b", tail_text)
+            or _re.search(r"for\s+" + _re.escape(var) + r"\s+in\b", tail_text)
+            or _re.search(r"for\s*\(\s*" + _re.escape(var) + r"[,)]", tail_text)
+        )
+        if not has_def:
+            tail_text = tail_text.replace(
+                mm.group(0), "#figure(" + mm.group(1) + "(0))"
+            )
+
+    # --- 重建 ---
+    result = list(imports) + [""]
+    result.extend(kept)
+    result.append("#set page(width: auto, height: auto, margin: 8pt)")
+    result.append("#set align(center)")
+    result.append("")
+    result.append(tail_text)
+
+    return "\n".join(result) + "\n"
+
+
+TypstRenderer._sanitize_typst_source = staticmethod(_sanitize_typst_source)
 

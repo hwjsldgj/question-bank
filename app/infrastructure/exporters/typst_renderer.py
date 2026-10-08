@@ -27,7 +27,7 @@ class TypstRenderer:
         typst_exe: str = TYPST_EXE,
         gaokao_root: str = TYPST_GAOKAO_ROOT,
         figures_dir: str = EXPORT_FIGURES_DIR,
-        ppi: int = 200,
+        ppi: int = 400,
     ) -> None:
         self._typst_exe = typst_exe
         self._gaokao_root = Path(gaokao_root) if gaokao_root else None

@@ -127,98 +127,196 @@ def _strip_typst_layout(text: str) -> str:
     return text.strip()
 
 
-def typst_to_latex(text: str) -> str:
-    """把 Typst 数学符号转成 LaTeX，供 MathJax 渲染。"""
+def _replace_abs_nested(text: str) -> str:
+    """替换 abs(...) 为 |...|，支持嵌套括号"""
+    result = []
+    i = 0
+    prefix = "abs("
+    while i < len(text):
+        if text[i:i+len(prefix)] == prefix:
+            depth = 0
+            j = i + len(prefix) - 1
+            while j < len(text):
+                if text[j] == "(":
+                    depth += 1
+                elif text[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if j < len(text):
+                inner = text[i+len(prefix):j]
+                result.append("|" + inner + "|")
+                i = j + 1
+                continue
+        result.append(text[i])
+        i += 1
+    return "".join(result)
+
+
+def _wrap_bare_math(text: str) -> str:
+    """$ 外部的 Typst 数学残留 → 包成 $...$ 或转普通文本"""
     if not text:
         return text
 
-    # ===== -2. 清理 【图】) 多余括号 =====
-    for _ in range(3):
-        text = re.sub(r"【图】[\s\)\]\,]+", "【图】", text)
+    # 1. \mathbb{X} → $\mathbb{X}$
+    text = re.sub(r"\\mathbb\{([A-Za-z])\}", r"$\\mathbb{\1}$", text)
 
-    # ===== -1. 删掉 【图】 后面的 Typst 碎片 =====
-    def _clean_fig_tail(m):
-        tail = m.group(0)
-        marks = ["image(", "roof-diagram", "root-frame", "root-section",
-                 "column-gutter", "[图 ", "]))", "#figure", "#grid",
-                 "#box", "#block", "#align"]
-        if any(mk in tail for mk in marks):
-            return "【图】"
-        lines = [l.strip() for l in tail.split("\n")[1:] if l.strip()]
-        if lines and all(re.match(r'^[\w"\'\s\(\),\[\]\-\/\.]+$', l) for l in lines):
-            return "【图】"
-        return tail
-    text = re.sub(r"【图】(\n[^\n]*){1,5}", _clean_fig_tail, text)
+    # 2. #中文# → 中文（Typst 强调）
+    text = re.sub(r"#([^#\n]{1,50})#", r"\1", text)
 
-    # ===== 0. 清除 Typst 布局指令 =====
-    text = _strip_typst_layout(text)
+    # 3. 独立希腊字母单词
+    greek = ["alpha", "beta", "gamma", "delta", "epsilon", "varepsilon",
+             "zeta", "eta", "theta", "vartheta", "iota", "kappa",
+             "lambda", "mu", "nu", "xi", "pi", "varpi", "rho", "varrho",
+             "sigma", "varsigma", "tau", "upsilon", "phi", "varphi",
+             "chi", "psi", "omega",
+             "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi",
+             "Sigma", "Upsilon", "Phi", "Psi", "Omega"]
+    for w in greek:
+        text = re.sub(rf"(?<![a-zA-Z]){w}(?![a-zA-Z])", rf"$\\{w}$", text)
 
-    # ===== 1. #step[标题][内容] -> 【标题】内容 =====
-    while True:
-        m = re.search(r"#step\s*\[([^\[\]]*)\]\s*\[([^\[\]]*)\]", text)
-        if not m:
-            break
-        text = text[:m.start()] + "【" + m.group(1) + "】" + m.group(2) + text[m.end():]
+    # 4. 独立数学符号
+    symbols = {
+        "triangle": r"\\triangle",
+        "approx": r"\\approx",
+        "notin": r"\\notin",
+        "neq": r"\\ne",
+        "geq": r"\\ge",
+        "leq": r"\\le",
+        "perp": r"\\perp",
+        "parallel": r"\\parallel",
+        "infty": r"\\infty",
+        "infinity": r"\\infty",
+        "cdot": r"\\cdot",
+        "cdots": r"\\cdots",
+        "dots": r"\\cdots",
+    }
+    for word, latex in symbols.items():
+        text = re.sub(rf"(?<![a-zA-Z]){word}(?![a-zA-Z])", rf"${latex}$", text)
 
-    # 2. #text(size:...)[内容] -> 内容
-    text = re.sub(r"#text\([^)]*\)\[([^\[\]]*)\]", r"\1", text)
-    # 3. #v(...) / #h(...) 删掉
-    text = re.sub(r"#(v|h)\([^)]*\)", "", text)
-    # 4. 【图】) 多余括号
-    text = re.sub(r"【图】[\s\)]+", "【图】", text)
+    # 5. X in Y / X notin Y（词边界）
+    text = re.sub(r"([A-Za-z0-9\)\}])\s+notin\s+([A-Z\\$])",
+                  r"\1 $\\notin$ \2", text)
+    text = re.sub(r"([A-Za-z0-9\)\}])\s+in\s+([A-Z\\$])",
+                  r"\1 $\\in$ \2", text)
 
-    def _conv(s: str) -> str:
-        # ===== 5. 组合函数优先 =====
-        s = re.sub(r'op\("([^"]*)"\)', r"\\text{\1}", s)
-        s = re.sub(r"abs\(([^()]*)\)", r"|\1|", s)
-        s = re.sub(r"upright\(([a-zA-Z])\)", r"\1", s)
-        s = re.sub(r"root\((\d+),\s*([^()]+)\)", r"\\sqrt[\1]{\2}", s)
-        s = re.sub(r"sqrt\(([^()]*)\)", r"\\sqrt{\1}", s)
-        s = re.sub(r"overparen\(([^()]*)\)", r"\\overparen{\1}", s)
-        s = re.sub(r"overline\(([^()]*)\)", r"\\overline{\1}", s)
-        s = re.sub(r"vec\(([^()]*)\)", r"\\vec{\1}", s)
-        s = re.sub(r"bold\(([^()]*)\)", r"\\mathbf{\1}", s)
-        s = re.sub(r"mathbf\(([^()]*)\)", r"\\mathbf{\1}", s)
-        s = re.sub(r"boldsymbol\(([^()]*)\)", r"\\boldsymbol{\1}", s)
-        s = re.sub(r"frac\(([^,()]+),\s*([^,()]+)\)", r"\\frac{\1}{\2}", s)
-        s = re.sub(r"cases\(([^()]*)\)", r"\\begin{cases}\1\\end{cases}", s)
-        # angle 后跟字母序列
-        s = re.sub(r"angle\s*([A-Z]+)", r"\\angle \1", s)
-        s = re.sub(r"\bangle\b", r"\\angle ", s)
+    return text
 
-        # ===== 6. 符号词（保证词边界） =====
-        # degree -> ^\circ
-        s = re.sub(r"(?<![a-zA-Z])degree", r"^\\circ", s)
-        s = re.sub(r"(?<![a-zA-Z])perp", r"\\perp ", s)
-        s = re.sub(r"(?<![a-zA-Z])parallel", r"\\parallel ", s)
-        s = re.sub(r"(?<![a-zA-Z])because", r"\\because ", s)
-        s = re.sub(r"(?<![a-zA-Z])therefore", r"\\therefore ", s)
-        s = re.sub(r"(?<![a-zA-Z])in\b", r"\\in ", s)
-        s = re.sub(r"(?<![a-zA-Z])notin\b", r"\\notin ", s)
-        s = re.sub(r"(?<![a-zA-Z])subset", r"\\subset ", s)
-        s = re.sub(r"(?<![a-zA-Z])approx", r"\\approx ", s)
-        s = re.sub(r"(?<![a-zA-Z])pm", r"\\pm ", s)
-        s = re.sub(r"(?<![a-zA-Z])mp", r"\\mp ", s)
-        s = re.sub(r"(?<![a-zA-Z])to\b", r"\\to ", s)
-        s = re.sub(r"(?<![a-zA-Z])quad", r"\\quad ", s)
-        s = re.sub(r"(?<![a-zA-Z])qquad", r"\\qquad ", s)
 
-        for k, v in sorted(_TYPST_OTHER.items(), key=lambda x: -len(x[0])):
-            s = re.sub(r"(?<![a-zA-Z])" + re.escape(k), v + " ", s)
-        for k, v in sorted(_TYPST_GREEK.items(), key=lambda x: -len(x[0])):
-            s = re.sub(r"(?<![a-zA-Z])" + re.escape(k), v + " ", s)
+def typst_to_latex(text: str) -> str:
+    """Typst → LaTeX：分别处理 $ 内外"""
+    if not text:
+        return text
 
-        s = re.sub(r"\s+", " ", s)
+    # 1. 保存 $...$ 和 $$...$$ 块
+    math_blocks = []
+    def _save(m):
+        math_blocks.append(m.group(0))
+        return f"\x00M{len(math_blocks)-1}\x00"
+
+    text = re.sub(r"\$\$[\s\S]*?\$\$|\$[^$]*?\$", _save, text)
+
+    # 2. $ 外部处理（Typst 残留 → $...$）
+    text = _wrap_bare_math(text)
+
+    # 3. $ 内部处理（用现有的 _conv_math 逻辑）
+    def _conv_math(s):
+        # 组合函数优先
+        s = _replace_abs_nested(s)
+        FUNC_MAP = [
+            (r"arrow\s*\(\s*([^()]+?)\s*\)", r"\\vec{\1}"),
+            (r"bold\s*\(\s*([^()]+?)\s*\)", r"\\mathbf{\1}"),
+            (r"boldsymbol\s*\(\s*([^()]+?)\s*\)", r"\\boldsymbol{\1}"),
+            (r"sqrt\s*\(\s*([^()]+?)\s*\)", r"\\sqrt{\1}"),
+            (r"root\s*\(\s*(\d+)\s*,\s*([^()]+?)\s*\)", r"\\sqrt[\1]{\2}"),
+            (r"frac\s*\(\s*([^,()]+?)\s*,\s*([^()]+?)\s*\)", r"\\frac{\1}{\2}"),
+            (r"overline\s*\(\s*([^()]+?)\s*\)", r"\\overline{\1}"),
+            (r"upright\s*\(\s*([^()]+?)\s*\)", r"\1"),
+            (r'op\s*\(\s*"([^"]+?)"\s*\)', r"\\text{\1}"),
+            (r"triangle\s+([A-Z]{2,})", r"\\triangle \1"),
+        ]
+        for pat, rep in FUNC_MAP:
+            s = re.sub(pat, rep, s)
+
+        WORD_MAP = [
+            (r"\btriangle\b", r"\\triangle"),
+            (r"\bcomplement_", r"\\complement_"),
+            (r"\binter\b", r"\\cap"),
+            (r"\bunion\b", r"\\cup"),
+            (r"\bnotin\b", r"\\notin"),
+            (r"\bsubset\b", r"\\subset"),
+            (r"\bperp\b", r"\\perp"),
+            (r"\bparallel\b", r"\\parallel"),
+            (r"\bbecause\b", r"\\because"),
+            (r"\btherefore\b", r"\\therefore"),
+            (r"\bangle\b", r"\\angle"),
+            (r"\bdegree\b", r"^\\circ"),
+            (r"\binfty\b", r"\\infty"),
+            (r"\binfinity\b", r"\\infty"),
+            (r"\bcdots\b", r"\\cdots"),
+            (r"\bdots\.c\b", r"\\cdots"),
+            (r"\bdots\b", r"\\cdots"),
+            (r"\bcdot\b", r"\\cdot"),
+            (r"\btimes\b", r"\\times"),
+            (r"\bdiv\b", r"\\div"),
+            (r"\bpm\b", r"\\pm"),
+            (r"\bneq\b", r"\\ne"),
+            (r"\bgeq\b", r"\\ge"),
+            (r"\bleq\b", r"\\le"),
+            (r"\bapprox\b", r"\\approx"),
+            (r"\bRR\b", r"\\mathbb{R}"),
+            (r"\bNN\b", r"\\mathbb{N}"),
+            (r"\bZZ\b", r"\\mathbb{Z}"),
+            (r"\bQQ\b", r"\\mathbb{Q}"),
+            (r"\bCC\b", r"\\mathbb{C}"),
+            (r"\balpha\b", r"\\alpha"),
+            (r"\bbeta\b", r"\\beta"),
+            (r"\bgamma\b", r"\\gamma"),
+            (r"\bdelta\b", r"\\delta"),
+            (r"\btheta\b", r"\\theta"),
+            (r"\blambda\b", r"\\lambda"),
+            (r"\bmu\b", r"\\mu"),
+            (r"\bnu\b", r"\\nu"),
+            (r"\bxi\b", r"\\xi"),
+            (r"\bpi\b", r"\\pi"),
+            (r"\brho\b", r"\\rho"),
+            (r"\bsigma\b", r"\\sigma"),
+            (r"\btau\b", r"\\tau"),
+            (r"\bphi\b", r"\\phi"),
+            (r"\bvarphi\b", r"\\varphi"),
+            (r"\bchi\b", r"\\chi"),
+            (r"\bpsi\b", r"\\psi"),
+            (r"\bomega\b", r"\\omega"),
+            (r"\bGamma\b", r"\\Gamma"),
+            (r"\bDelta\b", r"\\Delta"),
+            (r"\bTheta\b", r"\\Theta"),
+            (r"\bLambda\b", r"\\Lambda"),
+            (r"\bSigma\b", r"\\Sigma"),
+            (r"\bPhi\b", r"\\Phi"),
+            (r"\bPsi\b", r"\\Psi"),
+            (r"\bOmega\b", r"\\Omega"),
+            (r"\bqquad\b", r"\\qquad"),
+            (r"\bquad\b", r"\\quad"),
+            (r"\boverparen\s*\(([^()]*)\)", r"\\overparen{\1}"),
+            (r"\bcoslr\s*\(", r"\\cos\\langle "),
+        ]
+        for pat, rep in WORD_MAP:
+            s = re.sub(pat, rep, s)
+
+        # 清 Typst 转义符（只删 \, \; \!）
+        s = re.sub(r"\\(?=[,;!\s])", "", s)
+        s = re.sub(r"[ \t]+", " ", s)
         return s.strip()
 
-    def _replace_math(m):
-        return "$" + _conv(m.group(1)) + "$"
+    def _restore(m):
+        idx = int(m.group(1))
+        c = math_blocks[idx]
+        if c.startswith("$$"):
+            return "$$" + _conv_math(c[2:-2]) + "$$"
+        return "$" + _conv_math(c[1:-1]) + "$"
 
-    text = re.sub(r"\$([^$]+)\$", _replace_math, text)
-
-    # 处理 $ 外的 because/therefore
-    text = re.sub(r"\bbecause\b", "", text)
-    text = re.sub(r"\btherefore\b", "", text)
+    text = re.sub(r"\x00M(\d+)\x00", _restore, text)
     return text
 
 def notify_progress(progress: ProgressCallback | None, message: str) -> None:
@@ -492,3 +590,385 @@ class MdExporter(BaseExporter):
         except OSError as exc:
             raise ExportError(f"无法创建导出目录：{path}（{exc}）") from exc
         return path
+
+
+
+# ===== typst_to_latex v2 (patch) =====
+# 追加定义覆盖旧版，提供完整 Typst -> LaTeX 转换。
+
+def _ttl_split_args(inner):
+    parts, cur, depth = [], [], 0
+    for ch in inner:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur)); cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return [p.strip() for p in parts]
+
+
+def _ttl_replace_func(s, name, wrapper):
+    out, i, n = [], 0, len(s)
+    pat = __import__("re").compile(r"(?<![a-zA-Z_])" + __import__("re").escape(name) + r"\s*\(")
+    while i < n:
+        m = pat.search(s, i)
+        if not m:
+            out.append(s[i:]); break
+        out.append(s[i:m.start()])
+        j = m.end(); depth = 1; start_inner = j
+        while j < n and depth > 0:
+            if s[j] == "(":
+                depth += 1
+            elif s[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if depth != 0:
+            out.append(s[m.start():]); break
+        inner = s[start_inner:j]
+        try:
+            out.append(wrapper(inner))
+        except Exception:
+            out.append(m.group(0) + inner + ")")
+        i = j + 1
+    return "".join(out)
+
+
+def _ttl_mk_frac(inner):
+    parts = _ttl_split_args(inner)
+    if len(parts) == 2:
+        return r"\frac{" + parts[0] + "}{" + parts[1] + "}"
+    return r"\frac{" + inner + "}"
+
+
+def _ttl_mk_root(inner):
+    parts = _ttl_split_args(inner)
+    if len(parts) == 2:
+        return r"\sqrt[" + parts[0] + "]{" + parts[1] + "}"
+    return r"\sqrt{" + inner + "}"
+
+
+_TTL_UNICODE = [
+    ("\u211d", r"\mathbb{R} "), ("\u2115", r"\mathbb{N} "),
+    ("\u2124", r"\mathbb{Z} "), ("\u211a", r"\mathbb{Q} "),
+    ("\u2102", r"\mathbb{C} "),
+    ("\u03c0", r"\pi "), ("\u03a0", r"\Pi "),
+    ("\u03b1", r"\alpha "), ("\u03b2", r"\beta "),
+    ("\u03b3", r"\gamma "), ("\u03b4", r"\delta "),
+    ("\u03b5", r"\epsilon "), ("\u03b6", r"\zeta "),
+    ("\u03b7", r"\eta "), ("\u03b8", r"\theta "),
+    ("\u03b9", r"\iota "), ("\u03ba", r"\kappa "),
+    ("\u03bb", r"\lambda "), ("\u03bc", r"\mu "),
+    ("\u03bd", r"\nu "), ("\u03be", r"\xi "),
+    ("\u03c1", r"\rho "), ("\u03c3", r"\sigma "),
+    ("\u03c4", r"\tau "), ("\u03c5", r"\upsilon "),
+    ("\u03c6", r"\phi "), ("\u03c7", r"\chi "),
+    ("\u03c8", r"\psi "), ("\u03c9", r"\omega "),
+    ("\u0393", r"\Gamma "), ("\u0394", r"\Delta "),
+    ("\u0398", r"\Theta "), ("\u039b", r"\Lambda "),
+    ("\u039e", r"\Xi "), ("\u03a3", r"\Sigma "),
+    ("\u03a5", r"\Upsilon "), ("\u03a6", r"\Phi "),
+    ("\u03a8", r"\Psi "), ("\u03a9", r"\Omega "),
+    ("\u2264", r"\le "), ("\u2265", r"\ge "), ("\u2260", r"\ne "),
+    ("\u2248", r"\approx "), ("\u2261", r"\equiv "),
+    ("\u223c", r"\sim "), ("\u2245", r"\cong "),
+    ("\u221e", r"\infty "), ("\u2205", r"\emptyset "),
+    ("\u00d7", r"\times "), ("\u00f7", r"\div "),
+    ("\u00b1", r"\pm "), ("\u2213", r"\mp "), ("\u00b7", r"\cdot "),
+    ("\u2192", r"\to "), ("\u2190", r"\leftarrow "),
+    ("\u2194", r"\leftrightarrow "),
+    ("\u21d2", r"\Rightarrow "), ("\u21d0", r"\Leftarrow "),
+    ("\u21d4", r"\Leftrightarrow "),
+    ("\u2208", r"\in "), ("\u2209", r"\notin "),
+    ("\u2282", r"\subset "), ("\u2286", r"\subseteq "),
+    ("\u2283", r"\supset "), ("\u2287", r"\supseteq "),
+    ("\u222a", r"\cup "), ("\u2229", r"\cap "),
+    ("\u2200", r"\forall "), ("\u2203", r"\exists "),
+    ("\u2220", r"\angle "), ("\u25b3", r"\triangle "),
+    ("\u22a5", r"\perp "), ("\u2225", r"\parallel "),
+    ("\u2211", r"\sum "), ("\u220f", r"\prod "), ("\u222b", r"\int "),
+    ("\u221a", r"\sqrt "),
+    ("\u00b0", r"^\circ "),
+]
+
+
+def _ttl_normalize_unicode(s):
+    for a, b in _TTL_UNICODE:
+        s = s.replace(a, b)
+    return s
+
+
+_TTL_WORDS = [
+    (r"arcsin", r"\arcsin"), (r"arccos", r"\arccos"), (r"arctan", r"\arctan"),
+    (r"sinh", r"\sinh"), (r"cosh", r"\cosh"), (r"tanh", r"\tanh"),
+    (r"sin", r"\sin"), (r"cos", r"\cos"), (r"tan", r"\tan"),
+    (r"cot", r"\cot"), (r"sec", r"\sec"), (r"csc", r"\csc"),
+    (r"log", r"\log"), (r"ln", r"\ln"), (r"lg", r"\lg"),
+    (r"lim", r"\lim"), (r"max", r"\max"), (r"min", r"\min"),
+    (r"sup", r"\sup"), (r"inf", r"\inf"),
+    (r"sum", r"\sum"), (r"prod", r"\prod"),
+    (r"notin", r"\notin"), (r"in", r"\in"),
+    (r"subset", r"\subset"), (r"subseteq", r"\subseteq"),
+    (r"supset", r"\supset"), (r"supseteq", r"\supseteq"),
+    (r"cup", r"\cup"), (r"cap", r"\cap"),
+    (r"setminus", r"\setminus"), (r"emptyset", r"\emptyset"),
+    (r"varnothing", r"\varnothing"),
+    (r"forall", r"\forall"), (r"exists", r"\exists"),
+    (r"neg", r"\neg"), (r"land", r"\land"), (r"lor", r"\lor"),
+    (r"implies", r"\implies"), (r"iff", r"\iff"),
+    (r"triangle", r"\triangle"), (r"angle", r"\angle"),
+    (r"perp", r"\perp"), (r"parallel", r"\parallel"),
+    (r"cong", r"\cong"), (r"simeq", r"\simeq"), (r"sim", r"\sim"),
+    (r"approx", r"\approx"), (r"equiv", r"\equiv"),
+    (r"neq", r"\ne"), (r"geq", r"\ge"), (r"leq", r"\le"),
+    (r"degree", r"^\circ"), (r"infinity", r"\infty"),
+    (r"infty", r"\infty"),
+    (r"cdots", r"\cdots"), (r"ldots", r"\ldots"),
+    (r"vdots", r"\vdots"), (r"ddots", r"\ddots"),
+    (r"dots", r"\dots"), (r"cdot", r"\cdot"),
+    (r"times", r"\times"), (r"div", r"\div"),
+    (r"pm", r"\pm"), (r"mp", r"\mp"),
+    (r"rightarrow", r"\rightarrow"), (r"leftarrow", r"\leftarrow"),
+    (r"leftrightarrow", r"\leftrightarrow"),
+    (r"Rightarrow", r"\Rightarrow"), (r"Leftarrow", r"\Leftarrow"),
+    (r"Leftrightarrow", r"\Leftrightarrow"),
+    (r"mapsto", r"\mapsto"), (r"to", r"\to"),
+    (r"RR", r"\mathbb{R}"), (r"NN", r"\mathbb{N}"),
+    (r"ZZ", r"\mathbb{Z}"), (r"QQ", r"\mathbb{Q}"),
+    (r"CC", r"\mathbb{C}"),
+    (r"qquad", r"\qquad"), (r"quad", r"\quad"),
+    (r"alpha", r"\alpha"), (r"beta", r"\beta"),
+    (r"gamma", r"\gamma"), (r"delta", r"\delta"),
+    (r"varepsilon", r"\varepsilon"), (r"epsilon", r"\epsilon"),
+    (r"zeta", r"\zeta"), (r"eta", r"\eta"),
+    (r"vartheta", r"\vartheta"), (r"theta", r"\theta"),
+    (r"iota", r"\iota"), (r"kappa", r"\kappa"),
+    (r"lambda", r"\lambda"), (r"mu", r"\mu"),
+    (r"nu", r"\nu"), (r"xi", r"\xi"),
+    (r"varpi", r"\varpi"), (r"pi", r"\pi"),
+    (r"varrho", r"\varrho"), (r"rho", r"\rho"),
+    (r"varsigma", r"\varsigma"), (r"sigma", r"\sigma"),
+    (r"tau", r"\tau"), (r"upsilon", r"\upsilon"),
+    (r"varphi", r"\varphi"), (r"phi", r"\phi"),
+    (r"chi", r"\chi"), (r"psi", r"\psi"), (r"omega", r"\omega"),
+    (r"Gamma", r"\Gamma"), (r"Delta", r"\Delta"), (r"Theta", r"\Theta"),
+    (r"Lambda", r"\Lambda"), (r"Xi", r"\Xi"), (r"Pi", r"\Pi"),
+    (r"Sigma", r"\Sigma"), (r"Upsilon", r"\Upsilon"),
+    (r"Phi", r"\Phi"), (r"Psi", r"\Psi"), (r"Omega", r"\Omega"),
+]
+
+
+def _ttl_apply_words(s):
+    import re as _re
+    for word, latex in _TTL_WORDS:
+        pat = r"(?<![a-zA-Z\\])" + _re.escape(word) + r"(?![a-zA-Z])"
+        repl = latex + " "
+        s = _re.sub(pat, lambda m, _r=repl: _r, s)
+    return s
+
+
+def _ttl_fix_subsup(s):
+    out, i, n = [], 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch in "_^" and i + 1 < n and s[i+1] == "(":
+            j = i + 2; depth = 1
+            while j < n and depth > 0:
+                if s[j] == "(":
+                    depth += 1
+                elif s[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if depth == 0:
+                inner = s[i+2:j]
+                out.append(ch + "{" + inner + "}")
+                i = j + 1
+                continue
+        out.append(ch); i += 1
+    return "".join(out)
+
+
+def _ttl_strip_placeholders(s):
+    s = s.replace("#fill-placeholder()", r"\underline{\hspace{2cm}}")
+    s = s.replace("#choice-placeholder()", r"\underline{\hspace{1cm}}")
+    s = s.replace("#figure-placeholder()", r"\underline{\hspace{2cm}}")
+    return s
+
+
+def _ttl_conv_math(s):
+    import re as _re
+    s = _ttl_normalize_unicode(s)
+    for _ in range(5):
+        before = s
+        s = _ttl_replace_func(s, "frac", _ttl_mk_frac)
+        s = _ttl_replace_func(s, "sqrt", lambda x: r"\sqrt{" + x + "}")
+        s = _ttl_replace_func(s, "root", _ttl_mk_root)
+        s = _ttl_replace_func(s, "abs", lambda x: r"\left|" + x + r"\right|")
+        s = _ttl_replace_func(s, "arrow", lambda x: r"\vec{" + x + "}")
+        s = _ttl_replace_func(s, "overline", lambda x: r"\overline{" + x + "}")
+        s = _ttl_replace_func(s, "overparen", lambda x: r"\overparen{" + x + "}")
+        s = _ttl_replace_func(s, "bold", lambda x: r"\mathbf{" + x + "}")
+        s = _ttl_replace_func(s, "boldsymbol", lambda x: r"\boldsymbol{" + x + "}")
+        s = _ttl_replace_func(s, "upright", lambda x: x)
+        if s == before:
+            break
+    s = _ttl_fix_subsup(s)
+    s = _ttl_apply_words(s)
+    s = _ttl_strip_placeholders(s)
+    s = _re.sub(r"[ \t]+", " ", s)
+    return s.strip()
+
+
+def _ttl_wrap_bare(s):
+    import re as _re
+    s = _ttl_strip_placeholders(s)
+    s = _re.sub(r"#([^#\n]{1,50})#", r"\1", s)
+    s = _re.sub(r"\\mathbb\{([A-Za-z])\}", r"$\\mathbb{\1}$", s)
+    s = _ttl_normalize_unicode(s)
+    for word, latex in _TTL_WORDS:
+        s = _re.sub(r"(?<![a-zA-Z\\])" + _re.escape(word) + r"(?![a-zA-Z])",
+                    r"$" + latex.replace("\\", "\\\\") + r"$", s)
+    s = _re.sub(r"(?<=[A-Za-z0-9\)\}])\s+in\s+(?=[A-Za-z\\$])", r" $\\in$ ", s)
+    return s
+
+
+def typst_to_latex(text):
+    import re as _re
+    if not text:
+        return text
+    blocks = []
+    def _save(m):
+        blocks.append(m.group(0))
+        return "\x00M" + str(len(blocks) - 1) + "\x00"
+    text = _re.sub(r"\$\$[\s\S]*?\$\$|\$[^$]*?\$", _save, text)
+    text = _ttl_wrap_bare(text)
+    def _restore(m):
+        idx = int(m.group(1))
+        c = blocks[idx]
+        if c.startswith("$$"):
+            return "$$" + _ttl_conv_math(c[2:-2]) + "$$"
+        return "$" + _ttl_conv_math(c[1:-1]) + "$"
+    text = _re.sub(r"\x00M(\d+)\x00", _restore, text)
+    return text
+
+# ===== end patch =====
+
+# ===== v3 patch =====
+import re as _re3
+
+_TTL_SUPSUB_MULTI_V3 = _re3.compile(r"([_^])(\d{2,})(?![\d])")
+
+
+def _ttl_fix_multi_supsub_v3(s):
+    return _TTL_SUPSUB_MULTI_V3.sub(
+        lambda m: m.group(1) + "{" + m.group(2) + "}", s)
+
+
+def _ttl_fix_coslr_v3(s, wrap_dollar):
+    out, i, n = [], 0, len(s)
+    pat = _re3.compile(r"(?<![a-zA-Z])coslr\s*\(")
+    while i < n:
+        m = pat.search(s, i)
+        if not m:
+            out.append(s[i:])
+            break
+        out.append(s[i:m.start()])
+        j = m.end()
+        depth = 1
+        while j < n and depth > 0:
+            if s[j] == "(":
+                depth += 1
+            elif s[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if depth != 0:
+            out.append(s[m.start():])
+            break
+        inner = s[m.end():j].strip()
+        if inner.startswith("\u27e8") and inner.endswith("\u27e9"):
+            inner = inner[1:-1]
+        elif inner.startswith("\u2329") and inner.endswith("\u232a"):
+            inner = inner[1:-1]
+        body = r"\cos\langle " + inner + r" \rangle"
+        out.append(("$" + body + "$") if wrap_dollar else body)
+        i = j + 1
+    return "".join(out)
+
+
+def _ttl_mk_mat_v3(inner):
+    m = _re3.match(r"\s*delim\s*:\s*([^,]+?)\s*,\s*(.*)", inner, _re3.S)
+    if not m:
+        return r"\begin{matrix}" + inner + r"\end{matrix}"
+    delim, rest = m.group(1).strip(), m.group(2)
+    dmap = {"|": "vmatrix", "||": "Vmatrix",
+            "(": "pmatrix", "[": "bmatrix", "{": "Bmatrix"}
+    env = dmap.get(delim, "matrix")
+    rows = [r.strip() for r in rest.split(";")]
+    lines = [" & ".join(c.strip() for c in r.split(",")) for r in rows]
+    return "\\begin{" + env + "}" + " \\\\ ".join(lines) + "\\end{" + env + "}"
+
+
+def _ttl_mk_cases_v3(inner):
+    parts = _ttl_split_args(inner)
+    rows = []
+    for p in parts:
+        p = p.replace(r"\&", " & ")
+        p = _re3.sub(r"\\quad\s*", " ", p)
+        p = _re3.sub(r"\\qquad\s*", " ", p)
+        p = _re3.sub(r"\s+", " ", p).strip()
+        rows.append(p)
+    return "\\begin{cases}" + " \\\\ ".join(rows) + "\\end{cases}"
+
+
+def _ttl_conv_math(s):
+    import re as _re
+    s = _ttl_normalize_unicode(s)
+    s = _ttl_fix_coslr_v3(s, wrap_dollar=False)
+    for _ in range(5):
+        before = s
+        s = _ttl_replace_func(s, "frac", _ttl_mk_frac)
+        s = _ttl_replace_func(s, "sqrt", lambda x: r"\sqrt{" + x + "}")
+        s = _ttl_replace_func(s, "root", _ttl_mk_root)
+        s = _ttl_replace_func(s, "abs", lambda x: r"\left|" + x + r"\right|")
+        s = _ttl_replace_func(s, "arrow", lambda x: r"\vec{" + x + "}")
+        s = _ttl_replace_func(s, "overline", lambda x: r"\overline{" + x + "}")
+        s = _ttl_replace_func(s, "overparen", lambda x: r"\overparen{" + x + "}")
+        s = _ttl_replace_func(s, "bold", lambda x: r"\mathbf{" + x + "}")
+        s = _ttl_replace_func(s, "boldsymbol", lambda x: r"\boldsymbol{" + x + "}")
+        s = _ttl_replace_func(s, "upright", lambda x: x)
+        s = _ttl_replace_func(s, "mat", _ttl_mk_mat_v3)
+        s = _ttl_replace_func(s, "cases", _ttl_mk_cases_v3)
+        if s == before:
+            break
+    s = _ttl_fix_subsup(s)
+    s = _ttl_fix_multi_supsub_v3(s)
+    s = _ttl_apply_words(s)
+    s = _ttl_strip_placeholders(s)
+    s = _re.sub(r"[ \t]+", " ", s)
+    return s.strip()
+
+
+def _ttl_wrap_bare(s):
+    import re as _re
+    s = _ttl_strip_placeholders(s)
+    s = _ttl_fix_coslr_v3(s, wrap_dollar=True)
+    s = _re.sub(r"#([^#\n]{1,50})#", r"\1", s)
+    s = _re.sub(r"\\mathbb\{([A-Za-z])\}", r"$\\mathbb{\1}$", s)
+    s = _ttl_normalize_unicode(s)
+    for word, latex in _TTL_WORDS:
+        pat = r"(?<![a-zA-Z\\])" + _re.escape(word) + r"(?![a-zA-Z])"
+        s = _re.sub(pat, lambda m, _r=latex: "$" + _r + "$", s)
+    s = _re.sub(r"(?<=[A-Za-z0-9\)\}])\s+in\s+(?=[A-Za-z\\$])", r" $\\in$ ", s)
+    return s
+
+# ===== end v3 patch =====
+

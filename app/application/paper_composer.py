@@ -94,14 +94,17 @@ class PaperComposer:
         """
         self._validate_criteria(criteria)
 
-        # 同一题型的多条要求（知识点 × 难度）合并为一个分区，同卷按 id 去重
+        # 同一题型的多条要求（知识点 × 难度）合并为一个分区；
+        # 全局 seen_ids 保证整张卷子不出现重复题（用户需求）
         collected: dict[QuestionType, list[Question]] = {}
+        seen_ids: set[str] = set()
         for requirement in criteria.enabled_requirements():
             bucket = collected.setdefault(requirement.question_type, [])
-            for question in self._select_for_requirement(requirement):
-                if any(existing.id == question.id for existing in bucket):
+            for question in self._select_for_requirement(requirement, exclude_ids=seen_ids):
+                if question.id in seen_ids:
                     continue
                 bucket.append(question)
+                seen_ids.add(question.id)
 
         sections: list[Section] = []
         for question_type, questions in collected.items():
@@ -137,10 +140,15 @@ class PaperComposer:
             if not str(requirement.subject).strip():
                 raise CriteriaValidationError(f"{label}必须指定科目。")
 
-    def _select_for_requirement(self, requirement: TypeRequirement) -> list[Question]:
+    def _select_for_requirement(
+        self,
+        requirement: TypeRequirement,
+        exclude_ids: set[str] | None = None,
+    ) -> list[Question]:
         """为单个题型要求顺序读取题目（占位实现：不评分、不抽样、不补题）。
 
         :param requirement: 单题型出题要求（题型 / 科目 / 知识点板块 / 难度 / 数量）
+        :param exclude_ids: 已在其他题型中入选的题目 id 集合，跨题型去重
         :return: 按题库顺序截取的前 ``count`` 道题；不足时返回实际可提供的全部
         """
         questions = self._question_repository.search(
@@ -151,6 +159,9 @@ class PaperComposer:
                 question_type=requirement.question_type,
             )
         )
+        # 跨题型去重（用户需求：同一张卷不能有重复题）
+        if exclude_ids:
+            questions = [q for q in questions if q.id not in exclude_ids]
         points = [str(p).strip() for p in requirement.knowledge_points if str(p).strip()]
         if points:
             questions = [

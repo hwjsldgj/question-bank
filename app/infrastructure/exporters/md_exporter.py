@@ -572,7 +572,13 @@ class MdExporter(BaseExporter):
                 ans_text = entry.answer if entry else "（缺答案）"
                 block = [f"{number}. {typst_to_latex(ans_text)}"]
                 if entry is not None and entry.solution:
-                    block.append(f"   解析：{typst_to_latex(entry.solution)}")
+                    # indent patch v2: 去掉空行，全部用硬换行连接，确保同一段落内
+                    sol_text = typst_to_latex(entry.solution).strip()
+                    sol_lines = [s.strip() for s in sol_text.split("\n") if s.strip()]
+                    if sol_lines:
+                        block.append(f"   解析：{sol_lines[0]}")
+                        for s in sol_lines[1:]:
+                            block.append(f"   {s}")
                 lines.extend(["  \n".join(block), ""])
         return lines
 

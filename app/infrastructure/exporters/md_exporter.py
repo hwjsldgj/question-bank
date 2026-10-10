@@ -704,6 +704,11 @@ def _ttl_normalize_unicode(s):
 
 
 _TTL_WORDS = [
+    # set-operator patch
+    (r"complement", r"\complement"),
+    (r"inter", r"\cap"),
+    (r"union", r"\cup"),
+
     (r"arcsin", r"\arcsin"), (r"arccos", r"\arccos"), (r"arctan", r"\arctan"),
     (r"sinh", r"\sinh"), (r"cosh", r"\cosh"), (r"tanh", r"\tanh"),
     (r"sin", r"\sin"), (r"cos", r"\cos"), (r"tan", r"\tan"),
@@ -866,6 +871,20 @@ import re as _re3
 _TTL_SUPSUB_MULTI_V3 = _re3.compile(r"([_^])(\d{2,})(?![\d])")
 
 
+
+
+
+def _ttl_fix_asterisk(s):
+    """Markdown ??????????? * ?? Markdown ?????
+    ^* ?? ^{*}?_* ?? _{*}????? * ?? \ast?
+    """
+    import re as _re
+    s = _re.sub(r"\^\s*\*", "^{*}", s)
+    s = _re.sub(r"_\s*\*", "_{*}", s)
+    s = _re.sub(r"(?<!\\)\*", r"\\ast ", s)
+    return s
+
+
 def _ttl_fix_multi_supsub_v3(s):
     return _TTL_SUPSUB_MULTI_V3.sub(
         lambda m: m.group(1) + "{" + m.group(2) + "}", s)
@@ -951,6 +970,7 @@ def _ttl_conv_math(s):
             break
     s = _ttl_fix_subsup(s)
     s = _ttl_fix_multi_supsub_v3(s)
+    s = _ttl_fix_asterisk(s)
     s = _ttl_apply_words(s)
     s = _ttl_strip_placeholders(s)
     s = _re.sub(r"[ \t]+", " ", s)

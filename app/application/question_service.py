@@ -1311,7 +1311,7 @@ class QuestionService:
             elif isinstance(points, dict):
                 # 分级输出（先板块、再细分知识点），支持一道题涉及多个板块
                 points, section = self._flatten_sectioned_points(points)
-            else:
+            elif not isinstance(points, list):
                 points = []
             cleaned = [str(item).strip() for item in points if str(item).strip()]
             if cleaned:

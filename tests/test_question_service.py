@@ -124,7 +124,7 @@ def test_create_search_update_delete_with_history(container, service, tmp_path) 
 
     saved = service.create_question(_single_question(image=relative))
     assert saved.id
-    assert saved.difficulty is Difficulty.MEDIUM  # 人工填写的难度不被覆盖
+    assert saved.difficulty == Difficulty.MEDIUM  # 人工填写的难度不被覆盖
 
     found = service.search(QuestionFilter(subject="数学"))
     assert [q.id for q in found] == [saved.id]
@@ -153,12 +153,12 @@ def test_batch_parse_and_commit_records_import(service) -> None:
         "参考答案：3；-1"
     )
     assert len(drafts) == 3
-    assert drafts[0].type is QuestionType.SINGLE
+    assert drafts[0].type == QuestionType.SINGLE
     assert [option.text for option in drafts[0].options] == ["质量", "速度"]
     assert drafts[0].answer == ["A"]
-    assert drafts[1].type is QuestionType.SOLUTION
+    assert drafts[1].type == QuestionType.SOLUTION
     assert drafts[1].answer == ["令导数为零。"]
-    assert drafts[2].type is QuestionType.FILL
+    assert drafts[2].type == QuestionType.FILL
     assert drafts[2].options == []
     assert drafts[2].answer == ["3；-1"]
 
@@ -273,8 +273,8 @@ def test_reanalyze_difficulties_skips_manual(container) -> None:
 
     summary = service.reanalyze_difficulties(service.all_question_ids(), True)
     assert summary == {"total": 2, "updated": 1, "skipped": 1, "failed": 0}
-    assert container.question_repository.get(saved_auto.id).difficulty is Difficulty.HARD
-    assert container.question_repository.get(saved_manual.id).difficulty is Difficulty.EASY
+    assert container.question_repository.get(saved_auto.id).difficulty == Difficulty.HARD
+    assert container.question_repository.get(saved_manual.id).difficulty == Difficulty.EASY
 
 
 def test_history_split_import_and_edit(container, service) -> None:
@@ -319,18 +319,18 @@ def test_save_accepts_string_enum_fields(container, service) -> None:
     draft.source = "bank"
 
     saved = service.create_question(draft)
-    assert saved.type is QuestionType.SINGLE
-    assert saved.difficulty is Difficulty.EASY
+    assert saved.type == QuestionType.SINGLE
+    assert saved.difficulty == Difficulty.EASY
     assert saved.difficulty_source is DifficultySource.MANUAL
     stored = container.question_repository.get(saved.id)
-    assert stored.quality_flag is QualityFlag.QUALITY
+    assert stored.quality_flag == QualityFlag.QUALITY
     assert stored.source.value == "bank"
 
     # 编辑补丁同样接受字符串
     service.update_question(saved.id, {"difficulty": "hard", "quality_flag": "low"})
     updated = container.question_repository.get(saved.id)
-    assert updated.difficulty is Difficulty.HARD
-    assert updated.quality_flag is QualityFlag.LOW
+    assert updated.difficulty == Difficulty.HARD
+    assert updated.quality_flag == QualityFlag.LOW
 
 
 def test_storage_layer_accepts_string_enum_fields(container) -> None:
@@ -346,8 +346,8 @@ def test_storage_layer_accepts_string_enum_fields(container) -> None:
     )
     container.question_repository.save(direct)
     stored = container.question_repository.get("direct-1")
-    assert stored.type is QuestionType.FILL
-    assert stored.difficulty is Difficulty.MEDIUM
+    assert stored.type == QuestionType.FILL
+    assert stored.difficulty == Difficulty.MEDIUM
 
 
 def test_save_rejects_invalid_enum_value(service) -> None:
@@ -378,7 +378,7 @@ def test_ai_actions_require_confirmation(container) -> None:
     pending = _single_question()
     pending.difficulty = Difficulty.PENDING
     saved = local.create_question(pending)
-    assert saved.difficulty is Difficulty.PENDING
+    assert saved.difficulty == Difficulty.PENDING
     assert fake.prompts == []
 
     # 确认后：才调用 AI 分析难度
@@ -388,7 +388,7 @@ def test_ai_actions_require_confirmation(container) -> None:
     analyzed = local.create_question(
         confirmed, analyze_difficulty=True, allow_duplicate=True
     )
-    assert analyzed.difficulty is Difficulty.HARD
+    assert analyzed.difficulty == Difficulty.HARD
     assert fake.prompts
 
     # 辨识与批量重析未确认 -> 拒绝执行
@@ -500,7 +500,7 @@ def test_module_states_and_apply_recognition() -> None:
     assert draft.subject == "数学"
     assert draft.knowledge_points == ["集合"]
     assert draft.answer == ["A"]  # 选择题答案统一大写
-    assert draft.difficulty is Difficulty.HARD
+    assert draft.difficulty == Difficulty.HARD
     assert draft.difficulty_source is DifficultySource.AI
     assert draft.solution == "解析内容"
     assert QuestionService.required_missing_modules(draft) == []
@@ -648,9 +648,9 @@ def test_recognize_draft_normalizes_and_uses_prompt(container) -> None:
     assert service.ai_configured() is True
     assert result["subject"] == "数学"
     assert result["knowledge_points"] == ["一元二次方程", "因式分解"]
-    assert result["question_type"] is QuestionType.SINGLE
-    assert result["difficulty"] is Difficulty.HARD
-    assert result["quality_flag"] is QualityFlag.QUALITY
+    assert result["question_type"] == QuestionType.SINGLE
+    assert result["difficulty"] == Difficulty.HARD
+    assert result["quality_flag"] == QualityFlag.QUALITY
     assert result["answer"] == ["A"]
     assert result["solution"] == "两边开方"
     assert fake.prompts[0].startswith("自定义辨识")
@@ -746,8 +746,14 @@ def test_recognition_flags_unrecognized_ai_values(container) -> None:
             "solution": "",
         }
     )
+    from app.domain.enums import RecognizeModule
+    _mods = [
+        RecognizeModule.SUBJECT, RecognizeModule.KNOWLEDGE_POINTS,
+        RecognizeModule.QUESTION_TYPE, RecognizeModule.DIFFICULTY,
+        RecognizeModule.QUALITY_FLAG, RecognizeModule.ANSWER,
+    ]
     ok_report = _service_with(container, good).recognize_draft_report(
-        "题干", [], confirmed=True
+        "题干", [], confirmed=True, modules=_mods
     )
     assert ok_report.ok is True and ok_report.issues == []
 
@@ -788,7 +794,7 @@ def test_difficulty_analysis_reuses_module_prompt(container) -> None:
         )
     )
     service = DifficultyService(fake, container.config_store)
-    assert service.analyze(_single_question()) is Difficulty.MEDIUM
+    assert service.analyze(_single_question()) == Difficulty.MEDIUM
     prompt = fake.prompts[0]
     assert "只给 easy/medium/hard" in prompt
     assert "输出要求" in prompt

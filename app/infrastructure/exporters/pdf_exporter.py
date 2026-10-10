@@ -42,11 +42,11 @@ MathJax = {{
     displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
     processEscapes: true
   }},
-  svg: {{ fontCache: 'global' }},
+  chtml: {{ fontCache: 'local' }},
   startup: {{ typeset: true }}
 }};
 </script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
 <style>
   body {{
     font-family: "Microsoft YaHei", "SimSun", sans-serif;
@@ -92,6 +92,14 @@ MathJax = {{
     font-size: 8pt;
     margin-top: 0.15em;
     color: #333;
+  }}
+  /* 数学公式默认正体 + 常规粗细（用户需求） */
+  mjx-container,
+  mjx-container *,
+  mjx-container *::before,
+  mjx-container *::after {{
+    font-style: normal !important;
+    font-weight: normal !important;
   }}
   .pagebreak {{ page-break-after: always; break-after: page; }}
 </style>

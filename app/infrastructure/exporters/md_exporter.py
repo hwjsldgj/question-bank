@@ -770,6 +770,9 @@ _TTL_WORDS = [
 
 def _ttl_apply_words(s):
     import re as _re
+    # quad-glue in apply_words: quad/qquad 紧跟字母时补空格
+    s = _re.sub(r"(?<![a-zA-Z\\])qquad(?=[a-zA-Z])", lambda m: r"\qquad ", s)
+    s = _re.sub(r"(?<![a-zA-Z\\])quad(?=[a-zA-Z])", lambda m: r"\quad ", s)
     for word, latex in _TTL_WORDS:
         pat = r"(?<![a-zA-Z\\])" + _re.escape(word) + r"(?![a-zA-Z])"
         repl = latex + " "

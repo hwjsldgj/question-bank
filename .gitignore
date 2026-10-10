@@ -247,3 +247,6 @@ dbcheck/
 questions/
 
 typst_assets/
+# Python 备份文件
+*.py.bak*
+*.bak_*

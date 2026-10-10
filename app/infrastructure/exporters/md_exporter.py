@@ -654,6 +654,9 @@ def _ttl_mk_root(inner):
 
 
 _TTL_UNICODE = [
+    ("〈", r"\langle "), ("〉", r"\rangle "),  # U+3008/3009
+    ("〈", r"\langle "), ("〉", r"\rangle "),
+    ("⟨", r"\langle "), ("⟩", r"\rangle "),
     ("\u211d", r"\mathbb{R} "), ("\u2115", r"\mathbb{N} "),
     ("\u2124", r"\mathbb{Z} "), ("\u211a", r"\mathbb{Q} "),
     ("\u2102", r"\mathbb{C} "),
@@ -704,6 +707,12 @@ def _ttl_normalize_unicode(s):
 
 
 _TTL_WORDS = [
+    (r"therefore", r"\therefore"),
+    (r"because",   r"\because"),
+    # logic-operator patch
+    (r"not", r"\lnot"),
+    (r"and", r"\land"),
+    (r"or", r"\lor"),
     # set-operator patch
     (r"complement", r"\complement"),
     (r"inter", r"\cap"),
@@ -770,6 +779,29 @@ _TTL_WORDS = [
 
 def _ttl_apply_words(s):
     import re as _re
+    # fixB3 patch: cos lr(...) → \cos\langle ... \rangle
+    s = _re.sub(
+        r'(?<![a-zA-Z\\])cos\s+lr\s*\(\s*(?:\\langle\s*)?(.*?)(?:\s*\\rangle)?\s*\)',
+        lambda m: '\\cos\\langle ' + m.group(1) + ' \\rangle',
+        s,
+    )
+    # fix3 patch
+    # A: 3+ 个反斜杠 + quad/qquad -> 规范化
+    s = _re.sub(r'\\{3,}(qquad|quad)(?![a-zA-Z])',
+                lambda m: '\\' + m.group(1) + ' ', s)
+    # C: cdot s.c -> cdots
+    s = s.replace('\\cdot s.c', '\\cdots')
+    s = s.replace('\\dots.c', '\\cdots')
+    # therefore-because patch: 紧跟字母时补空格
+    s = _re.sub(r"(?<![a-zA-Z\\])therefore(?=[a-zA-Z])",
+                lambda m: r"\therefore ", s)
+    s = _re.sub(r"(?<![a-zA-Z\\])because(?=[a-zA-Z])",
+                lambda m: r"\because ", s)
+    # notin-combo v2: Typst 组合语法 in.not / subset.not
+    s = _re.sub(r"(?<![a-zA-Z])subset\.not(?![a-zA-Z])",
+                lambda m: r"\not\subset ", s)
+    s = _re.sub(r"(?<![a-zA-Z])in\.not(?![a-zA-Z])",
+                lambda m: r"\notin ", s)
     # quad-glue in apply_words: quad/qquad 紧跟字母时补空格
     s = _re.sub(r"(?<![a-zA-Z\\])qquad(?=[a-zA-Z])", lambda m: r"\qquad ", s)
     s = _re.sub(r"(?<![a-zA-Z\\])quad(?=[a-zA-Z])", lambda m: r"\quad ", s)

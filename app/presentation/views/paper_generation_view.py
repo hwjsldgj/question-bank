@@ -396,9 +396,7 @@ class PaperGenerationView(QWidget):
             3, QHeaderView.ResizeMode.Stretch
         )
         # 高度动态：空 3 行，有内容按行数展开（见 _auto_resize_table）
-        ui_utils.make_rows_compact(self._result_table)
         self._auto_resize_table(self._result_table, min_rows=3, max_rows=20)
-        ui_utils.make_rows_compact(self._result_table)
         layout.addWidget(self._result_table)
 
         score_row = QHBoxLayout()
@@ -550,13 +548,16 @@ class PaperGenerationView(QWidget):
         用固定行高（fontMetrics 行距 + 4）计算总高，避免实测行高不一致
         导致"有内容反而比空表矮"。
         """
+        # 幂等应用紧凑行高：若空表时未应用，会按 Qt 默认行高算，
+        # 导致空表比 min_rows 还高一行
+        ui_utils.make_rows_compact(table)
+
         rows = table.rowCount()
         effective_rows = max(min_rows, min(rows, max_rows))
 
-        # 直接用 verticalHeader 的实际行高（与 make_rows_compact 设置一致）
-        row_h = table.verticalHeader().defaultSectionSize()
-        if row_h <= 0:
-            row_h = 18  # COMPACT_ROW_HEIGHT 兜底
+        # 直接用紧凑行高常量：表格未 polish 前 defaultSectionSize() 可能读回旧值
+        # （Qt 默认行高），会让空表比有内容时还高一行
+        row_h = ui_utils.COMPACT_ROW_HEIGHT
 
         # 表头高度：实测优先，否则估算
         header_h = table.horizontalHeader().height()

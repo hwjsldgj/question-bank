@@ -545,8 +545,8 @@ class PaperGenerationView(QWidget):
     ) -> None:
         """按内容动态调整表格高度：空表 min_rows 行，有内容按行数展开。
 
-        用固定行高（fontMetrics 行距 + 4）计算总高，避免实测行高不一致
-        导致"有内容反而比空表矮"。
+        行高用 ui_utils.COMPACT_ROW_HEIGHT 常量（不读 defaultSectionSize()，
+        表格未 polish 前会读回 Qt 默认值），表头高实测优先。
         """
         # 幂等应用紧凑行高：若空表时未应用，会按 Qt 默认行高算，
         # 导致空表比 min_rows 还高一行

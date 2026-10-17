@@ -44,7 +44,7 @@ QUESTIONS_TABLE = """
         CHECK (json_valid(options)),
         CHECK (json_valid(answer)),
         CHECK (type NOT IN ('single', 'multiple') OR json_array_length(options) >= 2 OR quality_flag = 'low'),
-        CHECK (type IN ('fill', 'solution') OR json_array_length(options) > 0)
+        CHECK (quality_flag = 'low' OR type IN ('fill', 'solution') OR json_array_length(options) > 0)
     )
 """
 

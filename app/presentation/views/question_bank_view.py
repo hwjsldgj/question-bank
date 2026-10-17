@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
+    QDialogButtonBox,
     QWidget,
 )
 
@@ -574,39 +575,25 @@ class QuestionBankView(QWidget):
         form.addRow("解析（可选）", self._solution_edit)
         form.addRow(self._image_container)
 
-        # AI 辨识模块：出题者按需勾选，只请求所需字段，一次调用返回（用户需求）
-        self._module_group = QGroupBox(
-            "AI 辨识模块（按需勾选，一次调用返回全部勾选字段）"
-        )
-        module_layout = QVBoxLayout(self._module_group)
-        module_row = QHBoxLayout()
-        self._module_checks: dict[RecognizeModule, QCheckBox] = {}
-        for module in RECOGNIZE_MODULES:
-            check = QCheckBox(ui_utils.RECOGNIZE_MODULE_LABELS[module])
-            check.setChecked(True)
-            check.setToolTip(
-                f"勾选后本次 AI 辨识会请求「{ui_utils.RECOGNIZE_MODULE_LABELS[module]}」，"
-                "所有勾选项由同一次调用返回"
-            )
-            self._module_checks[module] = check
-            module_row.addWidget(check)
-        module_row.addStretch(1)
-        module_layout.addLayout(module_row)
+        # AI 补全与辨识按钮
+        self._local_btn = QPushButton("本地极速补全（知识点）")
+        self._local_btn.setToolTip("仅使用本地模型秒级识别知识点，不消耗 API")
+        self._local_btn.clicked.connect(self._on_local_recognize_clicked)
+        
+        self._api_btn = QPushButton("云端 API 辨识")
+        self._api_btn.setToolTip("调用云端 AI，发送前可勾选模块并预览提示词")
+        self._api_btn.clicked.connect(self._on_api_recognize_clicked)
 
-        self._recognize_button = QPushButton("AI 辨识选中模块")
-        self._recognize_button.setToolTip(
-            "调用已配置的 AI 服务识别勾选的模块并填入表单；结果仅供参考，请人工复核"
-        )
-        self._recognize_button.clicked.connect(self._on_recognize_clicked)
-        self._recognize_note = QLabel(
-            "AI 辨识结果仅供参考，必须人工复核后再保存。"
-        )
-        self._recognize_note.setWordWrap(True)
         recognize_row = QHBoxLayout()
-        recognize_row.addWidget(self._recognize_button)
+        recognize_row.addWidget(self._local_btn)
+        recognize_row.addWidget(self._api_btn)
+        self._recognize_note = QLabel("AI 结果仅供参考，需人工复核。")
         recognize_row.addWidget(self._recognize_note, 1)
-        module_layout.addLayout(recognize_row)
-        form.addRow(self._module_group)
+        
+        ai_group = QGroupBox("AI 智能辅助")
+        ai_layout = QVBoxLayout(ai_group)
+        ai_layout.addLayout(recognize_row)
+        form.addRow(ai_group)
 
         self._save_button = QPushButton("保存题目")
         self._save_button.clicked.connect(self._on_save_clicked)
@@ -1006,7 +993,7 @@ class QuestionBankView(QWidget):
         ui_utils.select_combo_data(self._quality_combo, QualityFlag.NORMAL)
         self._reset_options()
         self._set_image(None)
-        self._recognize_note.setText("AI 辨识结果仅供参考，必须人工复核后再保存。")
+        self._recognize_note.setText("AI 结果仅供参考，需人工复核。")
         self._save_button.setText("保存题目")
         self._cancel_edit_button.setVisible(False)
         self._on_type_changed()
@@ -1153,83 +1140,126 @@ class QuestionBankView(QWidget):
         """移除当前题目的图片引用（保留磁盘文件，避免误删历史图片）。"""
         self._set_image(None)
 
-    def _requested_modules(self) -> list[RecognizeModule]:
-        """返回被勾选的 AI 辨识模块（用户需求：按需给出、一次返回）。"""
-        return [
-            module
-            for module in RECOGNIZE_MODULES
-            if self._module_checks[module].isChecked()
-        ]
+    def _do_recognize(self, stem: str, modules: list, include_solution: bool, skip_local: bool, prompt_override: str | None = None) -> None:
+        options = self._collect_options()
+        # 直接调用 service 并回填
+        self._recognize_note.setText("AI 辨识中...")
+        self._recognize_note.repaint()
+        try:
+            report = self._question_service.recognize_draft_report(
+                stem, options, include_solution=include_solution, confirmed=True,
+                modules=modules, skip_local=skip_local, prompt_override=prompt_override
+            )
+            self._show_ai_issues(report.issues, title="AI 返回内容有问题")
+            self._apply_recognition(report.fields, include_solution=include_solution)
+        except Exception as e:
+            ui_utils.warning(self, f"AI 辨识失败: {e}")
+        finally:
+            self._recognize_note.setText("AI 结果仅供参考，需人工复核。")
 
-    def _wants_solution(self) -> bool:
-        """是否要求 AI 给出解析（勾选了「解析」模块）。"""
-        return self._module_checks[RecognizeModule.SOLUTION].isChecked()
-
-    def _call_recognition(
-        self,
-        stem: str,
-        options: list,
-        include_solution: bool,
-        modules: list,
-    ):
-        """调用一次 AI 辨识并返回报告（失败时已弹窗，返回 None）。
-
-        使用 :meth:`QuestionService.recognize_draft_report`，以便拿到
-        "AI 返回内容的问题清单"（用户需求：返回信息有问题时弹窗提示）。
-        """
-        ok, report = ui_utils.run_guarded(
-            self,
-            self._question_service.recognize_draft_report,
-            stem,
-            options,
-            include_solution,
-            True,
-            modules,
-        )
-        return report if ok else None
-
-    def _show_ai_issues(self, issues: list[str], title: str = "AI 返回内容有问题") -> None:
-        """AI 返回信息出现问题时弹窗提示（用户需求）。
-
-        :param issues: 问题清单（可为空，空则不弹窗）
-        """
-        if not issues:
-            return
-        ui_utils.warning(
-            self,
-            "AI 返回的内容存在以下问题：\n\n- "
-            + "\n- ".join(issues)
-            + "\n\n已按可识别的部分回填，无法识别的字段保持原值，请人工核对或手工补充。",
-            title=title,
-        )
-
-    def _on_recognize_clicked(self) -> None:
-        """按勾选的模块调用 AI 辨识并回填表单（用户需求；结果仅供参考）。"""
+    def _on_local_recognize_clicked(self) -> None:
+        """强制走本地极速补全知识点。"""
         stem = self._stem_edit.toPlainText().strip()
         if not stem:
-            ui_utils.info(self, "请先填写题干，再使用 AI 辨识。")
+            ui_utils.info(self, "请先填写题干。")
             return
-        modules = self._requested_modules()
-        if not modules:
-            ui_utils.info(self, "请至少勾选一个需要 AI 辨识的模块。")
+        # 本地只补全知识点
+        modules = [RecognizeModule.KNOWLEDGE_POINTS]
+        self._do_recognize(stem, modules, include_solution=False, skip_local=False)
+
+    def _on_api_recognize_clicked(self) -> None:
+        """调用云端 API，弹窗内可勾选模块并实时预览 Prompt。"""
+        stem = self._stem_edit.toPlainText().strip()
+        if not stem:
+            ui_utils.info(self, "请先填写题干。")
             return
+            
         if not self._question_service.ai_configured():
-            ui_utils.warning(
-                self,
-                self._question_service.ai_status_text() or "AI 服务不可用。",
-            )
+            ui_utils.warning(self, self._question_service.ai_status_text() or "AI 服务不可用。")
             return
-        include_solution = self._wants_solution()
-        report = self._call_recognition(
-            stem, self._collect_options(), include_solution, modules
-        )
-        if report is None:
-            return
-        if report.fields:
-            self._apply_recognition(
-                report.fields, include_solution=include_solution
+
+        # 构造弹窗
+        dialog = QDialog(self)
+        dialog.setWindowTitle("预览并发送云端 API 请求")
+        dialog.resize(750, 600)
+        layout = QVBoxLayout(dialog)
+
+        # 勾选模块区
+        module_group = QGroupBox("选择需要 AI 辨识的模块")
+        module_layout = QHBoxLayout(module_group)
+        checks = {}
+        for module in RECOGNIZE_MODULES:
+            check = QCheckBox(ui_utils.RECOGNIZE_MODULE_LABELS[module])
+            check.setChecked(True)
+            checks[module] = check
+            module_layout.addWidget(check)
+        layout.addWidget(module_group)
+
+        # Prompt 预览区
+        layout.addWidget(QLabel("将要发送的 Prompt 预览："))
+        text_edit = QPlainTextEdit()
+        text_edit.setReadOnly(True)
+        layout.addWidget(text_edit)
+
+        # 按钮区
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("确认发送 (消耗 API)")
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        # 更新 Prompt 的逻辑
+        def update_prompt():
+            modules = [m for m, c in checks.items() if c.isChecked()]
+            include_solution = RecognizeModule.SOLUTION in modules
+            options = self._collect_options()
+            try:
+                prompt_text, _ = self._question_service.build_recognize_prompt(
+                    stem, options, include_solution, modules
+                )
+                text_edit.setPlainText(prompt_text)
+            except Exception as e:
+                text_edit.setPlainText(f"生成预览失败: {e}")
+
+        # 绑定信号
+        for check in checks.values():
+            check.stateChanged.connect(update_prompt)
+        
+        # 初始化
+        update_prompt()
+
+        # 弹窗交互
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            modules = [m for m, c in checks.items() if c.isChecked()]
+            if not modules:
+                ui_utils.info(self, "请至少勾选一个模块。")
+                return
+            include_solution = RecognizeModule.SOLUTION in modules
+            prompt_text = text_edit.toPlainText()
+            self._do_recognize(stem, modules, include_solution, skip_local=True, prompt_override=prompt_text)
+
+    def _do_recognize(self, stem: str, modules: list, include_solution: bool, skip_local: bool, prompt_override: str | None = None) -> None:
+        options = self._collect_options()
+        self._recognize_note.setText("AI 辨识中...")
+        self._recognize_note.repaint()
+        try:
+            report = self._question_service.recognize_draft_report(
+                stem, options, include_solution=include_solution, confirmed=True,
+                modules=modules, skip_local=skip_local, prompt_override=prompt_override
             )
-        self._show_ai_issues(report.issues, title="AI 辨识返回内容有问题")
+            self._show_ai_issues(report.issues, title="AI 返回内容有问题")
+            self._apply_recognition(report.fields, include_solution=include_solution)
+        except Exception as e:
+            ui_utils.warning(self, f"AI 辨识失败: {e}")
+        finally:
+            self._recognize_note.setText("AI 结果仅供参考，需人工复核。")
+
+    def _show_ai_issues(self, issues: list[str], title: str = "AI 返回内容有问题") -> None:
+        """弹窗展示 AI 返回内容的问题清单。"""
+        if not issues:
+            return
+        text = "\n".join(f"· {issue}" for issue in issues)
+        ui_utils.warning(self, text, title=title)
 
     def _apply_recognition(self, result: dict, include_solution: bool = True) -> None:
         """把 AI 辨识结果写入表单，并给出"仅供参考"的提示文字。

@@ -257,6 +257,7 @@ class QuestionService:
         config_store: ConfigStore | None = None,
         ai_client: AIClient | None = None,
         image_store=None,
+        local_knowledge_clf=None,
     ) -> None:
         """注入仓储、校验器、难度服务，以及可选的台账 / 配置 / AI 客户端 / 图片存储。"""
         self._repository = repository
@@ -266,6 +267,7 @@ class QuestionService:
         self._config_store = config_store
         self._ai_client = ai_client
         self._image_store = image_store
+        self._local_knowledge_clf = local_knowledge_clf
 
     # ------------------------------------------------------------------ CRUD
 
@@ -671,6 +673,50 @@ class QuestionService:
         )
         return report.fields
 
+    def build_recognize_prompt(
+        self,
+        stem: str,
+        options: list[Option],
+        include_solution: bool = True,
+        modules: list[RecognizeModule] | list[str] | None = None,
+    ) -> tuple[str, list[RecognizeModule]]:
+        """生成 AI 辨识的 Prompt 文本（供 UI 预览）。"""
+        requested = self._resolve_modules(modules)
+        effective = [
+            module
+            for module in requested
+            if include_solution or module is not RecognizeModule.SOLUTION
+        ]
+        if not effective:
+            raise AIServiceError("要求不输出解析后没有其他模块需要 AI 辨识")
+        
+        subjects = self.list_subjects()
+        prompts = load_prompt_config(self._config_store)
+        template = prompts.recognize_prompt or DEFAULT_PROMPT_CONFIG.recognize_prompt
+        sections_text = self._format_sections_for_prompt()
+        blocks = self._render_module_prompts(prompts, effective, subjects, sections_text)
+        prompt = render(
+            template,
+            DEFAULT_PROMPT_CONFIG.recognize_prompt,
+            subjects="、".join(subjects),
+            stem=stem,
+            options="；".join(f"{o.key}. {o.text}" for o in options) or "无",
+            modules=blocks,
+        )
+        if "{modules}" not in template:
+            extra = self._render_module_prompts(
+                prompts,
+                [m for m in effective if not self._template_mentions(template, m)],
+                subjects,
+                sections_text,
+            )
+            if extra:
+                prompt = f"{prompt}\n{extra}"
+        if not include_solution:
+            prompt += "\n注意：本次不要输出解题解析，solution 请留空字符串。"
+            
+        return prompt, effective
+
     def recognize_draft_report(
         self,
         stem: str,
@@ -678,6 +724,8 @@ class QuestionService:
         include_solution: bool = True,
         confirmed: bool = False,
         modules: list[RecognizeModule] | list[str] | None = None,
+        skip_local: bool = False,
+        prompt_override: str | None = None,
     ) -> "RecognitionReport":
         """同 :meth:`recognize_draft`，但额外返回"AI 返回内容的问题清单"。
 
@@ -698,32 +746,10 @@ class QuestionService:
         ]
         if not effective:
             raise AIServiceError("要求不输出解析后没有其他模块需要 AI 辨识")
-        subjects = self.list_subjects()
-        prompts = load_prompt_config(self._config_store)
-        template = prompts.recognize_prompt or DEFAULT_PROMPT_CONFIG.recognize_prompt
-        sections_text = self._format_sections_for_prompt()
-        blocks = self._render_module_prompts(prompts, effective, subjects, sections_text)
-        prompt = render(
-            template,
-            DEFAULT_PROMPT_CONFIG.recognize_prompt,
-            subjects="、".join(subjects),
-            stem=stem,
-            options="；".join(f"{o.key}. {o.text}" for o in options) or "无",
-            modules=blocks,
-        )
-        if "{modules}" not in template:
-            # 用户自定义总述未写 {modules} 占位符时，只补它还没提到的模块要求，
-            # 避免同一字段（如难度）在提示词里出现两次（用户需求）
-            extra = self._render_module_prompts(
-                prompts,
-                [m for m in effective if not self._template_mentions(template, m)],
-                subjects,
-                sections_text,
-            )
-            if extra:
-                prompt = f"{prompt}\n{extra}"
-        if not include_solution:
-            prompt += "\n注意：本次不要输出解题解析，solution 请留空字符串。"
+        if prompt_override is not None:
+            prompt = prompt_override
+        else:
+            prompt, _ = self.build_recognize_prompt(stem, options, include_solution, effective)
 
         # 用户需求：能走本地的就走本地。
         # AI 辨识是多字段一次调用，本地模型只做难度；因此仅当"只勾了难度"时走本地。
@@ -739,6 +765,7 @@ class QuestionService:
         else:
             data = self._ai_client.complete(prompt, recognize_schema(effective))
 
+        subjects = self.list_subjects()
         report = self._normalize_recognition(data, effective, options, subjects)
         if not include_solution and RecognizeModule.SOLUTION in requested:
             report.fields["solution"] = ""

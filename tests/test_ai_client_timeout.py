@@ -10,7 +10,8 @@
 import json
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -23,6 +24,16 @@ from app.infrastructure.ai.ai_client import OpenAICompatibleAIClient
 #: 仅用于证明"没有永久阻塞"，不用于校准超时精度。
 _READ_TIMEOUT_UPPER_BOUND = 6.0
 
+
+
+class _FastServer(ThreadingHTTPServer):
+    """多线程处理请求，并跳过极慢的 getfqdn 解析。"""
+    allow_reuse_address = True
+    def server_bind(self):
+        # 绕过 HTTPServer.server_bind 中极慢的 socket.getfqdn()
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
 
 class HangingHandler(BaseHTTPRequestHandler):
     """接受请求后立即返回 status / headers，但永不返回 body（模拟 AI 服务读取阶段卡死）。"""
@@ -70,7 +81,7 @@ def server(request):
     参数名随 fixture 暴露给测试，便于区分卡死与正常两种行为。
     """
     name, handler = request.param
-    server = HTTPServer(("127.0.0.1", 0), handler)
+    server = _FastServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base_url = f"http://127.0.0.1:{server.server_port}"

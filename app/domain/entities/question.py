@@ -191,3 +191,6 @@ class QuestionFilter:
 
     question_type: QuestionType | None = None
     """精确匹配的题型；None 表示不限。"""
+
+    exclude_low_quality: bool = False
+    """是否排除 quality_flag='low' 的题（组卷时默认为 True）。"""

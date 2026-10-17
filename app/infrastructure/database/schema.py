@@ -40,7 +40,11 @@ QUESTIONS_TABLE = """
         paper_source      TEXT,
         legacy_id         TEXT,
         created_at        TEXT,
-        updated_at        TEXT
+        updated_at        TEXT,
+        CHECK (json_valid(options)),
+        CHECK (json_valid(answer)),
+        CHECK (type NOT IN ('single', 'multiple') OR json_array_length(options) >= 2 OR quality_flag = 'low'),
+        CHECK (type IN ('fill', 'solution') OR json_array_length(options) > 0)
     )
 """
 
@@ -139,6 +143,27 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def _ensure_question_triggers(conn: sqlite3.Connection) -> None:
+    """创建触发器，确保数据库层面的题目结构约束（豁免 low 标记题）。"""
+    for event in ("INSERT", "UPDATE"):
+        conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS trg_validate_question_{event.lower()}
+            BEFORE {event} ON questions
+            FOR EACH ROW
+            WHEN NEW.quality_flag != 'low'
+            BEGIN
+                SELECT CASE
+                    WHEN NOT json_valid(NEW.options) THEN RAISE(ABORT, 'options must be valid JSON')
+                    WHEN NOT json_valid(NEW.answer) THEN RAISE(ABORT, 'answer must be valid JSON')
+                    WHEN NEW.type IN ('single', 'multiple') AND json_array_length(NEW.options) < 2 THEN
+                        RAISE(ABORT, 'choice questions require at least 2 options')
+                    WHEN NEW.type IN ('fill', 'solution') AND json_array_length(NEW.options) > 0 THEN
+                        RAISE(ABORT, 'fill/solution questions must not have options')
+                END;
+            END;
+        """)
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """执行幂等建表、补列与题型约束迁移（应用启动时调用一次）。
 
@@ -150,6 +175,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         if not _has_column(conn, table, column):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     _migrate_question_type_check(conn)
+    _ensure_question_triggers(conn)
     conn.commit()
 
 

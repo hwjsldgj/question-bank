@@ -12,6 +12,8 @@
         app.application.question_generator（AI 补题校验，需求 R10 第 4 条）
 """
 
+import re
+
 from app.domain.entities.question import Question
 from app.domain.enums import QuestionType
 from app.domain.errors import QuestionValidationError
@@ -35,6 +37,19 @@ class QuestionValidator:
 
         keys = [option.key.strip().upper() for option in question.options if option.key.strip()]
         answers = [answer.strip().upper() for answer in question.answer if answer.strip()]
+
+        # 选项结构完整性检查（所有题型通用）
+        if len(keys) != len(set(keys)):
+            raise QuestionValidationError("选项标号不能重复")
+
+        for option in question.options:
+            if option.key.strip() and not option.text.strip():
+                raise QuestionValidationError(f"选项 {option.key} 的内容不能为空")
+
+        # 如果题干明确有选择括号，但选项不足，判定为切漏
+        stem = question.stem.strip()
+        if re.search(r'[（(]\s*[）)]', stem) and len(keys) < 2:
+            raise QuestionValidationError("题干包含选择括号，但选项数量不足 2 个，疑似题目结构残缺")
 
         if question.type is QuestionType.SOLUTION:
             if question.options:

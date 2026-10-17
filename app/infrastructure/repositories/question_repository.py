@@ -134,6 +134,8 @@ class SQLiteQuestionRepository(QuestionRepository):
         if question_filter.question_type is not None:
             clauses.append("type = ?")
             params.append(QuestionType(question_filter.question_type).value)
+        if getattr(question_filter, "exclude_low_quality", False):
+            clauses.append("quality_flag != 'low'")
 
         sql = "SELECT * FROM questions"
         if clauses:

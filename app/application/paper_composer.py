@@ -157,6 +157,7 @@ class PaperComposer:
                 section=requirement.section.strip() or None,
                 difficulty=requirement.difficulty,
                 question_type=requirement.question_type,
+                exclude_low_quality=True,
             )
         )
         # 跨题型去重（用户需求：同一张卷不能有重复题）

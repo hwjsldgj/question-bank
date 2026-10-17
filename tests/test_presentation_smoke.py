@@ -431,8 +431,14 @@ def test_search_filters_by_knowledge_section(window) -> None:
     bank._search_section.setCurrentIndex(bank._search_section.findData("代数"))
     bank._search_knowledge.setText("")
     bank._on_search()
+    # 按列名定位「知识点板块」列，避免列顺序调整后索引失效
+    header = [
+        bank._result_table.horizontalHeaderItem(i).text()
+        for i in range(bank._result_table.columnCount())
+    ]
+    section_col = header.index("知识点板块")
     sections = [
-        bank._result_table.item(row, 2).text()
+        bank._result_table.item(row, section_col).text()
         for row in range(bank._result_table.rowCount())
     ]
     assert "代数" in sections

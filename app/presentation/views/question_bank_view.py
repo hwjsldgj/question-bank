@@ -77,10 +77,11 @@ from app.presentation import ui_utils
 #: 图片预览的最大尺寸（像素）
 PREVIEW_SIZE = (220, 160)
 
-#: 检索结果表的数据列：题目 ID / 科目 / 知识点板块 / 知识点 / 题型 / 难度 / 质量 /
+#: 检索结果表的数据列：题目 ID / 卷源 / 科目 / 知识点板块 / 知识点 / 题型 / 难度 / 质量 /
 #: 图片 / 使用次数 / 最近使用 / 题干（用户需求：检索结果含知识点板块与知识点列）
 RESULT_COLUMNS: tuple[str, ...] = (
     "题目 ID",
+    "卷源",
     "科目",
     "知识点板块",
     "知识点",
@@ -92,6 +93,11 @@ RESULT_COLUMNS: tuple[str, ...] = (
     "最近使用",
     "题干",
 )
+
+
+def _source_of(question_id: str) -> str:
+    """从题目 ID 解析所属卷源（去掉 _qNNNNN / _figNNNNN 后缀）。"""
+    return re.sub(r"_(q|fig)\d+$", "", question_id)
 
 
 class _PasteDraftEditor(QDialog):
@@ -2020,7 +2026,9 @@ class QuestionBankView(QWidget):
         )
         if not ok:
             return
-        self._search_results = questions or []
+        self._search_results = sorted(
+            questions or [], key=lambda q: (_source_of(q.id), q.id)
+        )
         self._render_results(self._search_results)
         self._search_status.setText(f"共 {len(self._search_results)} 道题")
 
@@ -2042,6 +2050,7 @@ class QuestionBankView(QWidget):
             self._result_table.insertRow(row)
             values = [
                 question.id,
+                _source_of(question.id),
                 question.subject,
                 question.section,
                 "、".join(question.knowledge_points),

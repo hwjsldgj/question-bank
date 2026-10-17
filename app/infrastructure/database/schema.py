@@ -37,6 +37,7 @@ QUESTIONS_TABLE = """
         source            TEXT NOT NULL DEFAULT 'bank',
         image_path        TEXT,
         typst_source      TEXT,
+        paper_source      TEXT,
         created_at        TEXT,
         updated_at        TEXT
     )
@@ -130,6 +131,8 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("questions", "image_path", "TEXT"),
     # 知识点板块列为后加字段，旧库需补列
     ("questions", "section", "TEXT NOT NULL DEFAULT ''"),
+    # 卷源列为后加字段（从 id 前缀解析），旧库需补列
+    ("questions", "paper_source", "TEXT"),
 )
 
 

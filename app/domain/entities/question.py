@@ -98,6 +98,9 @@ class Question:
     界面展示，不参与 AI 难度分析与 AI 辨识。
     """
 
+    paper_source: str = ""
+    """所属卷源（如 ``2016_上海卷文科``），从题目 id 前缀解析；无卷源时为空。"""
+
     created_at: datetime | None = None
     """入库时间。"""
 

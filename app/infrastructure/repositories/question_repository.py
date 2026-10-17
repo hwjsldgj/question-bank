@@ -8,6 +8,7 @@
 """
 
 import json
+import re
 import uuid
 from datetime import datetime
 
@@ -26,6 +27,14 @@ from app.domain.enums import (
 )
 from app.infrastructure.database.connection import DatabaseConnection
 from app.interfaces.repositories import QuestionRepository
+
+_ID_SOURCE_PATTERN = re.compile(r"^(.*)_(q|fig)[0-9]+$")
+
+
+def _parse_paper_source(question_id: str) -> str:
+    """从题目 id 前缀解析卷源（如 ``2016_上海卷文科``）；无前缀（uuid）返回空串。"""
+    m = _ID_SOURCE_PATTERN.match(question_id or "")
+    return m.group(1) if m else ""
 
 
 class SQLiteQuestionRepository(QuestionRepository):
@@ -48,8 +57,8 @@ class SQLiteQuestionRepository(QuestionRepository):
             conn.execute(
                 "INSERT INTO questions (id, subject, section, knowledge_points, type, stem, "
                 "options, answer, solution, difficulty, difficulty_source, quality_flag, "
-                "source, image_path, typst_source, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "source, image_path, typst_source, paper_source, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._to_row(question),
             )
             self._sync_knowledge_points(conn, question)
@@ -63,7 +72,7 @@ class SQLiteQuestionRepository(QuestionRepository):
                 "UPDATE questions SET subject = ?, section = ?, knowledge_points = ?, type = ?, "
                 "stem = ?, options = ?, answer = ?, solution = ?, difficulty = ?, "
                 "difficulty_source = ?, quality_flag = ?, source = ?, image_path = ?, "
-                "typst_source = ?, updated_at = ? WHERE id = ?",
+                "typst_source = ?, paper_source = ?, updated_at = ? WHERE id = ?",
                 (
                     question.subject,
                     question.section,
@@ -81,6 +90,7 @@ class SQLiteQuestionRepository(QuestionRepository):
                     question.source.value,
                     question.image_path,
                     question.typst_source,
+                    question.paper_source or _parse_paper_source(question.id),
                     question.updated_at.isoformat(timespec="seconds"),
                     question.id,
                 ),
@@ -228,6 +238,7 @@ class SQLiteQuestionRepository(QuestionRepository):
             self._enum_value(question.source, QuestionSource),
             question.image_path,
             question.typst_source,
+            question.paper_source or _parse_paper_source(question.id),
             question.created_at.isoformat(timespec="seconds")
             if question.created_at
             else None,
@@ -274,6 +285,7 @@ class SQLiteQuestionRepository(QuestionRepository):
             source=QuestionSource(row["source"]),
             image_path=row["image_path"],
             typst_source=(row["typst_source"] if "typst_source" in row.keys() else None),
+            paper_source=(row["paper_source"] if "paper_source" in row.keys() else ""),
             created_at=SQLiteQuestionRepository._parse_dt(row["created_at"]),
             updated_at=SQLiteQuestionRepository._parse_dt(row["updated_at"]),
         )

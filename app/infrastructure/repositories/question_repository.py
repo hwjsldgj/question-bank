@@ -57,8 +57,8 @@ class SQLiteQuestionRepository(QuestionRepository):
             conn.execute(
                 "INSERT INTO questions (id, subject, section, knowledge_points, type, stem, "
                 "options, answer, solution, difficulty, difficulty_source, quality_flag, "
-                "source, image_path, typst_source, paper_source, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "source, image_path, typst_source, paper_source, legacy_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._to_row(question),
             )
             self._sync_knowledge_points(conn, question)
@@ -72,7 +72,7 @@ class SQLiteQuestionRepository(QuestionRepository):
                 "UPDATE questions SET subject = ?, section = ?, knowledge_points = ?, type = ?, "
                 "stem = ?, options = ?, answer = ?, solution = ?, difficulty = ?, "
                 "difficulty_source = ?, quality_flag = ?, source = ?, image_path = ?, "
-                "typst_source = ?, paper_source = ?, updated_at = ? WHERE id = ?",
+                "typst_source = ?, paper_source = ?, legacy_id = ?, updated_at = ? WHERE id = ?",
                 (
                     question.subject,
                     question.section,
@@ -91,6 +91,7 @@ class SQLiteQuestionRepository(QuestionRepository):
                     question.image_path,
                     question.typst_source,
                     question.paper_source or _parse_paper_source(question.id),
+                    getattr(question, "legacy_id", None),
                     question.updated_at.isoformat(timespec="seconds"),
                     question.id,
                 ),
@@ -239,6 +240,7 @@ class SQLiteQuestionRepository(QuestionRepository):
             question.image_path,
             question.typst_source,
             question.paper_source or _parse_paper_source(question.id),
+            getattr(question, "legacy_id", None),
             question.created_at.isoformat(timespec="seconds")
             if question.created_at
             else None,
@@ -286,6 +288,7 @@ class SQLiteQuestionRepository(QuestionRepository):
             image_path=row["image_path"],
             typst_source=(row["typst_source"] if "typst_source" in row.keys() else None),
             paper_source=(row["paper_source"] if "paper_source" in row.keys() else ""),
+            legacy_id=(row["legacy_id"] if "legacy_id" in row.keys() else None),
             created_at=SQLiteQuestionRepository._parse_dt(row["created_at"]),
             updated_at=SQLiteQuestionRepository._parse_dt(row["updated_at"]),
         )

@@ -87,7 +87,7 @@ container.py  → 唯一能 import 具体实现的地方（组合根）
 
 | 字段 | 说明 |
 |---|---|
-| `id` | 主键，形如 `2026_上海春季卷_q00013`（q 路径）或 `2016_上海卷文科_fig00012`（fig 路径）|
+| `id` | 主键，形如 `A000001`（字母 + 6 位数字）；字母按 (题型, 图片类型) 分配，见下方 |
 | `subject` | 科目 |
 | `section` | 知识点板块，多板块用"、"分隔 |
 | `knowledge_points` | 细分知识点（JSON 数组）|
@@ -96,10 +96,23 @@ container.py  → 唯一能 import 具体实现的地方（组合根）
 | `difficulty` | `easy` / `medium` / `hard` / `pending` |
 | `difficulty_source` | `ai` / `manual` |
 | `quality_flag` | `normal` / 其它 |
-| `typst_source` | 含图题的 Typst 源码（**仅 `_fig` 路径有**）|
+| `typst_source` | 含图题的 Typst 渲染源码；无图题为空 |
 | `image_path` | 手工导入的图片相对路径 |
+| `paper_source` | 所属卷源（如 `2016_上海卷文科`），从原 id 前缀解析 |
+| `legacy_id` | 迁移前的旧 id（如 `2016_上海卷文科_q00001`），溯源与回滚用 |
 
-⚠️ **`_q` 路径不提取 `typst_source`** —— 见待办。
+**id 字母表**（迁移后）：
+
+| 题型 \ 图片 | 无图 | typst 渲染图 | 真实图片 |
+|---|---|---|---|
+| 单选 single | A | B | C |
+| 多选 multiple | D | E | F |
+| 填空 fill | G | H | I |
+| 解答 solution | J | K | L |
+
+同字母内按原 id 升序编号（`000001` 起）。C / F / I / L 预留（当前无真实图片题）。
+
+⚠️ **rebuild 脚本不会为普通题（原 `_q` 路径）提取 `typst_source`** —— 见待办。
 
 ## 典型工作流
 

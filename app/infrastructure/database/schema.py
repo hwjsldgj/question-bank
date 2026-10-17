@@ -38,6 +38,7 @@ QUESTIONS_TABLE = """
         image_path        TEXT,
         typst_source      TEXT,
         paper_source      TEXT,
+        legacy_id         TEXT,
         created_at        TEXT,
         updated_at        TEXT
     )
@@ -133,6 +134,8 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("questions", "section", "TEXT NOT NULL DEFAULT ''"),
     # 卷源列为后加字段（从 id 前缀解析），旧库需补列
     ("questions", "paper_source", "TEXT"),
+    # 迁移前的旧 id（如 2016_上海卷文科_q00001），溯源与回滚用
+    ("questions", "legacy_id", "TEXT"),
 )
 
 

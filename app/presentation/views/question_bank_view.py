@@ -95,11 +95,6 @@ RESULT_COLUMNS: tuple[str, ...] = (
 )
 
 
-def _source_of(question_id: str) -> str:
-    """从题目 ID 解析所属卷源（去掉 _qNNNNN / _figNNNNN 后缀）。"""
-    return re.sub(r"_(q|fig)\d+$", "", question_id)
-
-
 class _PasteDraftEditor(QDialog):
     """批量粘贴预览中双击一行后弹出的候选题编辑器。
 
@@ -2027,7 +2022,7 @@ class QuestionBankView(QWidget):
         if not ok:
             return
         self._search_results = sorted(
-            questions or [], key=lambda q: (_source_of(q.id), q.id)
+            questions or [], key=lambda q: (q.paper_source or "", q.id)
         )
         self._render_results(self._search_results)
         self._search_status.setText(f"共 {len(self._search_results)} 道题")
@@ -2050,7 +2045,7 @@ class QuestionBankView(QWidget):
             self._result_table.insertRow(row)
             values = [
                 question.id,
-                _source_of(question.id),
+                question.paper_source or "",
                 question.subject,
                 question.section,
                 "、".join(question.knowledge_points),

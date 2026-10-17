@@ -74,11 +74,11 @@ container.py  → 唯一能 import 具体实现的地方（组合根）
 | 模型 | 位置 | 用法 |
 |---|---|---|
 | 难度分类 | `models/difficulty_model/` | 懒加载，CPU 单题 < 1 秒 |
-| 知识点分类 | 待接入 | 见待办 |
+| 知识点分类 | `models/knowledge_model/` | 懒加载，CPU 极速打标（超算微调版） |
 
 - 启动**不预热**（首次调用加载）
-- 加载代理：`app/infrastructure/ai/lazy_local_classifier.py`
-- 分类器：`app/infrastructure/ai/local_difficulty_classifier.py`
+- 加载代理：`app/infrastructure/ai/lazy_local_classifier.py`（含难度与知识点两套代理）
+- 分类器：`local_difficulty_classifier.py`（难度） / `local_knowledge_classifier.py`（知识点）
 - 调试 tab 可开关：禁用本地 / 禁用 API / 禁用全部 AI
 
 ## 数据库 schema
@@ -199,6 +199,7 @@ MD 中间产物默认删（调试 tab 可保留）。导出目录由程序指定
 6. **Typst 组合语法 `in.not` / `subset.not`** 要先于 `in` / `subset` 匹配
 7. **数学里的 `*` 会被 Markdown 当强调**，需改成 `^{*}` 或 `\ast`
 8. **MathJax SVG 输出斜体是字形路径**，CSS 覆盖不了——必须用 CHTML（`tex-chtml.js`）
+9. **测试首次加载 PyTorch 会卡 20 多秒**：`tests/conftest.py` 已强制注入 Mock 库拦截，如需跑真实模型测试请临时注释。
 
 ## 渲染转换流程（改 md_exporter 前必读）
 

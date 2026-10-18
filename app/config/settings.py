@@ -204,8 +204,6 @@ DEFAULT_PROMPT_CONFIG = PromptConfig(
 )
 
 
-LOCAL_DIFFICULTY_MODEL_DIR = "models/difficulty_model"
-
 
 # Typst 可执行文件路径（用于导出时渲染含图题）
 TYPST_EXE = r"C:\Users\90579\AppData\Local\Microsoft\WinGet\Packages\Typst.Typst_Microsoft.Winget.Source_8wekyb3d8bbwe\typst-x86_64-pc-windows-msvc\typst.exe"

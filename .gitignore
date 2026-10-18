@@ -219,3 +219,4 @@ questions/
 
 # 审计产物不入 git
 report/audit_*
+report/review_sample_*

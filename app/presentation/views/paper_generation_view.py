@@ -34,6 +34,7 @@ import threading
 from PySide6.QtCore import Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QInputDialog,
     QAbstractItemView,
     QCheckBox,
     QComboBox,
@@ -56,10 +57,12 @@ from app.config.settings import DEFAULT_EXPORT_DIR
 from app.domain.entities.configs import ExportOptions
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement
 from app.domain.entities.paper import Paper, Section
+from app.domain.entities.preset import PaperPreset
 from app.domain.entities.question import Question, split_sections
 from app.domain.enums import Difficulty, ExportFormat, QuestionType
-from app.domain.errors import DomainError
+from app.domain.errors import DomainError, PresetError
 from app.presentation import ui_utils
+from app.presentation.widgets.preset_bar import PresetBar
 
 #: 题型顺序：选择 -> 填空 -> 解答（与 PaperCriteria.enabled_requirements 一致）
 _TYPE_ORDER: tuple[QuestionType, ...] = (
@@ -211,6 +214,7 @@ class PaperGenerationView(QWidget):
         """构建组卷视图整体布局（配置区 / 配比统计 / 试卷预览 / 导出）。"""
         root = QVBoxLayout(self)
         root.addWidget(self._build_subject_group())
+        root.addWidget(self._build_preset_bar())
         for question_type in _TYPE_ORDER:
             root.addWidget(self._build_type_group(question_type))
 
@@ -224,6 +228,63 @@ class PaperGenerationView(QWidget):
 
         self._status = QLabel("就绪")
         root.addWidget(self._status)
+
+    def _build_preset_bar(self) -> PresetBar:
+        """构建预设操作条并连接业务处理。"""
+        self._preset_bar = PresetBar()
+        self._preset_bar.load_clicked.connect(self._on_load_preset)
+        self._preset_bar.save_clicked.connect(self._on_save_preset)
+        self._preset_bar.delete_clicked.connect(self._on_delete_preset)
+        self._refresh_preset_list()
+        return self._preset_bar
+
+    def _refresh_preset_list(self) -> None:
+        """从 PresetService 读取全部预设并刷新 PresetBar。"""
+        presets = self._container.preset_service.list_all()
+        self._preset_bar.set_presets(presets)
+
+    def _on_load_preset(self) -> None:
+        """加载当前选中的预设条件到配置表。"""
+        name = self._preset_bar.selected_name()
+        if not name:
+            return
+        preset = self._container.preset_service.find(name)
+        if preset is None:
+            ui_utils.warning(self, f"预设「{name}」不存在。")
+            return
+        self.apply_criteria(preset.criteria)
+        self._status.setText(f"已加载预设「{name}」")
+
+    def _on_save_preset(self) -> None:
+        """把当前配置表条件另存为预设。"""
+        name, ok = QInputDialog.getText(self, "另存为预设", "预设名称：")
+        if not ok:
+            return
+        name = (name or "").strip()
+        if not name:
+            return
+        criteria = self._build_criteria()
+        preset = PaperPreset(name=name, criteria=criteria, is_builtin=False)
+        try:
+            self._container.preset_service.save_custom(preset)
+            self._refresh_preset_list()
+            self._status.setText(f"已保存预设「{name}」")
+        except PresetError as exc:
+            ui_utils.warning(self, str(exc))
+
+    def _on_delete_preset(self) -> None:
+        """删除当前选中的自定义预设（内置不可删）。"""
+        name = self._preset_bar.selected_name()
+        if not name:
+            return
+        if not ui_utils.confirm(self, f"确定删除预设「{name}」？", title="删除预设"):
+            return
+        try:
+            self._container.preset_service.delete_custom(name)
+            self._refresh_preset_list()
+            self._status.setText(f"已删除预设「{name}」")
+        except PresetError as exc:
+            ui_utils.warning(self, str(exc))
 
     def _build_subject_group(self) -> QGroupBox:
         """构建全局科目选择区（一次组卷只针对一个科目）。"""

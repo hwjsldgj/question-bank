@@ -22,6 +22,7 @@ from app.application.cooldown_policy import CooldownPolicy
 from app.application.difficulty_service import DifficultyService
 from app.application.paper_composer import PaperComposer
 from app.application.paper_exporter import PaperExporter
+from app.application.preset_service import PresetService
 from app.application.question_generator import QuestionGenerator
 from app.application.question_history_service import QuestionHistoryService
 from app.application.question_service import QuestionService
@@ -47,6 +48,7 @@ from app.infrastructure.image_store import LocalImageStore
 from app.infrastructure.repositories.question_op_repository import (
     SQLiteQuestionOpRepository,
 )
+from app.infrastructure.repositories.preset_repository import SQLitePresetRepository
 from app.infrastructure.repositories.question_repository import SQLiteQuestionRepository
 from app.infrastructure.repositories.task_repository import SQLiteTaskRepository
 from app.infrastructure.repositories.usage_repository import SQLiteUsageRepository
@@ -90,6 +92,7 @@ class Container:
     paper_exporter: PaperExporter
     task_history_service: TaskHistoryService
     question_history_service: QuestionHistoryService
+    preset_service: PresetService
 
 
 def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
@@ -188,6 +191,8 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     paper_exporter = PaperExporter(exporters, score_validator)
     task_history_service = TaskHistoryService(task_repository)
     question_history_service = QuestionHistoryService(question_op_repository)
+    preset_repository = SQLitePresetRepository(db)
+    preset_service = PresetService(preset_repository)
 
     return Container(
         db=db,
@@ -211,5 +216,6 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         paper_exporter=paper_exporter,
         task_history_service=task_history_service,
         question_history_service=question_history_service,
+        preset_service=preset_service,
     )
 

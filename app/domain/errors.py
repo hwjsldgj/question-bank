@@ -48,3 +48,7 @@ class ExportError(DomainError):
 
 class ImageImportError(DomainError):
     """题目图片导入失败（文件不存在、格式不受支持或复制失败）。"""
+
+
+class PresetError(Exception):
+    """预设操作异常：名称重复、内置预设不可删、名称非法等。"""

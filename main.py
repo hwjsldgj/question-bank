@@ -16,7 +16,7 @@ import os
 import sys
 import traceback
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QPointF, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
@@ -40,7 +40,7 @@ class _Loader(QThread):
 
 
 class _ModelWarmer(QThread):
-    """后台预热本地难度模型（触发懒加载）。"""
+    """后台预热本地四核模型（在 QThread 内阻塞加载，不阻塞 UI）。"""
 
     finished_ok = Signal()
     failed = Signal(str)
@@ -51,13 +51,15 @@ class _ModelWarmer(QThread):
 
     def run(self) -> None:
         try:
-            clf = getattr(self._container.ai_client, "_local_classifier", None)
-            if clf is None:
-                self.finished_ok.emit()
+            service = getattr(self._container, "question_service", None)
+            engine = (
+                getattr(service, "_local_ai_engine", None) if service else None
+            )
+            if engine is None:
+                self.failed.emit("本地 AI 引擎未初始化（可能被调试选项禁用）")
                 return
-            ensure = getattr(clf, "ensure_loaded", None)
-            if ensure is not None:
-                ensure()
+            for name in ("type", "section", "subtopic", "difficulty"):
+                engine._load_model(name)
             self.finished_ok.emit()
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()

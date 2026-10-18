@@ -107,23 +107,10 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     config_store: ConfigStore = SQLiteConfigStore(db)
 
     # AI 客户端按"配置提供者"构造：设置保存后后续调用立即使用新配置（R15-3）
-    local_classifier = None
-    try:
-        from app.infrastructure.ai.lazy_local_classifier import LazyLocalClassifier
-        from app.config.settings import LOCAL_DIFFICULTY_MODEL_DIR
-        proxy = LazyLocalClassifier(LOCAL_DIFFICULTY_MODEL_DIR)
-        if proxy.is_available():
-            local_classifier = proxy
-            print(f"[container] 本地难度模型（延迟加载）：{LOCAL_DIFFICULTY_MODEL_DIR}")
-        else:
-            print(f"[container] 本地难度模型文件不存在，忽略")
-    except Exception as e:
-        print(f"[container] 本地难度模型不可用：{e}")
 
     ai_client: AIClient = OpenAICompatibleAIClient(
         config_store.load_ai_config,
-        local_classifier=local_classifier,
-        debug_config_provider=config_store.load_debug_config,
+        
     )
 
     scoring_config: ScoringConfig = config_store.load_scoring_config()
@@ -138,14 +125,13 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     # 应用服务装配
     difficulty_service = DifficultyService(
         ai_client, config_store, question_repository,
-        local_classifier=local_classifier,
+        
     )
     # 注：旧的 15 分类知识点模型（knowledge_model）已被 section_model 和 subtopic_model 取代。
-    local_knowledge_clf = None
 
     debug_config = config_store.load_debug_config()
     local_ai_engine = None
-    if not debug_config.disable_local_model:
+    if not (debug_config.disable_local_model or debug_config.disable_all_ai):
         from app.presentation.signal_bus import bus
         from app.infrastructure.ai.local_ai_engine import LocalAIEngine
         local_ai_engine = LocalAIEngine(Path(__file__).resolve().parent.parent / "models")
@@ -227,15 +213,3 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         question_history_service=question_history_service,
     )
 
-    def warm_up_models(self) -> None:
-        """后台预热模型：在启动画面期间偷偷加载，避免点击时卡顿。"""
-        import threading
-        def _load():
-            if self._local_knowledge_clf:
-                self._local_knowledge_clf.ensure_loaded()
-            if getattr(self, "_local_type_clf", None):
-                self._local_type_clf.ensure_loaded()
-            print("[container] 本地模型后台预热完成")
-        
-        t = threading.Thread(target=_load, daemon=True)
-        t.start()

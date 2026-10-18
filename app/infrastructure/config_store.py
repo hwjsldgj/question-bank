@@ -23,7 +23,7 @@ from app.config.settings import (
     DEFAULT_SCORING_CONFIG,
     DEFAULT_SUBJECTS,
 )
-from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
+from app.domain.entities.configs import AIConfig, DebugConfig, PromptConfig, ScoringConfig
 from app.domain.entities.knowledge_section import KnowledgeSection
 from app.infrastructure.database.connection import DatabaseConnection
 from app.interfaces.repositories import ConfigStore
@@ -43,9 +43,8 @@ class SQLiteConfigStore(ConfigStore):
         """注入数据库连接管理器。"""
         self._db = db
 
-    def load_debug_config(self) -> "DebugConfig":
+    def load_debug_config(self) -> DebugConfig:
         """读取调试配置；无记录时返回默认值。"""
-        from app.domain.entities.configs import DebugConfig
         raw = self._read_key(self.KEY_DEBUG)
         if raw is None:
             return DebugConfig()
@@ -56,7 +55,7 @@ class SQLiteConfigStore(ConfigStore):
             return DebugConfig()
         return DebugConfig(**self._filter_fields(DebugConfig, data))
 
-    def save_debug_config(self, config) -> None:
+    def save_debug_config(self, config: DebugConfig) -> None:
         """保存调试配置（UPSERT）。"""
         self._write_key(self.KEY_DEBUG, self._dump(config))
 

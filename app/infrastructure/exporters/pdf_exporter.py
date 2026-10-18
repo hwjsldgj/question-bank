@@ -17,6 +17,7 @@
 转换耗时较长，调用方（界面）应放到后台线程执行，并通过 ``progress`` 回调显示进度。
 """
 
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -35,18 +36,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <title>试卷</title>
-<script>
-MathJax = {{
-  tex: {{
-    inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
-    displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
-    processEscapes: true
-  }},
-  chtml: {{ fontCache: 'local' }},
-  startup: {{ typeset: true }}
-}};
-</script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
+
 <style>
   body {{
     font-family: "Microsoft YaHei", "SimSun", sans-serif;
@@ -118,21 +109,38 @@ _PRINT_WAIT_SECONDS = 60
 
 
 def render_html(markdown_text: str) -> str:
-    """把 Markdown 试卷渲染为可打印的 HTML（含 MathJax 与分页 CSS）。
-
-    :raises ExportError: 未安装 ``markdown`` 包时抛出
-    """
+    """把 Markdown 试卷渲染为可打印的 HTML，使用纯离线 MathML。"""
     try:
         import markdown
+        import latex2mathml.converter
     except ImportError as exc:
-        raise ExportError(
-            "未安装 Markdown（markdown 包），无法生成 PDF；可改用 MD 格式导出。"
-        ) from exc
-    body = markdown.markdown(
-        markdown_text, extensions=["extra", "md_in_html", "sane_lists"]
-    )
-    return _HTML_TEMPLATE.format(body=body)
+        raise ExportError("未安装 Markdown 或 latex2mathml，请执行 pip install latex2mathml。") from exc
 
+    # 1. 先修复非标准的 \hat(y) 为 \hat{y}
+    markdown_text = re.sub(r'\\hat\(([^)]+)\)', r'\\hat{\1}', markdown_text)
+
+    mathml_blocks = []
+    def _save_math(match):
+        latex = match.group(1)
+        try:
+            mathml = latex2mathml.converter.convert(latex)
+            mathml_blocks.append(mathml)
+            return f"@@MATHML_{len(mathml_blocks)-1}@@"
+        except Exception:
+            return match.group(0)
+
+    # 2. 将 $...$ 保护并转换为 MathML 占位符
+    text_with_placeholders = re.sub(r'\$\$(.*?)\$\$', _save_math, markdown_text, flags=re.DOTALL)
+    text_with_placeholders = re.sub(r'\$(.*?)\$', _save_math, text_with_placeholders, flags=re.DOTALL)
+
+    # 3. 渲染 Markdown（不改变任何图片和排版的逻辑）
+    body = markdown.markdown(text_with_placeholders, extensions=["extra", "md_in_html", "sane_lists"])
+
+    # 4. 把占位符替换回 MathML
+    for i, mathml in enumerate(mathml_blocks):
+        body = body.replace(f"@@MATHML_{i}@@", mathml)
+
+    return _HTML_TEMPLATE.format(body=body)
 
 def resolve_browser() -> str | None:
     """返回可用的 Edge 无头浏览器路径（找不到时返回 None）。"""

@@ -397,6 +397,7 @@ class PaperGenerationView(QWidget):
         )
         # 高度动态：空 3 行，有内容按行数展开（见 _auto_resize_table）
         self._auto_resize_table(self._result_table, min_rows=3, max_rows=20)
+        self._result_table.doubleClicked.connect(self._on_paper_double_clicked)
         layout.addWidget(self._result_table)
 
         score_row = QHBoxLayout()
@@ -959,6 +960,13 @@ class PaperGenerationView(QWidget):
         self._render_paper(paper)
         self._update_total()
         self._status.setText(f"已生成 {len(paper.questions())} 道题")
+
+    def _on_paper_double_clicked(self, index) -> None:
+        """双击组卷结果行时，弹窗展示该题完整内容。"""
+        row = index.row()
+        if 0 <= row < len(self._row_map):
+            _section, question = self._row_map[row]
+            ui_utils.show_question_detail(self, question)
 
     def _render_paper(self, paper: Paper) -> None:
         """把试卷内容渲染到预览表，并记录行 -> (分区, 题目) 映射。"""

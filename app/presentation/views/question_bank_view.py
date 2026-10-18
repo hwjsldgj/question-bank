@@ -855,6 +855,7 @@ class QuestionBankView(QWidget):
             len(RESULT_COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
         )
         ui_utils.make_rows_compact(self._result_table)
+        self._result_table.doubleClicked.connect(self._on_result_double_clicked)
         layout.addWidget(self._result_table)
 
         action_row = QHBoxLayout()
@@ -1955,6 +1956,12 @@ class QuestionBankView(QWidget):
             return False
         self._render_paste_preview(self._paste_drafts)
         return True
+
+    def _on_result_double_clicked(self, index: QModelIndex) -> None:
+        """双击检索结果行时，弹窗展示该题完整内容。"""
+        row = index.row()
+        if 0 <= row < len(self._search_results):
+            ui_utils.show_question_detail(self, self._search_results[row])
 
     def _on_preview_double_clicked(self, index: QModelIndex) -> None:
         """双击预览行时打开该候选题的编辑对话框。"""

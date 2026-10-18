@@ -125,6 +125,88 @@ def make_rows_compact(table) -> None:
     table.verticalHeader().setMinimumSectionSize(COMPACT_MIN_ROW_HEIGHT)
 
 
+def show_question_detail(parent, question, title: str = "题目详情") -> None:
+    """弹窗展示题目完整内容（元信息 / 题干 / 选项 / 答案 / 解析）。
+
+    只读视图，不修改任何数据；供检索结果表、组卷结果表双击时调用。
+    """
+    import html as _html
+
+    from PySide6.QtWidgets import (
+        QDialog,
+        QDialogButtonBox,
+        QTextBrowser,
+        QVBoxLayout,
+    )
+
+    def _esc(value) -> str:
+        return _html.escape(str(value if value is not None else "")).replace(
+            "\n", "<br>"
+        )
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(title)
+    dialog.resize(720, 620)
+
+    layout = QVBoxLayout(dialog)
+    browser = QTextBrowser(dialog)
+    browser.setOpenExternalLinks(False)
+
+    parts: list[str] = []
+
+    quality = getattr(question.quality_flag, "value", question.quality_flag)
+    meta_rows = [
+        ("题目 ID", question.id),
+        ("科目", question.subject),
+        ("卷源", question.paper_source or "—"),
+        ("知识点板块", question.section or "—"),
+        ("知识点", "、".join(question.knowledge_points) or "—"),
+        ("题型", QUESTION_TYPE_LABELS.get(question.type, str(question.type))),
+        ("难度", DIFFICULTY_LABELS.get(question.difficulty, str(question.difficulty))),
+        ("质量标记", quality),
+    ]
+    meta_html = [
+        "<table cellpadding='4' style='border-collapse:collapse'>",
+    ]
+    for key, value in meta_rows:
+        meta_html.append(
+            "<tr>"
+            f"<td style='color:#666;padding-right:16px;white-space:nowrap'>{_esc(key)}</td>"
+            f"<td>{_esc(value)}</td>"
+            "</tr>"
+        )
+    meta_html.append("</table>")
+    parts.append("".join(meta_html))
+
+    parts.append("<h3>题干</h3>")
+    parts.append(f"<p>{_esc(question.stem)}</p>")
+
+    if question.options:
+        parts.append("<h3>选项</h3>")
+        opts = "<br>".join(
+            f"<b>{_esc(o.key)}.</b> {_esc(o.text)}" for o in question.options
+        )
+        parts.append(f"<p>{opts}</p>")
+
+    parts.append("<h3>答案</h3>")
+    answer_text = "、".join(question.answer) if question.answer else "—"
+    parts.append(f"<p>{_esc(answer_text)}</p>")
+
+    if question.solution:
+        parts.append("<h3>解析</h3>")
+        parts.append(f"<p>{_esc(question.solution)}</p>")
+
+    browser.setHtml("".join(parts))
+    layout.addWidget(browser)
+
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+    buttons.rejected.connect(dialog.reject)
+    buttons.accepted.connect(dialog.accept)
+    layout.addWidget(buttons)
+
+    dialog.exec()
+
+
 def new_multi_combo(placeholder: str = "", minimum_width: int = 140) -> QComboBox:
     """构建可填多个取值的下拉框（知识点板块 / 知识点这类多值字段）。
 

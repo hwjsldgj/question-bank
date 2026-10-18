@@ -97,6 +97,12 @@ class DebugConfig:
     theme: str = "light"
     """界面主题：light（默认）/ dark。"""
 
+    pdf_browser_path: str = ""
+    """PDF 导出使用的浏览器可执行文件路径。
+
+    空串时按 app.config.settings.DEFAULT_PDF_BROWSER_PATHS 自动查找。
+    """
+
 
 @dataclass
 class PromptConfig:

@@ -206,17 +206,37 @@ class PdfExporter(BaseExporter):
         notify_progress(progress, f"PDF 已生成：{pdf_path}")
         return str(pdf_path)
 
+    def _resolve_browser_path(self) -> str | None:
+        """解析可用浏览器路径，优先级：构造参数 > 配置 > 默认候选。"""
+        if self._browser_path:
+            return self._browser_path
+        if self._config_store is not None:
+            try:
+                configured = str(
+                    getattr(
+                        self._config_store.load_debug_config(),
+                        "pdf_browser_path",
+                        "",
+                    )
+                    or ""
+                ).strip()
+                if configured and Path(configured).is_file():
+                    return configured
+            except Exception:
+                pass
+        return resolve_browser()
+
     def _print_pdf(self, html_path: Path, pdf_path: Path) -> None:
         """调用浏览器无头模式把 HTML 打印为 PDF（参考 exports/试卷.py 的命令行）。
 
         浏览器通常先返回、随后才把 PDF 落盘，因此打印后要等文件写出来；
         用独立用户数据目录，避免与本机正在运行的 Edge 冲突。
         """
-        browser = self._browser_path or resolve_browser()
+        browser = self._resolve_browser_path()
         if not browser:
             raise ExportError(
-                "未找到 Edge 浏览器（msedge.exe），无法导出 PDF；"
-                "可改用 MD 格式导出（内容一致）。"
+                "未找到可用的浏览器（msedge.exe 等），无法导出 PDF；"
+                "请在「设置 -> 调试」中指定浏览器路径，或改用 MD 格式导出。"
             )
         profile_dir = Path(DEFAULT_PDF_PROFILE_DIR).expanduser()
         try:

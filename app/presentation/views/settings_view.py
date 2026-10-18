@@ -188,6 +188,18 @@ class SettingsView(QWidget):
         self._debug_keep_md = QCheckBox("导出 PDF 时保留中间 MD 文件")
         form.addRow("导出选项", self._debug_keep_md)
 
+        # 3.1 PDF 浏览器路径
+        self._debug_browser_path = QLineEdit()
+        self._debug_browser_path.setPlaceholderText(
+            "留空则自动查找 Edge（msedge.exe）"
+        )
+        browse_btn = QPushButton("浏览...")
+        browse_btn.clicked.connect(self._on_browse_browser)
+        browser_row = QHBoxLayout()
+        browser_row.addWidget(self._debug_browser_path, 1)
+        browser_row.addWidget(browse_btn)
+        form.addRow("PDF 浏览器", browser_row)
+
         # 3. 远程 API 开关（保留）
         self._debug_disable_api = QCheckBox("禁用远程 API")
         form.addRow("网络选项", self._debug_disable_api)
@@ -242,8 +254,23 @@ class SettingsView(QWidget):
             self._debug_disable_api.setChecked(bool(getattr(dcfg, "disable_api", False)))
             self._debug_prewarm.setChecked(bool(getattr(dcfg, "prewarm_local_model", False)))
             self._debug_disable_local.setChecked(bool(getattr(dcfg, "disable_local_model", False)))
+            self._debug_browser_path.setText(
+                str(getattr(dcfg, "pdf_browser_path", "") or "")
+            )
         except Exception as e:
             print(f"[settings] 读取调试配置失败：{e}")
+
+    def _on_browse_browser(self) -> None:
+        """选择浏览器可执行文件并填入输入框。"""
+        current = self._debug_browser_path.text().strip()
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            "选择浏览器可执行文件",
+            current or "",
+            "可执行文件 (*.exe);;所有文件 (*)",
+        )
+        if path:
+            self._debug_browser_path.setText(path)
 
     def _on_save_debug(self) -> None:
         """保存调试配置。"""
@@ -260,7 +287,9 @@ class SettingsView(QWidget):
             prewarm_local_model=self._debug_prewarm.isChecked(),
             disable_local_model=self._debug_disable_local.isChecked(),
             disable_api=self._debug_disable_api.isChecked(),
-            disable_all_ai=getattr(old_dcfg, "disable_all_ai", False)
+            disable_all_ai=getattr(old_dcfg, "disable_all_ai", False),
+            theme=getattr(old_dcfg, "theme", "light"),
+            pdf_browser_path=self._debug_browser_path.text().strip(),
         )
         
         ok, _ = ui_utils.run_guarded(

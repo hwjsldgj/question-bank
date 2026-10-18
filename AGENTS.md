@@ -48,6 +48,7 @@ container.py  → 唯一能 import 具体实现的地方（组合根）
 | `QuestionOpRepository` | SQLiteQuestionOpRepository | QuestionService（写）/ QuestionHistoryService（读）|
 | `ConfigStore` | SQLiteConfigStore | container / SettingsView / QuestionService / DifficultyService |
 | `AIClient` | OpenAICompatibleAIClient | DifficultyService / QuestionGenerator |
+| `ILocalAIEngine` | LocalAIEngine | QuestionService（经 `_local_ai_engine` 私有字段访问） |
 | `BaseExporter` | MdExporter / PdfExporter | PaperExporter |
 
 `LocalImageStore`（`infrastructure/image_store.py`）不是 ABC，是直接注入的具体类。
@@ -78,10 +79,11 @@ container.py  → 唯一能 import 具体实现的地方（组合根）
 | 大类分类 | `models/section_model/` | 懒加载，13分类 (Macro-F1 0.95) |
 | 细分考点 | `models/subtopic_model/` | 懒加载，域内 Top-3 预测 (命中率 98.8%) |
 
-- 启动**不预热**（首次调用加载）
-- 加载代理：`app/infrastructure/ai/lazy_local_classifier.py`（含难度与知识点两套代理）
-- 分类器：`local_difficulty_classifier.py`（难度） / `local_knowledge_classifier.py`（知识点）
-- 调试 tab 可开关：禁用本地 / 禁用 API / 禁用全部 AI
+- 四核统一引擎：`app/infrastructure/ai/local_ai_engine.py`（`LocalAIEngine`）
+- 启动**默认不预热**；`DebugConfig.prewarm_local_model=True` 才在 `_ModelWarmer` 后台线程加载
+- 推理策略：模型 top-1 概率 >= 0.7 直接采用，否则规则兜底；`difficulty` 规则明确 hard/medium 时直接采用，否则模型复核
+- `type` 模型只喂题干 + 选项，答案不参与；单选/多选/填空/解答的细分由选项结构与答案形态规则决定
+- 调试 tab 可开关：禁用本地 / 禁用 API / 禁用全部 AI（`disable_all_ai` 覆盖前两者）
 
 ## 数据库 schema
 

@@ -628,13 +628,43 @@ class QuestionService:
         return getattr(self, "_local_ai_engine", None) is not None
 
     def ai_status_text(self) -> str:
-        """返回当前 AI 配置状态的可读文字。"""
+        """返回当前 AI 可用状态的可读文字（含调试开关）。
+
+        返回空串表示 AI 实际可用；否则返回给用户看的说明。
+        调试开关的判断在 QuestionService 层完成，AIClient 只负责纯 HTTP。
+        """
         if self._ai_client is None:
             return "未接入 AI 客户端。"
         try:
-            if self._ai_client.is_configured():
-                return "已配置。"
-            return "AI 服务未配置，请先到「设置 -> AI 设置」填写接口地址、API Key 与模型名称。"
+            debug = (
+                self._config_store.load_debug_config()
+                if self._config_store is not None
+                else None
+            )
+            disable_all = bool(getattr(debug, "disable_all_ai", False))
+            disable_local = bool(
+                disable_all or getattr(debug, "disable_local_model", False)
+            )
+            disable_api = bool(disable_all or getattr(debug, "disable_api", False))
+
+            local_ok = (
+                not disable_local
+                and getattr(self, "_local_ai_engine", None) is not None
+            )
+            api_ok = not disable_api and self._ai_client.is_configured()
+
+            if disable_all:
+                return "AI 功能已在「设置 -> 调试」中全部禁用。"
+            if local_ok and api_ok:
+                return ""
+            if local_ok and not api_ok:
+                return "远程 API 已禁用或未配置，仅本地模型可用。"
+            if api_ok and not local_ok:
+                return "本地模型已禁用或未加载，仅远程 API 可用。"
+            return (
+                "AI 服务不可用：本地模型已禁用且远程 API 未配置，"
+                "请到「设置 -> AI 设置」填写接口地址、API Key 与模型名称。"
+            )
         except Exception as e:
             return f"检查 AI 状态失败：{e}"
 

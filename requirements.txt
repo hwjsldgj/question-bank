@@ -1,7 +1,19 @@
+# 核心框架与 UI
 PySide6>=6.6
+
+# 数据与数据库
+# (SQLite 为 Python 标准库，无需安装)
+
+# AI 推理与模型
+torch>=2.5.0
+transformers>=4.45.0
+
+# 导出与渲染
 Markdown>=3.5
-reportlab>=4.0
+latex2mathml>=3.77.0
+
+# 网络请求与辅助
 requests>=2.31
 
-# 开发 / 测试依赖
+# 开发与测试依赖
 pytest>=8.0

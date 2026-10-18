@@ -154,6 +154,17 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     except Exception as e:
         print(f"[container] 本地知识点模型不可用：{e}")
 
+    local_type_clf = None
+    type_model_dir = Path(__file__).resolve().parent.parent / "models" / "type_model"
+    if type_model_dir.exists():
+        from app.infrastructure.ai.lazy_local_classifier import LazyTypeClassifier
+        local_type_clf = LazyTypeClassifier(type_model_dir)
+        print(f"[container] 本地题型模型（延迟加载）：{type_model_dir}")
+
+    from app.infrastructure.ai.lazy_local_classifier import LazySectionClassifier, LazySubtopicClassifier
+    local_section_clf = LazySectionClassifier(Path(__file__).resolve().parent.parent / "models" / "section_model")
+    local_subtopic_clf = LazySubtopicClassifier(Path(__file__).resolve().parent.parent / "models" / "subtopic_model")
+
     question_service = QuestionService(
         question_repository,
         question_validator,
@@ -163,6 +174,9 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         ai_client=ai_client,
         image_store=image_store,
         local_knowledge_clf=local_knowledge_clf,
+        local_section_clf=local_section_clf,
+        local_subtopic_clf=local_subtopic_clf,
+        local_type_clf=local_type_clf,
     )
 
     cooldown_policy = CooldownPolicy(scoring_config)
@@ -227,3 +241,16 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         task_history_service=task_history_service,
         question_history_service=question_history_service,
     )
+
+    def warm_up_models(self) -> None:
+        """后台预热模型：在启动画面期间偷偷加载，避免点击时卡顿。"""
+        import threading
+        def _load():
+            if self._local_knowledge_clf:
+                self._local_knowledge_clf.ensure_loaded()
+            if getattr(self, "_local_type_clf", None):
+                self._local_type_clf.ensure_loaded()
+            print("[container] 本地模型后台预热完成")
+        
+        t = threading.Thread(target=_load, daemon=True)
+        t.start()

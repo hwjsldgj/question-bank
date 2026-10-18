@@ -104,3 +104,59 @@ class LazyKnowledgeClassifier:
             if clf is not None:
                 return getattr(clf, name)
         raise AttributeError(name)
+
+
+class LazyTypeClassifier:
+    """延迟实例化本地题型分类器的代理。"""
+    def __init__(self, model_dir) -> None:
+        self._model_dir = Path(model_dir)
+        self._instance = None
+        self._failed = False
+
+    def _get(self):
+        if self._failed:
+            return None
+        if self._instance is None:
+            try:
+                from app.infrastructure.ai.local_type_classifier import LocalTypeClassifier
+                self._instance = LocalTypeClassifier(self._model_dir)
+            except Exception as e:
+                print(f"[lazy] 本地题型模型加载失败：{e}")
+                self._failed = True
+                return None
+        return self._instance
+
+    def is_available(self) -> bool:
+        weight = self._model_dir / "type_model.pt"
+        tok = self._model_dir / "type_tokenizer"
+        return weight.exists() and tok.exists()
+
+    def predict(self, stem: str, options: str = "", answer: str = "") -> str:
+        clf = self._get()
+        if clf is None:
+            raise RuntimeError("本地题型模型不可用")
+        return clf.predict(stem=stem, options=options, answer=answer)
+
+class LazySectionClassifier:
+    def __init__(self, model_dir):
+        self._model_dir = Path(model_dir)
+        self._instance = None
+    def _get(self):
+        if self._instance is None:
+            from app.infrastructure.ai.local_sec_sub_classifier import LocalSectionClassifier
+            self._instance = LocalSectionClassifier(self._model_dir)
+        return self._instance
+    def predict(self, stem, options="", answer=""):
+        return self._get().predict(stem, options, answer)
+
+class LazySubtopicClassifier:
+    def __init__(self, model_dir):
+        self._model_dir = Path(model_dir)
+        self._instance = None
+    def _get(self):
+        if self._instance is None:
+            from app.infrastructure.ai.local_sec_sub_classifier import LocalSubtopicClassifier
+            self._instance = LocalSubtopicClassifier(self._model_dir)
+        return self._instance
+    def predict(self, stem, section, options="", answer=""):
+        return self._get().predict(stem, section, options, answer)

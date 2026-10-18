@@ -258,6 +258,9 @@ class QuestionService:
         ai_client: AIClient | None = None,
         image_store=None,
         local_knowledge_clf=None,
+        local_type_clf=None,
+        local_section_clf=None,
+        local_subtopic_clf=None,
     ) -> None:
         """注入仓储、校验器、难度服务，以及可选的台账 / 配置 / AI 客户端 / 图片存储。"""
         self._repository = repository
@@ -268,6 +271,9 @@ class QuestionService:
         self._ai_client = ai_client
         self._image_store = image_store
         self._local_knowledge_clf = local_knowledge_clf
+        self._local_type_clf = local_type_clf
+        self._local_section_clf = local_section_clf
+        self._local_subtopic_clf = local_subtopic_clf
 
     # ------------------------------------------------------------------ CRUD
 

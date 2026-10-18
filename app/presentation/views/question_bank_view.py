@@ -31,7 +31,7 @@
 
 import re
 
-from PySide6.QtCore import Qt, QStringListModel, QModelIndex, Signal
+from PySide6.QtCore import Qt, QStringListModel, QModelIndex, Signal, QThread
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -435,6 +435,32 @@ class _DuplicateReviewDialog(QDialog):
                     table.setItem(row, column, item)
 
 
+
+class _LocalPredictWorker(QThread):
+    finished = Signal(str, str)  # (q_type, section)
+    error = Signal(str)
+
+    def __init__(self, type_clf, knowledge_clf, stem, opt_str):
+        super().__init__()
+        self.type_clf = type_clf
+        self.knowledge_clf = knowledge_clf
+        self.stem = stem
+        self.opt_str = opt_str
+
+    def run(self):
+        try:
+            q_type = ""
+            section = ""
+            if self.type_clf:
+                q_type = self.type_clf.predict(self.stem, self.opt_str, "")
+            if self.knowledge_clf:
+                sec = self.knowledge_clf.predict(self.stem, self.opt_str, "")
+                if sec and sec != "其他":
+                    section = sec
+            self.finished.emit(q_type, section)
+        except Exception as e:
+            self.error.emit(str(e))
+
 class QuestionBankView(QWidget):
     """题库管理视图：题目增删改查、批量粘贴与检索界面。"""
 
@@ -576,7 +602,7 @@ class QuestionBankView(QWidget):
         form.addRow(self._image_container)
 
         # AI 补全与辨识按钮
-        self._local_btn = QPushButton("本地极速补全（知识点）")
+        self._local_btn = QPushButton("本地极速补全（题型+板块）")
         self._local_btn.setToolTip("仅使用本地模型秒级识别知识点，不消耗 API")
         self._local_btn.clicked.connect(self._on_local_recognize_clicked)
         
@@ -1158,14 +1184,45 @@ class QuestionBankView(QWidget):
             self._recognize_note.setText("AI 结果仅供参考，需人工复核。")
 
     def _on_local_recognize_clicked(self) -> None:
-        """强制走本地极速补全知识点。"""
+        """强制走本地极速补全（题型 + 大类 + 细分考点）。"""
         stem = self._stem_edit.toPlainText().strip()
         if not stem:
             ui_utils.info(self, "请先填写题干。")
             return
-        # 本地只补全知识点
-        modules = [RecognizeModule.KNOWLEDGE_POINTS]
-        self._do_recognize(stem, modules, include_solution=False, skip_local=False)
+        
+        options = self._collect_options()
+        opt_str = " ".join(f"{o.key}. {o.text}" for o in options)
+        
+        # 1. 识别题型
+        if getattr(self._question_service, "_local_type_clf", None):
+            try:
+                q_type = self._question_service._local_type_clf.predict(stem, opt_str, "")
+                idx = self._type_combo.findData(QuestionType(q_type))
+                if idx >= 0:
+                    self._type_combo.setCurrentIndex(idx)
+            except Exception as e:
+                print(f"题型识别失败: {e}")
+
+        # 2. 识别大类板块
+        section = ""
+        if getattr(self._question_service, "_local_section_clf", None):
+            try:
+                section = self._question_service._local_section_clf.predict(stem, opt_str, "")
+                if section:
+                    self._section_combo.setCurrentText(section)
+            except Exception as e:
+                print(f"大类识别失败: {e}")
+                
+        # 3. 识别细分考点 (依赖大类结果)
+        if section and getattr(self._question_service, "_local_subtopic_clf", None):
+            try:
+                kps = self._question_service._local_subtopic_clf.predict(stem, section, opt_str, "")
+                if kps:
+                    self._knowledge_edit.setText("、".join(kps))
+            except Exception as e:
+                print(f"细分考点识别失败: {e}")
+
+        self._recognize_note.setText("本地极速补全完成，请人工复核。")
 
     def _on_api_recognize_clicked(self) -> None:
         """调用云端 API，弹窗内可勾选模块并实时预览 Prompt。"""
@@ -1253,6 +1310,14 @@ class QuestionBankView(QWidget):
             ui_utils.warning(self, f"AI 辨识失败: {e}")
         finally:
             self._recognize_note.setText("AI 结果仅供参考，需人工复核。")
+
+    def _requested_modules(self) -> list[RecognizeModule]:
+        """兼容批量导入：默认请求所有模块。"""
+        return list(RECOGNIZE_MODULES)
+
+    def _wants_solution(self) -> bool:
+        """兼容批量导入：默认生成解析。"""
+        return True
 
     def _show_ai_issues(self, issues: list[str], title: str = "AI 返回内容有问题") -> None:
         """弹窗展示 AI 返回内容的问题清单。"""

@@ -113,7 +113,21 @@ class ILocalAIEngine(ABC):
 | 调用方 | `QuestionService`、`MainWindow` |
 | 语义 | 延迟加载四大模型。`predict_all` 返回 `{"type", "section", "knowledge_points", "difficulty"}`，自带 80% 置信度阈值与规则兜底。 |
 
-### 1.8 BaseExporter —— 试卷导出器
+### 1.8 PresetRepository —— 预设仓储（新增）
+
+```python
+class PresetRepository(ABC):
+    def load_all(self) -> list[PaperPreset]
+    def save_all(self, presets: list[PaperPreset]) -> None
+```
+
+| 项 | 说明 |
+|----|------|
+| 实现 | `SQLitePresetRepository` |
+| 调用方 | `PresetService` |
+| 语义 | 仅负责用户自定义预设的读写。内置预设由 `config/builtin_presets.py` 提供。 |
+
+### 1.9 BaseExporter —— 试卷导出器
 
 ```python
 class BaseExporter(ABC):

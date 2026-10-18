@@ -102,6 +102,8 @@ flowchart LR
 | 文件 | 依赖 | 被谁使用 |
 |------|------|----------|
 | `presentation/main_window.py` | `PySide6.QtGui`/`QtWidgets`、`app/container.Container`、`presentation/views/*`、`presentation/ui_utils`、`domain/entities/criteria`（复用信号载荷） | `main.py` |
+| `infrastructure/exporters/pdf_exporter.py` | `markdown`、`latex2mathml`（离线公式渲染） | `application/paper_exporter` |
+| `application/preset_service.py` | `config.builtin_presets`、`interfaces.preset_repository` | `presentation/widgets/preset_bar`、`container` |
 | `presentation/theme.py` | `PySide6.QtWidgets`（QApplication） | `main.py`（启动应用）、`presentation/views/settings_view.py`（切换主题）、`presentation/views/question_bank_view.py` / `settings_view.py`（读取 current_color） |
 | `presentation/ui_utils.py` | `PySide6.QtCore`/`QtWidgets`、`domain/enums`（标签映射）、`domain/errors`（异常分类） | `presentation/main_window.py`、`presentation/views/*` |
 | `presentation/views/question_bank_view.py` | `PySide6.QtCore`/`QtGui`/`QtWidgets`、`presentation/ui_utils`、`application/question_service`（模块定义 / 逐项检查 / 按需辨识）、`domain/entities/question`、`domain/enums`、`app/container.Container`（取 QuestionService、UsageRepository、image_store） | `presentation/main_window.py`（发出 `questions_changed`） |

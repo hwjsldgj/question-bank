@@ -162,6 +162,7 @@ MD 中间产物默认删（调试 tab 可保留）。导出目录由程序指定
 | 改什么 | 去哪 |
 |---|---|
 | 导出渲染（Typst→LaTeX）| `app/infrastructure/exporters/md_exporter.py` |
+| PDF 渲染（离线 MathML）| `app/infrastructure/exporters/pdf_exporter.py`（使用 latex2mathml 纯离线转换）|
 | Typst 图渲染 PNG | `app/infrastructure/exporters/typst_renderer.py` |
 | PDF 生成（HTML / MathJax / CSS）| `app/infrastructure/exporters/pdf_exporter.py` |
 | 组卷算法 / 去重 | `app/application/paper_composer.py` |
@@ -180,6 +181,7 @@ MD 中间产物默认删（调试 tab 可保留）。导出目录由程序指定
 - **难度**：`Difficulty`（EASY / MEDIUM / HARD / PENDING）；`difficulty_source` 区分 ai / manual
 - **组卷条件**：`PaperCriteria`（每题型多条 `TypeRequirement`）；同题型多条合并成一分区，全卷去重
 - **AI 调用**：全部需用户确认（`confirmed=True`）；返回有 `issues` 时弹窗
+- **预设模板**：`PresetService` 管理组卷条件。内置 3 套（`app/config/builtin_presets.py`），用户自定义的存于 settings 表，通过 `PresetRepository` 隔离
 
 ## 数据
 
@@ -203,6 +205,7 @@ MD 中间产物默认删（调试 tab 可保留）。导出目录由程序指定
 7. **数学里的 `*` 会被 Markdown 当强调**，需改成 `^{*}` 或 `\ast`
 8. **MathJax SVG 输出斜体是字形路径**，CSS 覆盖不了——必须用 CHTML（`tex-chtml.js`）
 9. **测试首次加载 PyTorch 会卡 20 多秒**：`tests/conftest.py` 已强制注入 Mock 库拦截，如需跑真实模型测试请临时注释。
+10. **禁止在 PDF 导出中使用外部 CDN 的 MathJax**：国内网络不稳会导致 Edge 无头模式卡死/报错。已改用 Python 库 `latex2mathml` 纯离线转换。
 
 ## 渲染转换流程（改 md_exporter 前必读）
 

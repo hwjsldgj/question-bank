@@ -81,6 +81,8 @@ workspace/
 │   │   └── config_store.py        配置持久化实现（AI / 评分 / 提示词 / 科目）
 │   └── presentation/              表现层（PySide6）
 │       ├── main_window.py         主窗口（菜单 / 状态栏 / 四标签页 / 信号协调）
+│       ├── theme.py               主题模块：DARK/LIGHT 双调色板 + 全局 QSS
+│       ├── widgets/               可复用 UI 组件（如 preset_bar.py）
 │       ├── ui_utils.py            共享工具（枚举标签 / 对话框 / 受限调用包装 /
 │       │                          题目详情弹窗 show_question_detail）
 │       ├── theme.py               主题：DARK/LIGHT 双调色板 + 全局 QSS + apply_theme

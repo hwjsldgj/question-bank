@@ -1,10 +1,14 @@
-﻿# AI Tools
+# ============================================================
+# AI Tools
+# ============================================================
 .claude
 .gemini
 .opencode
 .dshwolf
 
+# ============================================================
 # IDE and Editors
+# ============================================================
 **/.idea/
 **/.vscode/
 *.swp
@@ -19,6 +23,9 @@
 **/.ropeproject/
 *.code-workspace
 
+# ============================================================
+# OS 系统文件
+# ============================================================
 # macOS
 **/.DS_Store
 **/.AppleDouble
@@ -38,31 +45,22 @@
 **/.fuse_hidden*
 **/.nfs*
 
-# Node.js
-**/node_modules/
-**/npm-debug.log*
-**/yarn-debug.log*
-**/yarn-error.log*
-**/.npm
-**/.yarn/cache
-**/.pnpm-store/
-**/*.tsbuild*
-
+# ============================================================
 # Python
+# ============================================================
 **/__pycache__/
 *.py[cod]
 *$py.class
 
-# 本机运行数据（需求 R18：题库 / 使用记录 / 配置仅存本机）
-*.db
-*.sqlite
-*.sqlite3
-images/
-exports/
-**/.Python
+# 虚拟环境
+**/.venv/
+**/venv/
+**/ENV/
+
+# 构建产物
 **/build/
-**/develop-eggs/
 **/dist/
+**/develop-eggs/
 **/downloads/
 **/eggs/
 **/.eggs/
@@ -73,12 +71,121 @@ exports/
 *.egg-info/
 **/.installed.cfg
 *.egg
-**/.venv/
-**/venv/
-**/ENV/
+
+# 测试/类型检查缓存
 **/.pytest_cache/
 **/.mypy_cache/
 **/.ruff_cache/
+
+# Python 备份文件
+*.py.bak*
+*.bak_*
+
+# ============================================================
+# 本机运行数据（需求 R18：题库 / 使用记录 / 配置仅存本机）
+# ============================================================
+*.db
+*.sqlite
+*.sqlite3
+question_bank_backup_*.db
+images/
+exports/
+exports*/
+data/
+
+# ============================================================
+# 本地模型（训练产物，不进 git）
+# ============================================================
+models/
+
+# ============================================================
+# 临时 / 诊断 / 补丁文件
+# ============================================================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.cache
+**/.cache/
+**/tmp/
+**/temp/
+
+# 临时补丁脚本
+patch*.py
+fix_*.py
+diag.py
+diag_*.py
+apply_local_model.py
+
+# 测试诊断目录
+_ptmp*/
+_pytest_tmp*/
+_tmp_*/
+pytest-cache-files-*/
+pytest-of-*/
+
+# 注意：不使用 test_*.py 全局忽略（会误伤 tests/ 下的正式测试）；
+# 如根目录出现临时 test_xxx.py 请手动删除或改名为 diag_test_xxx.py
+
+# ============================================================
+# 日志
+# ============================================================
+*.log
+**/logs/
+
+# ============================================================
+# 环境与密钥
+# ============================================================
+**/.env
+**/.env.local
+**/.env.*.local
+*.pem
+*.key
+
+# AI 批量打标脚本（内含 Key）
+scripts/batch_tag_knowledge.py
+scripts/tag_failed.txt
+
+# ============================================================
+# 其他工具产物
+# ============================================================
+typst_assets/
+dbcheck/
+questions/
+
+# ============================================================
+# 压缩包
+# ============================================================
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tbz2
+*.tar.xz
+*.txz
+*.gz
+*.bz2
+*.xz
+*.Z
+*.lz
+*.lzma
+*.iso
+
+# ============================================================
+# 其他语言（保留以防误加）
+# ============================================================
+# Node.js
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/.npm
+**/.yarn/cache
+**/.pnpm-store/
+**/*.tsbuild*
 
 # Java
 *.class
@@ -107,150 +214,3 @@ exports/
 **/.bundle/
 **/vendor/bundle
 **/.byebug_history
-
-# Logs
-*.log
-**/logs/
-
-# Environment and secrets
-**/.env
-**/.env.local
-**/.env.*.local
-*.pem
-*.key
-
-# Temporary files
-*.tmp
-*.temp
-*.bak
-*.backup
-*.cache
-**/.cache/
-**/tmp/
-**/temp/
-
-# Dart
-**/.dart_tool/
-**/*.dart_tool
-**/analysis_options.yaml
-**/.packages
-**/.pub-cache/
-**/.pub/
-
-# Flutter
-**/flutter_export_environment.sh
-**/flutter_export_environment.bat
-**/.flutter-plugins
-**/.flutter-plugins-dependencies
-**/.flutter-plugins-dependencies.lock
-**/.metadata
-**/.flutter_build
-**/build/
-**/.dart_tool/
-**/ios/Pods/
-**/ios/.symlinks/
-**/ios/Flutter/ephemeral/
-**/ios/Podfile.lock
-**/ios/.generated/
-**/android/**/generated/
-**/android/.gradle/
-**/android/gradlew
-**/android/gradlew.bat
-**/android/local.properties
-**/android/**/GeneratedPluginRegistrant.java
-**/android/**/flutter_*.json
-**/web/.dart_tool/
-**/web/build/
-**/.flutter-plugins
-**/.flutter-plugins-dependencies
-
-# Compressed files
-*.zip
-*.rar
-*.7z
-*.tar
-*.tar.gz
-*.tgz
-*.tar.bz2
-*.tbz2
-*.tar.xz
-*.txz
-*.gz
-*.bz2
-*.xz
-*.Z
-*.lz
-*.lzma
-*.iso
-
-models/
-
-patch*.py
-fix_*.py
-diag.py
-apply_local_model.py
-
-question_bank_backup_*.db
-
-# 测试/诊断临时文件
-diag_*.py
-test_*.py
-exports*/
-_ptmp*/
-_pytest_tmp*/
-_tmp_*/
-pytest-cache-files-*/
-pytest-of-*/
-__pycache__/
-
-typst_assets/
-
-# 工具/缓存
-.cache/
-.dshwolf/
-data/
-dbcheck/
-questions/
-
-# 测试诊断
-diag_*.py
-test_*.py
-
-# 本地模型文件（训练产物，不进 git）
-models/
-
-# 临时补丁脚本
-patch*.py
-fix_*.py
-diag.py
-apply_local_model.py
-
-# 数据库备份
-question_bank_backup_*.db
-
-# 测试/诊断临时文件
-diag_*.py
-test_*.py
-exports*/
-_ptmp*/
-_pytest_tmp*/
-_tmp_*/
-pytest-cache-files-*/
-pytest-of-*/
-__pycache__/
-
-# 工具/缓存
-.cache/
-.dshwolf/
-data/
-dbcheck/
-questions/
-
-typst_assets/
-# Python 备份文件
-*.py.bak*
-*.bak_*
-
-# AI 批量打标脚本（内含 Key）
-scripts/batch_tag_knowledge.py
-scripts/tag_failed.txt

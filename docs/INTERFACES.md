@@ -122,6 +122,7 @@ class BaseExporter(ABC):
 
 | 实现 | `MdExporter`、`PdfExporter` |
 | 调用方 | `PaperExporter` |
+| 浏览器解析 | `PdfExporter._resolve_browser_path` 优先级：构造参数 `browser_path` > `DebugConfig.pdf_browser_path`（非空且文件存在） > `DEFAULT_PDF_BROWSER_PATHS` 自动查找。导出失败时抛出 `ExportError` 提示用户在「设置 -> 调试」中指定路径。 |
 
 ---
 

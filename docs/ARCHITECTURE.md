@@ -81,7 +81,9 @@ workspace/
 │   │   └── config_store.py        配置持久化实现（AI / 评分 / 提示词 / 科目）
 │   └── presentation/              表现层（PySide6）
 │       ├── main_window.py         主窗口（菜单 / 状态栏 / 四标签页 / 信号协调）
-│       ├── ui_utils.py            共享工具（枚举标签 / 对话框 / 受限调用包装）
+│       ├── ui_utils.py            共享工具（枚举标签 / 对话框 / 受限调用包装 /
+│       │                          题目详情弹窗 show_question_detail）
+│       ├── theme.py               主题：DARK/LIGHT 双调色板 + 全局 QSS + apply_theme
 │       └── views/                 题库 / 组卷 / 历史 / 设置四个视图
 └── tests/                         测试（冒烟 / 校验器 / 题目服务 / 配置 / 表现层离屏）
 ```
@@ -186,3 +188,7 @@ QuestionBankView（勾选辨识模块）
 - **历史**：组卷历史 / 导入历史 / 编辑历史（操作台账）
 - **AI 调用**：全部需用户手动确认；模块化一次返回；返回内容有问题时弹窗列清单；未勾选的字段既不生成也不覆盖
 - **界面**：视图统一经 ui_utils.run_guarded / safe_call 调用服务，异常给出可读提示
+- **主题**：浅色 / 暗色双主题（`presentation/theme.py`），设置页「外观」切换后立即生效并持久化到 DebugConfig.theme
+- **题目详情**：检索 / 组卷结果表双击弹窗（`ui_utils.show_question_detail`），只读展示元信息、题干、选项、答案、解析
+- **国际化**：启动时加载 `qtbase_zh_CN`，QMessageBox / QDialogButtonBox 等标准控件按钮显示中文
+- **PDF 浏览器**：DebugConfig.pdf_browser_path 可自定义浏览器路径；空串时按默认候选自动查找 Edge

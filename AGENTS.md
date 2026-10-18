@@ -74,7 +74,6 @@ container.py  → 唯一能 import 具体实现的地方（组合根）
 
 | 模型 | 位置 | 用法 |
 |---|---|---|
-| 难度分类 | `models/difficulty_model/` | 懒加载，CPU 单题 < 1 秒 |
 | 题型分类 | `models/type_model/` | 懒加载，4分类 (Macro-F1 0.94) |
 | 大类分类 | `models/section_model/` | 懒加载，13分类 (Macro-F1 0.95) |
 | 细分考点 | `models/subtopic_model/` | 懒加载，域内 Top-3 预测 (命中率 98.8%) |

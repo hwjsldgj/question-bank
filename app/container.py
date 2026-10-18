@@ -143,16 +143,15 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
     # 注：旧的 15 分类知识点模型（knowledge_model）已被 section_model 和 subtopic_model 取代。
     local_knowledge_clf = None
 
-    local_type_clf = None
-    type_model_dir = Path(__file__).resolve().parent.parent / "models" / "type_model"
-    if type_model_dir.exists():
-        from app.infrastructure.ai.lazy_local_classifier import LazyTypeClassifier
-        local_type_clf = LazyTypeClassifier(type_model_dir)
-        print(f"[container] 本地题型模型（延迟加载）：{type_model_dir}")
-
-    from app.infrastructure.ai.lazy_local_classifier import LazySectionClassifier, LazySubtopicClassifier
-    local_section_clf = LazySectionClassifier(Path(__file__).resolve().parent.parent / "models" / "section_model")
-    local_subtopic_clf = LazySubtopicClassifier(Path(__file__).resolve().parent.parent / "models" / "subtopic_model")
+    debug_config = config_store.load_debug_config()
+    local_ai_engine = None
+    if not debug_config.disable_local_model:
+        from app.presentation.signal_bus import bus
+        from app.infrastructure.ai.local_ai_engine import LocalAIEngine
+        local_ai_engine = LocalAIEngine(Path(__file__).resolve().parent.parent / "models")
+        local_ai_engine.on_status_change = lambda msg: bus.status_message.emit(msg)
+    else:
+        print("[container] 本地 AI 引擎已被彻底禁用（DebugConfig）")
 
     question_service = QuestionService(
         question_repository,
@@ -162,10 +161,7 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         config_store=config_store,
         ai_client=ai_client,
         image_store=image_store,
-        local_knowledge_clf=local_knowledge_clf,
-        local_section_clf=local_section_clf,
-        local_subtopic_clf=local_subtopic_clf,
-        local_type_clf=local_type_clf,
+        local_ai_engine=local_ai_engine,
     )
 
     cooldown_policy = CooldownPolicy(scoring_config)

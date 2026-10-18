@@ -507,3 +507,15 @@ class TagInput(QWidget):
         )
         layout.addWidget(remove)
         return tag
+
+
+def confirm_ai_call(parent, action_desc: str) -> bool:
+    """统一的云端 AI 调用确认弹窗。"""
+    from PySide6.QtWidgets import QMessageBox
+    msg = QMessageBox(parent)
+    msg.setIcon(QMessageBox.Icon.Question)
+    msg.setWindowTitle("AI 调用确认")
+    msg.setText(f"即将执行：{action_desc}\n\n这将调用云端 AI API，消耗额度。是否继续？")
+    msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    msg.setDefaultButton(QMessageBox.StandardButton.No)
+    return msg.exec() == QMessageBox.StandardButton.Yes

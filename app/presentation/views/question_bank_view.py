@@ -74,6 +74,7 @@ from app.domain.enums import (
     RecognizeModule,
 )
 from app.presentation import ui_utils
+from app.presentation.signal_bus import bus
 
 #: 图片预览的最大尺寸（像素）
 PREVIEW_SIZE = (220, 160)
@@ -458,6 +459,24 @@ class _LocalPredictWorker(QThread):
                 if sec and sec != "其他":
                     section = sec
             self.finished.emit(q_type, section)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class _LocalAIWorker(QThread):
+    finished = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, engine, stem, opt_str):
+        super().__init__()
+        self.engine = engine
+        self.stem = stem
+        self.opt_str = opt_str
+
+    def run(self):
+        try:
+            res = self.engine.predict_all(self.stem, self.opt_str, "")
+            self.finished.emit(res)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -1184,7 +1203,7 @@ class QuestionBankView(QWidget):
             self._recognize_note.setText("AI 结果仅供参考，需人工复核。")
 
     def _on_local_recognize_clicked(self) -> None:
-        """强制走本地极速补全（题型 + 大类 + 细分考点）。"""
+        """强制走本地统一 AI 引擎补全（后台线程，拒绝假死）。"""
         stem = self._stem_edit.toPlainText().strip()
         if not stem:
             ui_utils.info(self, "请先填写题干。")
@@ -1193,36 +1212,47 @@ class QuestionBankView(QWidget):
         options = self._collect_options()
         opt_str = " ".join(f"{o.key}. {o.text}" for o in options)
         
-        # 1. 识别题型
-        if getattr(self._question_service, "_local_type_clf", None):
-            try:
-                q_type = self._question_service._local_type_clf.predict(stem, opt_str, "")
-                idx = self._type_combo.findData(QuestionType(q_type))
-                if idx >= 0:
-                    self._type_combo.setCurrentIndex(idx)
-            except Exception as e:
-                print(f"题型识别失败: {e}")
+        engine = getattr(self._question_service, "_local_ai_engine", None)
+        if not engine:
+            ui_utils.warning(self, "本地 AI 引擎未开启或被禁用。")
+            return
 
-        # 2. 识别大类板块
-        section = ""
-        if getattr(self._question_service, "_local_section_clf", None):
-            try:
-                section = self._question_service._local_section_clf.predict(stem, opt_str, "")
-                if section:
-                    self._section_combo.setCurrentText(section)
-            except Exception as e:
-                print(f"大类识别失败: {e}")
-                
-        # 3. 识别细分考点 (依赖大类结果)
-        if section and getattr(self._question_service, "_local_subtopic_clf", None):
-            try:
-                kps = self._question_service._local_subtopic_clf.predict(stem, section, opt_str, "")
-                if kps:
-                    self._knowledge_edit.setText("、".join(kps))
-            except Exception as e:
-                print(f"细分考点识别失败: {e}")
+        bus.status_message.emit("AI: 本地推理中（首次加载需 5 秒，请稍候）...")
+        self._local_btn.setEnabled(False)
+        
+        self._ai_worker = _LocalAIWorker(engine, stem, opt_str)
+        self._ai_worker.finished.connect(self._on_local_ai_finished)
+        self._ai_worker.error.connect(self._on_local_ai_error)
+        self._ai_worker.start()
 
-        self._recognize_note.setText("本地极速补全完成，请人工复核。")
+    def _on_local_ai_finished(self, res: dict) -> None:
+        # 填充 UI
+        if res.get("type"):
+            target_val = res["type"]
+            for i in range(self._type_combo.count()):
+                item_data = self._type_combo.itemData(i)
+                if item_data and getattr(item_data, "value", str(item_data)) == target_val:
+                    self._type_combo.setCurrentIndex(i)
+                    break
+        if res.get("section"):
+            self._section_combo.setCurrentText(res["section"])
+        if res.get("knowledge_points"):
+            self._knowledge_edit.setText(res["knowledge_points"])
+        if res.get("difficulty"):
+            target_val = res["difficulty"]
+            for i in range(self._difficulty_combo.count()):
+                item_data = self._difficulty_combo.itemData(i)
+                if item_data and getattr(item_data, "value", str(item_data)) == target_val:
+                    self._difficulty_combo.setCurrentIndex(i)
+                    break
+
+        bus.status_message.emit("AI: 本地极速补全完成")
+        self._local_btn.setEnabled(True)
+
+    def _on_local_ai_error(self, err: str) -> None:
+        bus.status_message.emit("AI: 补全失败")
+        self._local_btn.setEnabled(True)
+        ui_utils.warning(self, f"本地 AI 推理失败: {err}")
 
     def _on_api_recognize_clicked(self) -> None:
         """调用云端 API，弹窗内可勾选模块并实时预览 Prompt。"""
@@ -1235,13 +1265,11 @@ class QuestionBankView(QWidget):
             ui_utils.warning(self, self._question_service.ai_status_text() or "AI 服务不可用。")
             return
 
-        # 构造弹窗
         dialog = QDialog(self)
         dialog.setWindowTitle("预览并发送云端 API 请求")
         dialog.resize(750, 600)
         layout = QVBoxLayout(dialog)
 
-        # 勾选模块区
         module_group = QGroupBox("选择需要 AI 辨识的模块")
         module_layout = QHBoxLayout(module_group)
         checks = {}
@@ -1252,20 +1280,17 @@ class QuestionBankView(QWidget):
             module_layout.addWidget(check)
         layout.addWidget(module_group)
 
-        # Prompt 预览区
         layout.addWidget(QLabel("将要发送的 Prompt 预览："))
         text_edit = QPlainTextEdit()
         text_edit.setReadOnly(True)
         layout.addWidget(text_edit)
 
-        # 按钮区
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("确认发送 (消耗 API)")
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("确认发送")
         btn_box.accepted.connect(dialog.accept)
         btn_box.rejected.connect(dialog.reject)
         layout.addWidget(btn_box)
 
-        # 更新 Prompt 的逻辑
         def update_prompt():
             modules = [m for m, c in checks.items() if c.isChecked()]
             include_solution = RecognizeModule.SOLUTION in modules
@@ -1278,14 +1303,10 @@ class QuestionBankView(QWidget):
             except Exception as e:
                 text_edit.setPlainText(f"生成预览失败: {e}")
 
-        # 绑定信号
         for check in checks.values():
             check.stateChanged.connect(update_prompt)
-        
-        # 初始化
         update_prompt()
 
-        # 弹窗交互
         if dialog.exec() == QDialog.DialogCode.Accepted:
             modules = [m for m, c in checks.items() if c.isChecked()]
             if not modules:
@@ -1293,6 +1314,11 @@ class QuestionBankView(QWidget):
                 return
             include_solution = RecognizeModule.SOLUTION in modules
             prompt_text = text_edit.toPlainText()
+            
+            # 🚨 统一 AI 弹窗确认
+            if not ui_utils.confirm_ai_call(self, "云端 API 辨识"):
+                return
+                
             self._do_recognize(stem, modules, include_solution, skip_local=True, prompt_override=prompt_text)
 
     def _do_recognize(self, stem: str, modules: list, include_solution: bool, skip_local: bool, prompt_override: str | None = None) -> None:

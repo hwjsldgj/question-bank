@@ -31,9 +31,13 @@ from PySide6.QtWidgets import (
 from app.container import Container
 from app.domain.entities.criteria import PaperCriteria
 from app.presentation import ui_utils
+from app.presentation.signal_bus import bus
 from app.presentation.views.history_view import HistoryView
+from app.presentation.signal_bus import bus
 from app.presentation.views.paper_generation_view import PaperGenerationView
+from app.presentation.signal_bus import bus
 from app.presentation.views.question_bank_view import QuestionBankView
+from app.presentation.signal_bus import bus
 from app.presentation.views.settings_view import SettingsView
 
 #: 标签页标题（顺序即视图切加快捷键 Ctrl+1..4 的顺序）
@@ -51,6 +55,7 @@ class MainWindow(QMainWindow):
         self._resize_to_screen()
 
         self._build_views()
+        bus.status_message.connect(self.statusBar().showMessage)
         self._build_tabs()
         self._build_menu()
         self._build_statusbar()
@@ -61,7 +66,15 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ 构建
 
+
+
     def _build_views(self) -> None:
+        # 检查是否开启预热
+        debug_config = self._container.config_store.load_debug_config()
+        engine = getattr(self._container.question_service, "_local_ai_engine", None)
+        if debug_config.prewarm_local_model and engine:
+            engine.warm_up()
+
         """实例化四个视图（均以容器为唯一依赖来源）。"""
         self.question_bank_view = QuestionBankView(self._container)
         self.paper_generation_view = PaperGenerationView(self._container)

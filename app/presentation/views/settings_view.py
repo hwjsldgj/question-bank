@@ -25,7 +25,7 @@ import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QFont, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QDoubleSpinBox,
     QFormLayout,
+    QGroupBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -92,91 +93,130 @@ class SettingsView(QWidget):
         root.addWidget(self._inner_tabs)
 
     def _build_debug_tab(self) -> QWidget:
-        """构建调试设置页：临时开关，方便开发排查。"""
+        """构建调试设置页：只展示本地 AI 引擎状态与必要的导出选项。"""
         page = QWidget()
         layout = QVBoxLayout(page)
+
+        # 1. 本地 AI 状态面板
+        self._model_status_group = QGroupBox("本地四核 AI 引擎状态")
+        status_layout = QVBoxLayout(self._model_status_group)
+        
+        self._model_status_labels = {}
+        models_info = [
+            ("type", "题型分类模型", "models/type_model"),
+            ("section", "大类板块分类", "models/section_model"),
+            ("subtopic", "细分考点提取", "models/subtopic_model"),
+            ("difficulty", "难度分类模型", "models/difficulty_train_model")
+        ]
+        
+        for key, name, path in models_info:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"{name}："))
+            status_lbl = QLabel("检查中...")
+            status_lbl.setStyleSheet("color: gray;")
+            row.addWidget(status_lbl)
+            row.addWidget(QLabel(f" ({path})"))
+            row.addStretch(1)
+            status_layout.addLayout(row)
+            self._model_status_labels[key] = status_lbl
+
+        refresh_btn = QPushButton("刷新模型状态")
+        refresh_btn.clicked.connect(self._check_local_models)
+        status_layout.addWidget(refresh_btn, alignment=Qt.AlignLeft)
+        
+        layout.addWidget(self._model_status_group)
+
+        # 2. 模型控制选项
         form = QFormLayout()
+        
+        self._debug_prewarm = QCheckBox("启动时后台预热模型（多等 3~5 秒，但点击秒出）")
+        form.addRow("预热模式", self._debug_prewarm)
+        
+        self._debug_disable_local = QCheckBox("彻底禁用本地模型（仅使用云端 API）")
+        form.addRow("禁用本地", self._debug_disable_local)
 
+        # 3. 导出选项（保留）
         self._debug_keep_md = QCheckBox("导出 PDF 时保留中间 MD 文件")
-        self._debug_keep_md.setToolTip(
-            "开启后，每次导出 PDF 都会在 exports/ 目录同时保留 .md 源文件；"
-            "关闭后仅保留 PDF（默认）。"
-        )
-        form.addRow("保留中间 MD", self._debug_keep_md)
+        form.addRow("导出选项", self._debug_keep_md)
 
-        self._debug_prewarm = QCheckBox("启动时预热本地模型")
-        self._debug_prewarm.setToolTip(
-            "勾选后，启动时后台加载本地难度模型（多等 8~15 秒）；"
-            "不勾选（默认）时主窗口立刻可用，本地模型在首次调用时再加载。"
-        )
-        form.addRow("启动预热", self._debug_prewarm)
-
-        self._debug_disable_local = QCheckBox("彻底禁用本地模型")
-        self._debug_disable_local.setToolTip(
-            "勾选后，本地难度模型完全不加载（AI 难度分析不可用）。"
-        )
-        form.addRow("禁用本地模型", self._debug_disable_local)
-
+        # 3. 远程 API 开关（保留）
         self._debug_disable_api = QCheckBox("禁用远程 API")
-        self._debug_disable_api.setToolTip(
-            "开启后，所有远程 AI 调用（辨识 / 补题 / 难度）会直接拒绝。"
-        )
-        form.addRow("禁用远程 API", self._debug_disable_api)
-
-        self._debug_disable_all = QCheckBox("禁用全部 AI（覆盖上面两项）")
-        self._debug_disable_all.setToolTip(
-            "开启后，本地模型 + 远程 API 全部禁用。"
-        )
-        form.addRow("禁用全部 AI", self._debug_disable_all)
-
-        save_btn = QPushButton("保存调试配置")
+        form.addRow("网络选项", self._debug_disable_api)
+        
+        save_btn = QPushButton("保存配置")
         save_btn.clicked.connect(self._on_save_debug)
         form.addRow(save_btn)
-
-        note = QLabel(
-            "调试选项仅影响本机行为，可随时开关。"
-        )
-        note.setWordWrap(True)
-        form.addRow(note)
-
+        
         layout.addLayout(form)
-        layout.addStretch(1)
 
-        self._load_debug_config()
+        note = QLabel("注：本地四大模型将在首次点击补全时自动加载，加载后常驻内存。")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #666;")
+        layout.addWidget(note)
+
+        layout.addStretch(1)
+        self._check_local_models()
         return page
+
+    def _check_local_models(self) -> None:
+        """检查 models 目录下四个模型的状态。"""
+        root = Path(__file__).resolve().parents[3] / "models"
+        
+        for key in ["type", "section", "subtopic", "difficulty"]:
+            path = root / f"{key}_model" if key != "difficulty" else root / "difficulty_train_model"
+            if not path.exists():
+                self._model_status_labels[key].setText("❌ 缺失目录")
+                self._model_status_labels[key].setStyleSheet("color: red;")
+                continue
+                
+            pt_files = list(path.glob("*.pt"))
+            if not pt_files:
+                self._model_status_labels[key].setText("❌ 缺失权重")
+                self._model_status_labels[key].setStyleSheet("color: red;")
+            else:
+                size_mb = pt_files[0].stat().st_size / (1024 * 1024)
+                self._model_status_labels[key].setText(f"✅ 就绪 ({size_mb:.0f} MB)")
+                self._model_status_labels[key].setStyleSheet("color: green; font-weight: bold;")
 
     def _load_debug_config(self) -> None:
         """读取调试配置并回填表单。"""
         try:
+            from app.domain.entities.configs import DebugConfig
             dcfg = self._config_store.load_debug_config()
-            self._debug_keep_md.setChecked(bool(dcfg.keep_export_md))
-            self._debug_prewarm.setChecked(bool(dcfg.prewarm_local_model))
-            self._debug_disable_local.setChecked(bool(dcfg.disable_local_model))
-            self._debug_disable_api.setChecked(bool(dcfg.disable_api))
-            self._debug_disable_all.setChecked(bool(dcfg.disable_all_ai))
+            self._debug_keep_md.setChecked(bool(getattr(dcfg, "keep_export_md", False)))
+            self._debug_disable_api.setChecked(bool(getattr(dcfg, "disable_api", False)))
+            self._debug_prewarm.setChecked(bool(getattr(dcfg, "prewarm_local_model", False)))
+            self._debug_disable_local.setChecked(bool(getattr(dcfg, "disable_local_model", False)))
         except Exception as e:
             print(f"[settings] 读取调试配置失败：{e}")
 
     def _on_save_debug(self) -> None:
         """保存调试配置。"""
         from app.domain.entities.configs import DebugConfig
+        
+        # 保留原有的旧字段，防止底层报错
+        try:
+            old_dcfg = self._config_store.load_debug_config()
+        except:
+            old_dcfg = DebugConfig()
+            
         dcfg = DebugConfig(
             keep_export_md=self._debug_keep_md.isChecked(),
             prewarm_local_model=self._debug_prewarm.isChecked(),
             disable_local_model=self._debug_disable_local.isChecked(),
             disable_api=self._debug_disable_api.isChecked(),
-            disable_all_ai=self._debug_disable_all.isChecked(),
+            disable_all_ai=getattr(old_dcfg, "disable_all_ai", False)
         )
+        
         ok, _ = ui_utils.run_guarded(
             self,
             self._config_store.save_debug_config,
             dcfg,
             success_message="调试配置已保存",
         )
-        if ok:
-            self.config_changed.emit()
 
     def _build_ai_tab(self) -> QWidget:
+
         """构建 AI 设置页：接口参数 + 提示词编辑（需求 R15 / 用户需求）。"""
         page = QWidget()
         layout = QVBoxLayout(page)

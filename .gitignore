@@ -214,3 +214,8 @@ questions/
 **/.bundle/
 **/vendor/bundle
 **/.byebug_history
+# scripts 下的修复脚本是正式资产，不受 fix_*.py 误伤
+!scripts/fix_*.py
+
+# 审计产物不入 git
+report/audit_*

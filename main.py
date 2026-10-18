@@ -176,6 +176,36 @@ def main() -> int:
 
     app = QApplication(sys.argv)
 
+    # 加载 Qt 标准控件的简体中文翻译
+    # （QMessageBox / QDialogButtonBox 的标准按钮 OK / Cancel / Yes / No 等）
+    try:
+        from PySide6.QtCore import QLibraryInfo, QTranslator
+
+        _translator = QTranslator()
+        _trans_dir = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        if _translator.load("qtbase_zh_CN", _trans_dir):
+            app.installTranslator(_translator)
+            app._translator = _translator  # 保持引用，避免被 GC
+        else:
+            print(f"[main] 未找到 qtbase_zh_CN.qm（目录：{_trans_dir}）")
+    except Exception as _exc:
+        print(f"[main] 翻译加载失败：{_exc}")
+
+    # 0. 启动时按配置应用主题（失败回退浅色，不影响启动）
+    try:
+        from app.config.settings import DEFAULT_DB_PATH
+        from app.infrastructure.config_store import SQLiteConfigStore
+        from app.infrastructure.database.connection import DatabaseConnection
+        from app.presentation.theme import apply_theme
+
+        _boot_db = DatabaseConnection(DEFAULT_DB_PATH)
+        _boot_store = SQLiteConfigStore(_boot_db)
+        _boot_theme = _boot_store.load_debug_config().theme
+        apply_theme(app, _boot_theme)
+        _boot_db.close()
+    except Exception as _exc:
+        print(f"[main] 启动主题应用失败，使用默认：{_exc}")
+
     # 1. 立即显示启动画面
     splash = _Splash()
     splash.show()

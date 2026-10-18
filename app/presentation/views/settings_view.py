@@ -58,6 +58,7 @@ from app.domain.entities.configs import AIConfig, PromptConfig, ScoringConfig
 from app.domain.entities.knowledge_section import KnowledgeSection
 from app.domain.enums import CooldownMode, RecognizeModule
 from app.presentation import ui_utils
+from app.presentation.theme import current_color
 
 
 class SettingsView(QWidget):
@@ -89,8 +90,56 @@ class SettingsView(QWidget):
         self._inner_tabs.addTab(self._build_scoring_tab(), "评分与冷却")
         self._inner_tabs.addTab(self._build_subject_tab(), "科目管理")
         self._inner_tabs.addTab(self._build_sections_tab(), "知识点板块")
+        self._inner_tabs.addTab(self._build_appearance_tab(), "外观")
         self._inner_tabs.addTab(self._build_debug_tab(), "调试")
         root.addWidget(self._inner_tabs)
+
+    def _build_appearance_tab(self) -> QWidget:
+        """外观设置：主题切换（浅色 / 暗色），保存后立即生效。"""
+        page = QWidget(self)
+        layout = QVBoxLayout(page)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("主题："))
+        self._theme_combo = QComboBox()
+        self._theme_combo.addItem("浅色", "light")
+        self._theme_combo.addItem("暗色", "dark")
+        try:
+            current = self._container.config_store.load_debug_config().theme
+        except Exception:
+            current = "light"
+        idx = self._theme_combo.findData(current)
+        self._theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        row.addWidget(self._theme_combo)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        hint = QLabel("切换主题后点击下方「保存」，全部窗口立即应用新主题。")
+        hint.setStyleSheet("color: gray;")
+        layout.addWidget(hint)
+
+        apply_btn = QPushButton("立即应用")
+        apply_btn.clicked.connect(self._on_theme_apply)
+        layout.addWidget(apply_btn)
+
+        layout.addStretch(1)
+        return page
+
+    def _on_theme_apply(self) -> None:
+        """应用当前选择的主题，并保存到配置。"""
+        mode = self._theme_combo.currentData() or "light"
+        try:
+            from app.presentation.theme import apply_theme
+            from PySide6.QtWidgets import QApplication
+
+            apply_theme(QApplication.instance(), mode)
+
+            cfg = self._container.config_store.load_debug_config()
+            cfg.theme = mode
+            self._container.config_store.save_debug_config(cfg)
+            ui_utils.info(self, f"已切换到{'暗色' if mode == 'dark' else '浅色'}主题。")
+        except Exception as exc:  # noqa: BLE001
+            ui_utils.warning(self, f"应用主题失败：{exc}")
 
     def _build_debug_tab(self) -> QWidget:
         """构建调试设置页：只展示本地 AI 引擎状态与必要的导出选项。"""
@@ -166,17 +215,23 @@ class SettingsView(QWidget):
             path = root / f"{key}_model" if key != "difficulty" else root / "difficulty_train_model"
             if not path.exists():
                 self._model_status_labels[key].setText("❌ 缺失目录")
-                self._model_status_labels[key].setStyleSheet("color: red;")
+                self._model_status_labels[key].setStyleSheet(
+                f"color: {current_color('danger')};"
+            )
                 continue
                 
             pt_files = list(path.glob("*.pt"))
             if not pt_files:
                 self._model_status_labels[key].setText("❌ 缺失权重")
-                self._model_status_labels[key].setStyleSheet("color: red;")
+                self._model_status_labels[key].setStyleSheet(
+                f"color: {current_color('danger')};"
+            )
             else:
                 size_mb = pt_files[0].stat().st_size / (1024 * 1024)
                 self._model_status_labels[key].setText(f"✅ 就绪 ({size_mb:.0f} MB)")
-                self._model_status_labels[key].setStyleSheet("color: green; font-weight: bold;")
+                self._model_status_labels[key].setStyleSheet(
+                f"color: {current_color('success')}; font-weight: bold;"
+            )
 
     def _load_debug_config(self) -> None:
         """读取调试配置并回填表单。"""

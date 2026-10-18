@@ -75,6 +75,7 @@ from app.domain.enums import (
 )
 from app.presentation import ui_utils
 from app.presentation.signal_bus import bus
+from app.presentation.theme import current_color
 
 #: 图片预览的最大尺寸（像素）
 PREVIEW_SIZE = (220, 160)
@@ -432,7 +433,7 @@ class _DuplicateReviewDialog(QDialog):
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(str(value))
                     if not keep:
-                        item.setForeground(QColor("#b00020"))
+                        item.setForeground(QColor(current_color("danger")))
                     table.setItem(row, column, item)
 
 

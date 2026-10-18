@@ -94,6 +94,9 @@ class DebugConfig:
     disable_all_ai: bool = False
     """禁用全部 AI 功能（覆盖 disable_local_model 和 disable_api）。"""
 
+    theme: str = "light"
+    """界面主题：light（默认）/ dark。"""
+
 
 @dataclass
 class PromptConfig:

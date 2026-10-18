@@ -62,6 +62,7 @@ from app.domain.errors import (
 )
 from app.domain.validators.question_validator import QuestionValidator
 from app.interfaces.ai_client import AIClient
+from app.interfaces.local_ai import ILocalAIEngine
 from app.interfaces.repositories import (
     ConfigStore,
     QuestionOpRepository,
@@ -257,7 +258,7 @@ class QuestionService:
         config_store: ConfigStore | None = None,
         ai_client: AIClient | None = None,
         image_store=None,
-        local_ai_engine=None,
+        local_ai_engine: ILocalAIEngine | None = None,
     ) -> None:
         """注入仓储、校验器、难度服务，以及可选的台账 / 配置 / AI 客户端 / 图片存储。"""
         self._repository = repository

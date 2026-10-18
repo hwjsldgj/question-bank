@@ -1,3 +1,4 @@
+from app.interfaces.local_ai import ILocalAIEngine
 
 from pathlib import Path
 import re
@@ -20,7 +21,7 @@ class BaseClassifierModel:
                 return self.classifier(self.dropout(out.last_hidden_state[:, 0]))
         return _Model()
 
-class LocalAIEngine:
+class LocalAIEngine(ILocalAIEngine):
     """四核本地 AI 统一推理引擎（延迟加载）。"""
     def __init__(self, models_root):
         # 防御性转换：无论传 str 还是 Path 都能处理

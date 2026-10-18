@@ -140,19 +140,8 @@ def build_container(db_path: str = DEFAULT_DB_PATH) -> Container:
         ai_client, config_store, question_repository,
         local_classifier=local_classifier,
     )
-    # 实例化本地知识点分类器（延迟加载，与难度模型保持一致）
+    # 注：旧的 15 分类知识点模型（knowledge_model）已被 section_model 和 subtopic_model 取代。
     local_knowledge_clf = None
-    knowledge_model_dir = Path(__file__).resolve().parent.parent / "models" / "knowledge_model"
-    try:
-        from app.infrastructure.ai.lazy_local_classifier import LazyKnowledgeClassifier
-        proxy_k = LazyKnowledgeClassifier(knowledge_model_dir)
-        if proxy_k.is_available():
-            local_knowledge_clf = proxy_k
-            print(f"[container] 本地知识点模型（延迟加载）：{knowledge_model_dir}")
-        else:
-            print(f"[container] 本地知识点模型文件不存在，忽略")
-    except Exception as e:
-        print(f"[container] 本地知识点模型不可用：{e}")
 
     local_type_clf = None
     type_model_dir = Path(__file__).resolve().parent.parent / "models" / "type_model"

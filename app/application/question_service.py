@@ -392,6 +392,53 @@ class QuestionService:
             changed += 1
         return changed
 
+    def reanalyze_difficulties_local(self, question_ids: list[str]) -> dict:
+        """用本地模型批量重析难度（不依赖远程 API，人工难度不覆盖）。"""
+        from app.domain.enums import Difficulty, DifficultySource
+
+        engine = getattr(self, "_local_ai_engine", None)
+        if engine is None:
+            raise RuntimeError("本地 AI 引擎未初始化，无法使用本地重析")
+
+        summary = {
+            "total": len(question_ids),
+            "updated": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+        diff_map = {
+            "easy": Difficulty.EASY,
+            "medium": Difficulty.MEDIUM,
+            "hard": Difficulty.HARD,
+        }
+
+        for qid in question_ids:
+            question = self._repository.get(qid)
+            if question is None:
+                summary["failed"] += 1
+                continue
+            if question.difficulty_source is DifficultySource.MANUAL:
+                summary["skipped"] += 1
+                continue
+            try:
+                options_text = " ".join(
+                    f"{o.key}. {o.text}" for o in question.options
+                )
+                answer_text = " ".join(question.answer)
+                result = engine.predict_all(
+                    question.stem, options_text, answer_text
+                )
+                difficulty = diff_map.get(result.get("difficulty"))
+                if difficulty is not None:
+                    question.difficulty = difficulty
+                    self._repository.update(question)
+                    summary["updated"] += 1
+                else:
+                    summary["failed"] += 1
+            except Exception:
+                summary["failed"] += 1
+        return summary
+
     def reanalyze_difficulties(
         self, question_ids: list[str], confirmed: bool = False
     ) -> dict:
@@ -576,69 +623,20 @@ class QuestionService:
         """AI 服务是否已配置（未配置时界面禁用"AI 辨识"按钮）。"""
         return bool(self._ai_client is not None and self._ai_client.is_configured())
 
-    def ai_status_text(self) -> str:
-        """返回 AI 不可用时的可读说明（供 UI 弹窗使用）。
+    def local_difficulty_available(self) -> bool:
+        """本地 AI 引擎是否可用（UI 判断是否提供"本地分析"选项）。"""
+        return getattr(self, "_local_ai_engine", None) is not None
 
-        :return: 人类可读的错误说明；若 AI 实际可用则返回空串。
-        """
-        client = self._ai_client
-        if client is None:
+    def ai_status_text(self) -> str:
+        """返回当前 AI 配置状态的可读文字。"""
+        if self._ai_client is None:
             return "未接入 AI 客户端。"
         try:
-            if client._is_all_ai_disabled():
-                return "AI 功能已在「设置 -> 调试」中全部禁用。"
-            local_ok = (
-                not client._is_local_disabled()
-                and getattr(client, "_local_classifier", None) is not None
-            )
-            if local_ok:
-                return ""
-            if client._is_api_disabled():
-                return "远程 API 已在「设置 -> 调试」中禁用，且本地模型不可用。"
-        except Exception:
-            pass
-        return "AI 服务未配置，请先到「设置 -> AI 设置」填写接口地址、API Key 与模型名称。"
-
-    def local_difficulty_available(self) -> bool:
-        """本地难度模型是否可用。"""
-        clf = getattr(self._ai_client, "_local_classifier", None)
-        return clf is not None
-
-    def reanalyze_difficulties_local(self, question_ids: list) -> dict:
-        """用本地模型批量重析难度（不依赖远程 API，人工难度不覆盖）。"""
-        from app.domain.enums import Difficulty, DifficultySource
-
-        summary = {"total": len(question_ids), "updated": 0, "skipped": 0, "failed": 0}
-
-        local_clf = getattr(self._difficulty_service, "_local_classifier", None)
-        if local_clf is None:
-            # 尝试从 ai_client 上取
-            local_clf = getattr(self._ai_client, "_local_classifier", None)
-        if local_clf is None:
-            raise RuntimeError("本地难度模型未加载，无法使用本地重析")
-
-        for qid in question_ids:
-            question = self._repository.get(qid)
-            if question is None:
-                summary["failed"] += 1
-                continue
-            if question.difficulty_source is DifficultySource.MANUAL:
-                summary["skipped"] += 1
-                continue
-            try:
-                options_text = " ".join(f"{o.key}. {o.text}" for o in question.options)
-                answer_text = " ".join(question.answer)
-                result = local_clf.predict(
-                    stem=question.stem,
-                    options=options_text,
-                    answer=answer_text,
-                )
-                question.difficulty = _LOCAL_DIFF_MAP[result]
-                self._repository.update(question)
-                summary["updated"] += 1
-            except Exception:
-                summary["failed"] += 1
-        return summary
+            if self._ai_client.is_configured():
+                return "已配置。"
+            return "AI 服务未配置，请先到「设置 -> AI 设置」填写接口地址、API Key 与模型名称。"
+        except Exception as e:
+            return f"检查 AI 状态失败：{e}"
 
     def recognize_draft(
         self,
@@ -752,19 +750,8 @@ class QuestionService:
         else:
             prompt, _ = self.build_recognize_prompt(stem, options, include_solution, effective)
 
-        # 用户需求：能走本地的就走本地。
-        # AI 辨识是多字段一次调用，本地模型只做难度；因此仅当"只勾了难度"时走本地。
-        local_clf = getattr(self._ai_client, "_local_classifier", None)
-        if local_clf is not None and effective == [RecognizeModule.DIFFICULTY]:
-            try:
-                options_text = "；".join(f"{o.key}. {o.text}" for o in options) or "无"
-                local_result = local_clf.predict(stem=stem, options=options_text, answer="")
-                data = {"difficulty": local_result}
-            except Exception as e:
-                print(f"[本地辨识] 出错，降级走远程：{e}")
-                data = self._ai_client.complete(prompt, recognize_schema(effective))
-        else:
-            data = self._ai_client.complete(prompt, recognize_schema(effective))
+        # 调用云端 AI 获取数据（放回正确的位置）
+        data = self._ai_client.complete(prompt, recognize_schema(effective))
 
         subjects = self.list_subjects()
         report = self._normalize_recognition(data, effective, options, subjects)

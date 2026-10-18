@@ -47,13 +47,11 @@ class DifficultyService:
         ai_client: AIClient,
         config_store: ConfigStore | None = None,
         question_repository=None,
-        local_classifier=None,
     ) -> None:
         """注入 AI 客户端、提示词配置来源与（可选）题目仓储（批量重分析用）。"""
         self._ai_client = ai_client
         self._config_store = config_store
         self._repository = question_repository
-        self._local_classifier = local_classifier
 
     def analyze(self, question: Question, prefer: str = "auto") -> Difficulty:
         """分析单道题目的难度。
@@ -67,20 +65,6 @@ class DifficultyService:
         :raises app.domain.errors.AIServiceError: 调用失败或结果非法
         """
         # prefer="ai" 时跳过本地；否则尝试本地
-        if prefer != "ai" and self._local_classifier is not None:
-            try:
-                options_text = " ".join(f"{o.key}. {o.text}" for o in question.options)
-                answer_text = " ".join(question.answer)
-                result = self._local_classifier.predict(
-                    stem=question.stem,
-                    options=options_text,
-                    answer=answer_text,
-                )
-                return _DIFFICULTY_WORDS[result]
-            except Exception:
-                pass
-
-        # prefer="local" 时不允许走远程，直接抛错降级
         if prefer == "local":
             raise AIServiceError("本地模型不可用，无法按 local 优先级分析难度")
 

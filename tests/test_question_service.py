@@ -255,7 +255,7 @@ def test_reanalyze_difficulties_skips_manual(container) -> None:
     service = QuestionService(
         container.question_repository,
         QuestionValidator(),
-        DifficultyService(fake, container.config_store, container.question_repository, local_classifier=None),
+        DifficultyService(fake, container.config_store, container.question_repository),
         op_repository=container.question_op_repository,
         config_store=container.config_store,
         ai_client=fake,
@@ -368,7 +368,7 @@ def test_ai_actions_require_confirmation(container) -> None:
     local = QuestionService(
         container.question_repository,
         QuestionValidator(),
-        DifficultyService(fake, container.config_store, container.question_repository, local_classifier=None),
+        DifficultyService(fake, container.config_store, container.question_repository),
         op_repository=container.question_op_repository,
         config_store=container.config_store,
         ai_client=fake,

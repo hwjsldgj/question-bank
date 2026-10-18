@@ -1,233 +1,97 @@
-"""AI 客户端基础设施：OpenAI 兼容 HTTP API 实现。
-
-实现接口：app.interfaces.ai_client.AIClient
-依赖：标准库 urllib / json（不引入第三方 HTTP 依赖）、
-      app.domain.entities.configs.AIConfig、app.domain.errors
-被使用：app.container（装配给 DifficultyService / QuestionService / QuestionGenerator）
-
-配置来源（需求 R15）：接口地址 / API Key / 模型名称 / 超时 / 重试次数
-均由用户在本机设置界面提供，密钥仅存本机 ConfigStore；构造时传入
-"配置提供者"（callable 或 ConfigStore.load_ai_config），保证设置保存后
-后续调用立即使用新配置（需求 R15 第 3 条）。
-"""
-
+"""OpenAI 兼容的云端 AI 客户端（纯净版，不包含任何本地推理）。"""
 import json
-import threading
-import urllib.error
+import socket
 import urllib.request
+import urllib.error
 from typing import Callable
-from urllib.response import addinfourl
 
 from app.domain.entities.configs import AIConfig
-from app.domain.errors import AIConfigMissingError, AIServiceError
+from app.domain.errors import AIServiceError, AIConfigMissingError
 from app.interfaces.ai_client import AIClient
 
-
 class OpenAICompatibleAIClient(AIClient):
-    """OpenAI 兼容 AI API 客户端（/chat/completions 协议）。"""
+    """OpenAI 兼容格式的 AI 客户端。"""
 
-    def __init__(
-        self,
-        config: AIConfig | Callable[[], AIConfig],
-        local_classifier=None,
-        debug_config_provider=None,
-    ) -> None:
-        """注入 AI 配置、本地分类器、调试配置提供者。"""
-        self._provider = config if callable(config) else (lambda: config)
-        self._local_classifier = local_classifier
-        self._debug_provider = debug_config_provider
-
-    def _is_all_ai_disabled(self) -> bool:
-        """读调试配置：全部 AI 是否禁用。"""
-        if self._debug_provider is None:
-            return False
-        try:
-            return bool(self._debug_provider().disable_all_ai)
-        except Exception:
-            return False
-
-    def _is_local_disabled(self) -> bool:
-        """读调试配置：本地模型是否禁用。"""
-        if self._debug_provider is None:
-            return False
-        try:
-            dbg = self._debug_provider()
-            return bool(dbg.disable_all_ai or dbg.disable_local_model)
-        except Exception:
-            return False
-
-    def _is_api_disabled(self) -> bool:
-        """读调试配置：远程 API 是否禁用。"""
-        if self._debug_provider is None:
-            return False
-        try:
-            dbg = self._debug_provider()
-            return bool(dbg.disable_all_ai or dbg.disable_api)
-        except Exception:
-            return False
-
-    @staticmethod
-    def _is_difficulty_prompt(prompt: str) -> bool:
-        return "教辅难度评估专家" in prompt
-
-    @staticmethod
-    def _extract_question(prompt: str):
-        def grab(label):
-            m = re.search(rf"{label}：(.+?)(?=\n(?:选项|答案|关联知识点|题型|题干)：|$)", prompt, re.DOTALL)
-            return m.group(1).strip() if m else ""
-        return grab("题干"), grab("选项"), grab("答案")
-
-    def complete(self, prompt: str, response_schema: dict | None = None) -> dict:
-        # 若本地模型可用且是难度请求，走本地（save 时的 AI 分析也会走本地）
-        if self._local_classifier is not None and self._is_difficulty_prompt(prompt):
-            try:
-                stem, options, answer = self._extract_question(prompt)
-                result = self._local_classifier.predict(stem=stem, options=options, answer=answer)
-                return {"difficulty": result}
-            except Exception as e:
-                print(f"[ai_client] 本地难度模型出错，降级走远程: {e}")
-        # 否则走远程
-        """调用 /chat/completions 并解析结构化响应。
-
-        失败语义（需求 R4 第 3 条 / R15 第 4 条）：超时、网络错误、
-        非 2xx 响应、重试耗尽、JSON 解析失败均抛出 AIServiceError。
-        """
-        # 调试开关：远程 API 禁用
-        if self._is_api_disabled():
-            raise AIServiceError("远程 API 已在调试设置中禁用")
-
-        config = self._provider()
-        self._ensure_configured(config)
-        last_error: Exception | None = None
-        for _attempt in range(max(0, int(config.max_retries)) + 1):
-            try:
-                content = self._request(config, prompt, response_schema)
-                return self._parse(content, response_schema)
-            except AIServiceError as exc:
-                last_error = exc
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
-                last_error = AIServiceError(f"AI 服务调用失败：{exc}")
-        raise AIServiceError(f"AI 服务调用失败（已重试）：{last_error}")
+    def __init__(self, config_provider: Callable[[], AIConfig] | AIConfig) -> None:
+        # 兼容直接传实例，或传一个获取配置的函数
+        if callable(config_provider):
+            self._config_provider = config_provider
+        else:
+            self._config_provider = lambda: config_provider
 
     def is_configured(self) -> bool:
-        """综合判断：调试开关 > 本地模型 > 远程配置。"""
-        # 调试开关：全部禁用
-        if self._is_all_ai_disabled():
-            return False
-        # 本地未禁用 且 本地可用
-        if not self._is_local_disabled() and self._local_classifier is not None:
-            return True
-        # 远程被禁用
-        if self._is_api_disabled():
-            return False
-        return self._provider().is_configured()
-
-    # ------------------------------------------------------------------ 内部
+        """检查 AI 配置是否完整。"""
+        config = self._config_provider()
+        return bool(config.base_url and config.api_key and config.model)
 
     def _ensure_configured(self, config: AIConfig) -> None:
-        """未配置时抛出 AIConfigMissingError（需求 R15 第 2 条降级依据）。"""
-        if not config.is_configured():
-            raise AIConfigMissingError("AI 服务未配置，请先在设置中填写 API 信息")
+        """检查配置，缺失则抛出异常。"""
+        if not config.base_url or not config.api_key or not config.model:
+            raise AIConfigMissingError("AI 服务未配置，请前往设置填写 API 地址、Key 和模型名称。")
 
-    def _request(
-        self, config: AIConfig, prompt: str, response_schema: dict | None
-    ) -> str:
-        """发起一次 HTTP 请求，返回模型回复的文本内容。
+    def complete(self, prompt: str, response_schema: dict | None = None) -> dict:
+        """发送请求并返回 JSON 字典。"""
+        config = self._config_provider()
+        self._ensure_configured(config)
+        
+        content = self._request(config, prompt, response_schema)
+        
+        # 尝试解析返回的 JSON
+        try:
+            # 处理可能的 markdown 代码块包裹
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.startswith("```"):
+                content = content[3:]
+            if content.endswith("```"):
+                content = content[:-3]
+                
+            return json.loads(content.strip())
+        except json.JSONDecodeError:
+            # 非 JSON 内容，走 fallback 返回纯文本
+            return {"text": content.strip()}
 
-        超时约束（需求 R15 第 4 条）分两阶段，且**不修改全局 socket 默认超时**，
-        以免在 GUI 主线程里临时干扰 Qt 事件循环与其他 socket 连接：
-
-        - 连接阶段：交给 ``urllib.request.urlopen(timeout=...)``，超时抛出
-          ``URLError``（原因值为 ``socket.timeout``）；
-        - 响应体读取阶段：服务端已接受连接却迟迟不返回 body 时，
-          ``urlopen`` 的 ``timeout`` 不起作用，会永久阻塞 GUI，因此改为在
-          守护线程里读取，主线程用 ``join(timeout)`` 等待，超时后关闭
-          socket 并抛出 ``AIServiceError``。
-        """
-        url = config.base_url.rstrip("/") + "/chat/completions"
-        payload: dict = {
+    def _request(self, config: AIConfig, prompt: str, response_schema: dict | None) -> str:
+        """执行底层的 HTTP 请求，带异常捕获和错误翻译。"""
+        url = f"{config.base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.api_key}"
+        }
+        payload = {
             "model": config.model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
+            "temperature": 0.1
         }
-        if response_schema is not None:
-            payload["response_format"] = {"type": "json_object"}
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {config.api_key}",
-            },
+        
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode("utf-8"), 
+            headers=headers,
+            method="POST"
         )
-        timeout = max(1.0, float(config.timeout_ms) / 1000.0)
+        
+        timeout = getattr(config, "timeout_ms", 60000) / 1000.0
+        
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = self._read_body(response, timeout)
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")[:200]
-            raise AIServiceError(f"AI 服务返回 HTTP {exc.code}：{detail}") from exc
-        try:
-            parsed = json.loads(body)
-            return str(parsed["choices"][0]["message"]["content"])
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
-            raise AIServiceError(f"AI 服务响应格式非法：{exc}") from exc
-
-    @staticmethod
-    def _read_body(response: "addinfourl", timeout: float) -> str:
-        """在守护线程里读取 body，主线程用 ``join`` 控制读取阶段超时。
-
-        :param response: 已拿到 status / headers 的响应对象
-        :param timeout: 读取阶段超时（秒）
-        :return: 响应体解码后的文本
-        :raises AIServiceError: 读取超时或读取失败
-        """
-        container: dict[str, object] = {}
-
-        def target() -> None:
-            try:
-                container["body"] = response.read().decode("utf-8", errors="replace")
-            except Exception as exc:  # noqa: BLE001 - 跨线程传递，上层统一归类
-                container["error"] = exc
-
-        thread = threading.Thread(target=target, daemon=True)
-        thread.start()
-        thread.join(timeout)
-        if thread.is_alive():
-            # 服务端接受连接后不发 body，关闭 socket 迫使读取端失败并释放资源。
-            try:
-                response.close()
-            except Exception:
-                pass
-            raise AIServiceError(f"AI 响应体读取超时（{timeout:g}s），请检查 AI 服务可用性")
-        if "error" in container:
-            exc = container["error"]
-            # 读取阶段被 socket 自身超时打断，同样属于 body 未在时限内到达。
-            if isinstance(exc, TimeoutError):
-                raise AIServiceError(
-                    f"AI 响应体读取超时（{timeout:g}s），请检查 AI 服务可用性"
-                ) from exc
-            raise AIServiceError(f"AI 响应体读取失败：{exc}")
-        return container["body"]  # type: ignore[no-any-return]
-
-    @staticmethod
-    def _parse(content: str, response_schema: dict | None) -> dict:
-        """把模型回复解析为字典（容忍 ```json 代码块包裹）。"""
-        text = content.strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if "\n" in text:
-                text = text.split("\n", 1)[1]
-        text = text.strip()
-        try:
-            data = json.loads(text)
-        except ValueError:
-            if response_schema is None:
-                return {"text": content}
-            raise AIServiceError(f"AI 返回内容不是合法 JSON：{content[:200]}")
-        if isinstance(data, dict):
-            return data
-        return {"data": data}
-
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                # 读取阶段可能超时（比如服务端挂起）
+                try:
+                    raw_data = resp.read().decode("utf-8")
+                except socket.timeout as e:
+                    raise AIServiceError("响应体读取超时") from e
+                
+                res_data = json.loads(raw_data)
+                return res_data["choices"][0]["message"]["content"]
+                
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")
+            raise AIServiceError(f"HTTP {e.code}: {body[:200]}") from e
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, socket.timeout):
+                raise AIServiceError("连接超时") from e
+            raise AIServiceError(f"网络请求失败: {e.reason}") from e
+        except AIServiceError:
+            raise
+        except Exception as e:
+            raise AIServiceError(f"AI 调用失败: {e}") from e

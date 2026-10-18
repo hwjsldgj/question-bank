@@ -463,6 +463,8 @@ class _LocalPredictWorker(QThread):
             self.error.emit(str(e))
 
 
+
+
 class _LocalAIWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)

@@ -603,11 +603,19 @@ def confirm_ai_call(parent, action_desc: str) -> bool:
     return msg.exec() == QMessageBox.StandardButton.Yes
 
 
-def bind_column_memory(table, table_key: str, config_store):
-    """绑定列宽拖拽记忆，不影响原生布局。"""
+def bind_column_memory(table, table_key: str, config_store, stretch_index=None):
+    """绑定列宽拖拽记忆，不影响原生布局。
+
+    恢复记忆后按 ``stretch_index`` 指定的列重新施加拉伸语义（默认拉伸最后一列），
+    保证表格总长度不超屏、不残留横向滚动条与末尾留白。
+    """
     from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QHeaderView
+
     header = table.horizontalHeader()
-    
+    if stretch_index is None:
+        stretch_index = header.count() - 1
+
     # 恢复记忆
     if config_store:
         state_hex = config_store.load_table_state(table_key)
@@ -615,18 +623,19 @@ def bind_column_memory(table, table_key: str, config_store):
             def _restore():
                 try:
                     header.restoreState(bytes.fromhex(state_hex))
-                    # 恢复后强制拉伸最后一列，保证总长度不超屏，消灭横向滚动条
-                    header.setStretchLastSection(True)
+                    # 恢复后用被选中列承担拉伸，抓齐总宽度，消灭横向滚动条与留白
+                    _apply_stretch(header, stretch_index)
                 except Exception:
                     pass
+
             QTimer.singleShot(50, _restore)
-            
+
     # 保存记忆
     timer = QTimer(table)
     timer.setSingleShot(True)
     timer.setInterval(500)
     setattr(table, "_save_timer", timer)
-    
+
     def _save_state():
         if config_store:
             try:
@@ -637,3 +646,87 @@ def bind_column_memory(table, table_key: str, config_store):
 
     timer.timeout.connect(_save_state)
     header.sectionResized.connect(lambda *args: timer.start())
+    _apply_stretch(header, stretch_index)
+
+
+def _apply_stretch(header, stretch_index: int) -> None:
+    """让指定列承担弹性拉伸，并把其它列恢复为可交互（非拉伸）。"""
+    from PySide6.QtWidgets import QHeaderView
+
+    try:
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(stretch_index, QHeaderView.ResizeMode.Stretch)
+    except Exception:
+        header.setStretchLastSection(True)
+
+
+def configure_table(
+    table,
+    *,
+    columns,
+    widths=None,
+    editable=False,
+    multi_select=False,
+    stretch_last=True,
+    stretch_index=None,
+    compact=True,
+    memory_key=None,
+    config_store=None,
+):
+    """统一配置一张表格，集中此前散落在各视图的重复设置。
+
+    参数：
+        columns: 表头标签列表。
+        widths: 逐列初始宽度（少于列数时其余列自动分配）。
+        editable: 是否允许编辑（默认只读）。
+        multi_select: 是否允许多选（默认单选）。
+        stretch_last / stretch_index: 拉伸语义，指定 stretch_index 时优先；
+                都不指定则默认拉伸最后一列。stretch_index 也用于列宽记忆恢复。
+        compact: 是否收紧行距。
+        memory_key / config_store: 不为空时绑定列宽拖拽记忆。
+    """
+    from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget
+
+    if not isinstance(table, QTableWidget):
+        raise TypeError("configure_table 仅支持 QTableWidget")
+
+    table.setColumnCount(len(columns))
+    table.setHorizontalHeaderLabels(list(columns))
+    table.setEditTriggers(
+        QAbstractItemView.EditTrigger.NoEditTriggers
+        if not editable
+        else (
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.SelectedClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.AnyKeyPressed
+        )
+    )
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(
+        QAbstractItemView.SelectionMode.ExtendedSelection
+        if multi_select
+        else QAbstractItemView.SelectionMode.SingleSelection
+    )
+
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    if widths:
+        for i, w in enumerate(widths):
+            if i < len(columns):
+                table.setColumnWidth(i, w)
+
+    if compact:
+        make_rows_compact(table)
+
+    if memory_key and config_store:
+        idx = stretch_index if stretch_index is not None else (len(columns) - 1)
+        bind_column_memory(table, memory_key, config_store, stretch_index=idx)
+    elif stretch_index is not None:
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(stretch_index, QHeaderView.ResizeMode.Stretch)
+    elif stretch_last:
+        header.setStretchLastSection(True)
+
+    return table

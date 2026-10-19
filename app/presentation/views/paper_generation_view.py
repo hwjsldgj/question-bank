@@ -36,14 +36,12 @@ from PySide6.QtCore import Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QInputDialog,
-    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QSpinBox,
@@ -368,24 +366,20 @@ class PaperGenerationView(QWidget):
         difficulty.currentIndexChanged.connect(self._on_conditions_changed)
 
         # 追加的配置表：显示当前题型已添加的条目（不含题目正文）
-        table = QTableWidget(0, len(_CONFIG_COLUMNS))
-        table.setHorizontalHeaderLabels(list(_CONFIG_COLUMNS))
-        table.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.SelectedClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-            | QAbstractItemView.EditTrigger.AnyKeyPressed
+        table = QTableWidget()
+        ui_utils.configure_table(
+            table,
+            columns=_CONFIG_COLUMNS,
+            editable=True,
+            multi_select=False,
+            stretch_index=3,
         )
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.verticalHeader().setVisible(False)
-        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         # 高度改为动态：空时 3 行，有内容时按行数展开（见 _auto_resize_table）
         self._auto_resize_table(table)
         table.setItemDelegateForColumn(4, _DifficultyDelegate(table))
         table.setItemDelegateForColumn(5, _CountDelegate(table))
         table.itemChanged.connect(self._on_conditions_changed)
-        ui_utils.make_rows_compact(table)
 
         add_button = QPushButton("添加到配置表")
         add_button.clicked.connect(
@@ -420,21 +414,13 @@ class PaperGenerationView(QWidget):
         group = QGroupBox("配比统计预览")
         layout = QVBoxLayout(group)
 
-        self._stats_table = QTableWidget(0, 6)
-        self._stats_table.setHorizontalHeaderLabels(
-            ["题型", "难度", "知识点板块", "知识点", "配置题数", "命中题数"]
-        )
-        self._stats_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self._stats_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self._stats_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.Stretch
+        self._stats_table = QTableWidget()
+        ui_utils.configure_table(
+            self._stats_table,
+            columns=["题型", "难度", "知识点板块", "知识点", "配置题数", "命中题数"],
+            stretch_index=3,
         )
         # 高度动态：空 3 行，有内容按行数展开（见 _auto_resize_table）
-        ui_utils.make_rows_compact(self._stats_table)
         self._auto_resize_table(self._stats_table, min_rows=3, max_rows=20)
         layout.addWidget(self._stats_table)
         return group
@@ -444,25 +430,17 @@ class PaperGenerationView(QWidget):
         group = QGroupBox("试卷预览与分值")
         layout = QVBoxLayout(group)
 
-        self._result_table = QTableWidget(0, 6)
-        self._result_table.setHorizontalHeaderLabels(
-            ["部分", "题型", "题号", "题干", "难度", "分值"]
+        self._result_table = QTableWidget()
+        ui_utils.configure_table(
+            self._result_table,
+            columns=["部分", "题型", "题号", "题干", "难度", "分值"],
+            widths=[60, 60, 50, 400, 60, 50],
+            stretch_last=False,
+            memory_key="pg_result",
+            config_store=self._container.config_store,
         )
-        self._result_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._result_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self._result_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
-        )
-        header = self._result_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
-        for i, w in enumerate([60, 60, 50, 400, 60]):
-            self._result_table.setColumnWidth(i, w)
         # 高度动态：空 3 行，有内容按行数展开（见 _auto_resize_table）
         self._auto_resize_table(self._result_table, min_rows=3, max_rows=20)
-        ui_utils.bind_column_memory(self._result_table, "pg_result", self._container.config_store)
         self._result_table.doubleClicked.connect(self._on_paper_double_clicked)
         layout.addWidget(self._result_table)
 

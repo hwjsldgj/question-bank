@@ -34,7 +34,6 @@ import re
 from PySide6.QtCore import Qt, QStringListModel, QModelIndex, Signal, QThread
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QCheckBox,
     QCompleter,
     QDialog,
@@ -43,7 +42,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
@@ -196,12 +194,13 @@ class _PasteDraftEditor(QDialog):
         group = QGroupBox("选项（选择题，至少 2 项）")
         layout = QVBoxLayout(group)
 
-        self._options_table = QTableWidget(0, 2)
-        self._options_table.setHorizontalHeaderLabels(["标号", "内容"])
-        self._options_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
+        self._options_table = QTableWidget()
+        ui_utils.configure_table(
+            self._options_table,
+            columns=["标号", "内容"],
+            editable=True,
+            stretch_index=1,
         )
-        ui_utils.make_rows_compact(self._options_table)
         layout.addWidget(self._options_table)
 
         option_row = QHBoxLayout()
@@ -388,14 +387,8 @@ class _DuplicateReviewDialog(QDialog):
                 "每组保留最早录入的一道，其余在确认后删除。"
             )
         )
-        table = QTableWidget(0, len(self.COLUMNS))
-        table.setHorizontalHeaderLabels(list(self.COLUMNS))
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.horizontalHeader().setSectionResizeMode(
-            len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
-        )
-        ui_utils.make_rows_compact(table)
+        table = QTableWidget()
+        ui_utils.configure_table(table, columns=self.COLUMNS)
         self._fill_table(table)
         root.addWidget(table)
 
@@ -668,14 +661,15 @@ class QuestionBankView(QWidget):
         group = QGroupBox("选项（选择题，至少 2 项）")
         layout = QVBoxLayout(group)
 
-        self._options_table = QTableWidget(0, 2)
-        self._options_table.setHorizontalHeaderLabels(["标号", "内容"])
-        self._options_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
+        self._options_table = QTableWidget()
+        ui_utils.configure_table(
+            self._options_table,
+            columns=["标号", "内容"],
+            editable=True,
+            stretch_index=1,
         )
         self._options_table.verticalHeader().setVisible(False)
         self._options_table.setFixedHeight(150)
-        ui_utils.make_rows_compact(self._options_table)
         layout.addWidget(self._options_table)
 
         add_button = QPushButton("添加选项")
@@ -768,21 +762,13 @@ class QuestionBankView(QWidget):
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
-        self._preview_table = QTableWidget(0, 6)
-        self._preview_table.setHorizontalHeaderLabels(
-            ["状态", "科目", "题型", "题干", "答案", "待修正"]
-        )
-        self._preview_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self._preview_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self._preview_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.Stretch
+        self._preview_table = QTableWidget()
+        ui_utils.configure_table(
+            self._preview_table,
+            columns=["状态", "科目", "题型", "题干", "答案", "待修正"],
+            stretch_index=3,
         )
         self._preview_table.doubleClicked.connect(self._on_preview_double_clicked)
-        ui_utils.make_rows_compact(self._preview_table)
         layout.addWidget(self._preview_table)
 
         self._paste_status = QLabel("尚未解析")
@@ -840,24 +826,15 @@ class QuestionBankView(QWidget):
         filter_row.addWidget(search_button)
         layout.addLayout(filter_row)
 
-        self._result_table = QTableWidget(0, len(RESULT_COLUMNS))
-        self._result_table.setHorizontalHeaderLabels(list(RESULT_COLUMNS))
-        self._result_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
+        self._result_table = QTableWidget()
+        ui_utils.configure_table(
+            self._result_table,
+            columns=RESULT_COLUMNS,
+            widths=[75, 95, 45, 90, 110, 60, 50, 50, 40, 60, 130],
+            multi_select=True,
+            memory_key="qb_result",
+            config_store=self._container.config_store,
         )
-        self._result_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self._result_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
-        header = self._result_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
-        for i, w in enumerate([75, 95, 45, 90, 110, 60, 50, 50, 40, 60, 130]):
-            self._result_table.setColumnWidth(i, w)
-        ui_utils.make_rows_compact(self._result_table)
-        ui_utils.bind_column_memory(self._result_table, "qb_result", self._container.config_store)
         self._result_table.doubleClicked.connect(self._on_result_double_clicked)
         layout.addWidget(self._result_table)
 

@@ -15,9 +15,7 @@
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -66,27 +64,14 @@ class HistoryView(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self._history_table = QTableWidget(0, 4)
-        self._history_table.setHorizontalHeaderLabels(
-            ["创建时间", "组卷条件", "总分", "导出记录"]
+        self._history_table = QTableWidget()
+        ui_utils.configure_table(
+            self._history_table,
+            columns=["创建时间", "组卷条件", "总分", "导出记录"],
+            widths=[150, 350, 70],
+            memory_key="history_tasks",
+            config_store=self._container.config_store,
         )
-        self._history_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self._history_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self._history_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
-        )
-        header = self._history_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
-        self._history_table.setColumnWidth(0, 150)
-        self._history_table.setColumnWidth(1, 350)
-        self._history_table.setColumnWidth(2, 70)
-        ui_utils.make_rows_compact(self._history_table)
-        ui_utils.bind_column_memory(self._history_table, "history_tasks", self._container.config_store)
         layout.addWidget(self._history_table)
 
         button_row = QHBoxLayout()
@@ -111,11 +96,14 @@ class HistoryView(QWidget):
             QLabel("记录手工录入与批量导入的新增题目（含时间、科目与批次）。")
         )
 
-        self._import_table = QTableWidget(0, 5)
-        self._import_table.setHorizontalHeaderLabels(
-            ["时间", "科目", "题干摘要", "批次", "说明"]
+        self._import_table = QTableWidget()
+        self._configure_readonly_table(
+            self._import_table,
+            columns=["时间", "科目", "题干摘要", "批次", "说明"],
+            widths=[150, 70, 300, 70],
+            stretch_index=2,
+            memory_key="history_import",
         )
-        self._configure_readonly_table(self._import_table, stretch_column=2)
         layout.addWidget(self._import_table)
 
         button_row = QHBoxLayout()
@@ -137,11 +125,14 @@ class HistoryView(QWidget):
             QLabel("记录题目的修改（含难度与质量修正）与删除操作。")
         )
 
-        self._edit_table = QTableWidget(0, 5)
-        self._edit_table.setHorizontalHeaderLabels(
-            ["时间", "操作", "科目", "题干摘要", "变更说明"]
+        self._edit_table = QTableWidget()
+        self._configure_readonly_table(
+            self._edit_table,
+            columns=["时间", "操作", "科目", "题干摘要", "变更说明"],
+            widths=[150, 70, 70, 300],
+            stretch_index=4,
+            memory_key="history_edit",
         )
-        self._configure_readonly_table(self._edit_table, stretch_column=4)
         layout.addWidget(self._edit_table)
 
         button_row = QHBoxLayout()
@@ -155,19 +146,18 @@ class HistoryView(QWidget):
         layout.addWidget(self._edit_status)
         return page
 
-    def _configure_readonly_table(self, table: QTableWidget, stretch_column: int) -> None:
-        """统一设置只读、按行选择、末列拉伸与紧凑行距。"""
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
-        for i, w in enumerate([150, 70, 70, 300]):
-            table.setColumnWidth(i, w)
-        ui_utils.make_rows_compact(table)
-        key = "history_import" if stretch_column == 2 else "history_edit"
-        ui_utils.bind_column_memory(table, key, self._container.config_store)
+    def _configure_readonly_table(
+        self, table: QTableWidget, *, columns, widths, stretch_index: int, memory_key: str
+    ) -> None:
+        """统一设置只读台账表：只读、按行选择、初始宽度、指定列拉伸与列宽记忆。"""
+        ui_utils.configure_table(
+            table,
+            columns=columns,
+            widths=widths,
+            stretch_index=stretch_index,
+            memory_key=memory_key,
+            config_store=self._container.config_store,
+        )
 
     # --------------------------------------------------------------- 加载
 

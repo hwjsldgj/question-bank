@@ -224,6 +224,12 @@ class SQLiteConfigStore(ConfigStore):
             for section, points in groups.items()
         ]
 
+    def load_table_state(self, key: str) -> str | None:
+        return self._read_key(f"table_state_{key}")
+
+    def save_table_state(self, key: str, state: str) -> None:
+        self._write_key(f"table_state_{key}", state)
+
     def _read_key(self, key: str) -> str | None:
         """读取单个配置键；表未创建时返回 None（启动早期容错）。"""
         try:

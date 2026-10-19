@@ -79,8 +79,14 @@ class HistoryView(QWidget):
         self._history_table.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self._history_table.horizontalHeader().setStretchLastSection(True)
+        header = self._history_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        self._history_table.setColumnWidth(0, 150)
+        self._history_table.setColumnWidth(1, 350)
+        self._history_table.setColumnWidth(2, 70)
         ui_utils.make_rows_compact(self._history_table)
+        ui_utils.bind_column_memory(self._history_table, "history_tasks", self._container.config_store)
         layout.addWidget(self._history_table)
 
         button_row = QHBoxLayout()
@@ -149,16 +155,19 @@ class HistoryView(QWidget):
         layout.addWidget(self._edit_status)
         return page
 
-    @staticmethod
-    def _configure_readonly_table(table: QTableWidget, stretch_column: int) -> None:
+    def _configure_readonly_table(self, table: QTableWidget, stretch_column: int) -> None:
         """统一设置只读、按行选择、末列拉伸与紧凑行距。"""
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        table.horizontalHeader().setSectionResizeMode(
-            stretch_column, QHeaderView.ResizeMode.Stretch
-        )
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        for i, w in enumerate([150, 70, 70, 300]):
+            table.setColumnWidth(i, w)
         ui_utils.make_rows_compact(table)
+        key = "history_import" if stretch_column == 2 else "history_edit"
+        ui_utils.bind_column_memory(table, key, self._container.config_store)
 
     # --------------------------------------------------------------- 加载
 

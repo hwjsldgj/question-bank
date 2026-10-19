@@ -144,3 +144,9 @@ class ConfigStore(ABC):
     def load_sections(self) -> list[KnowledgeSection]: pass
     @abstractmethod
     def save_sections(self, sections: list[KnowledgeSection]) -> None: pass
+
+    @abstractmethod
+    def load_table_state(self, key: str) -> str | None: pass
+
+    @abstractmethod
+    def save_table_state(self, key: str, state: str) -> None: pass

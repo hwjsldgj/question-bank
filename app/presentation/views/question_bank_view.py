@@ -851,11 +851,13 @@ class QuestionBankView(QWidget):
         self._result_table.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
-        # 题干列占满剩余宽度；行距收紧（用户需求）
-        self._result_table.horizontalHeader().setSectionResizeMode(
-            len(RESULT_COLUMNS) - 1, QHeaderView.ResizeMode.Stretch
-        )
+        header = self._result_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        for i, w in enumerate([75, 95, 45, 90, 110, 60, 50, 50, 40, 60, 130]):
+            self._result_table.setColumnWidth(i, w)
         ui_utils.make_rows_compact(self._result_table)
+        ui_utils.bind_column_memory(self._result_table, "qb_result", self._container.config_store)
         self._result_table.doubleClicked.connect(self._on_result_double_clicked)
         layout.addWidget(self._result_table)
 

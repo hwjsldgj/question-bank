@@ -601,3 +601,39 @@ def confirm_ai_call(parent, action_desc: str) -> bool:
     msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
     msg.setDefaultButton(QMessageBox.StandardButton.No)
     return msg.exec() == QMessageBox.StandardButton.Yes
+
+
+def bind_column_memory(table, table_key: str, config_store):
+    """绑定列宽拖拽记忆，不影响原生布局。"""
+    from PySide6.QtCore import QTimer
+    header = table.horizontalHeader()
+    
+    # 恢复记忆
+    if config_store:
+        state_hex = config_store.load_table_state(table_key)
+        if state_hex:
+            def _restore():
+                try:
+                    header.restoreState(bytes.fromhex(state_hex))
+                    # 恢复后强制拉伸最后一列，保证总长度不超屏，消灭横向滚动条
+                    header.setStretchLastSection(True)
+                except Exception:
+                    pass
+            QTimer.singleShot(50, _restore)
+            
+    # 保存记忆
+    timer = QTimer(table)
+    timer.setSingleShot(True)
+    timer.setInterval(500)
+    setattr(table, "_save_timer", timer)
+    
+    def _save_state():
+        if config_store:
+            try:
+                state_bytes = header.saveState().data()
+                config_store.save_table_state(table_key, state_bytes.hex())
+            except Exception:
+                pass
+
+    timer.timeout.connect(_save_state)
+    header.sectionResized.connect(lambda *args: timer.start())

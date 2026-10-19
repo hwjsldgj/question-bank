@@ -455,11 +455,14 @@ class PaperGenerationView(QWidget):
         self._result_table.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
-        self._result_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.Stretch
-        )
+        header = self._result_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        for i, w in enumerate([60, 60, 50, 400, 60]):
+            self._result_table.setColumnWidth(i, w)
         # 高度动态：空 3 行，有内容按行数展开（见 _auto_resize_table）
         self._auto_resize_table(self._result_table, min_rows=3, max_rows=20)
+        ui_utils.bind_column_memory(self._result_table, "pg_result", self._container.config_store)
         self._result_table.doubleClicked.connect(self._on_paper_double_clicked)
         layout.addWidget(self._result_table)
 

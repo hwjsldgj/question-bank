@@ -30,6 +30,7 @@
 
 from pathlib import Path
 import threading
+import uuid
 
 from PySide6.QtCore import Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -184,6 +185,7 @@ class PaperGenerationView(QWidget):
         self._question_service = container.question_service
 
         self._paper: Paper | None = None
+        self._current_task_id: str | None = None
         self._row_map: list[tuple[Section, Question]] = []
         self._type_tables: dict[QuestionType, QTableWidget] = {}
         self._type_bodies: dict[QuestionType, QWidget] = {}
@@ -1018,6 +1020,19 @@ class PaperGenerationView(QWidget):
         if not ok or paper is None:
             return
         self._paper = paper
+        self._current_task_id = str(uuid.uuid4())
+        try:
+            from app.domain.entities.task import GenerationTask
+            task = GenerationTask(
+                id=self._current_task_id,
+                criteria=criteria,
+                question_ids=[q.id for q in paper.questions()],
+                total_score=paper.total_score,
+            )
+            self._container.task_history_service.save_task(task)
+        except Exception as e:
+            print(f"[警告] 保存组卷历史失败: {e}")
+
         self._render_paper(paper)
         self._update_total()
         self._status.setText(f"已生成 {len(paper.questions())} 道题")
@@ -1162,6 +1177,13 @@ class PaperGenerationView(QWidget):
         if ok:
             self._status.setText(f"已导出：{payload}")
             self.status_message.emit(f"已导出：{payload}", 10000)
+            if getattr(self, "_current_task_id", None):
+                try:
+                    self._container.task_history_service.attach_export_record(
+                        self._current_task_id, str(payload), "pdf"
+                    )
+                except Exception as e:
+                    print(f"[警告] 追加导出记录失败: {e}")
             ui_utils.info(self, f"导出成功：\n{payload}")
             return
         self._status.setText(f"导出失败：{payload}")

@@ -1,7 +1,7 @@
 # 接口文档（INTERFACES）
 
 Feature Name: question-paper-generator
-Updated: 2026-10-18
+Updated: 2026-10-19
 
 本文给出全部抽象接口与服务类的**方法签名、参数与返回、异常、实现者与调用者**，以及关键调用链。
 
@@ -179,27 +179,14 @@ class BaseExporter(ABC):
 | --- | --- |
 | `analyze` | 强制走云端或指定策略，返回 Difficulty |
 | `analyze_silent` | 降级包装，失败返回 PENDING |
-```
 
----
+### 3.5 Paper / PaperCriteria（试卷信息）
+| 字段 | 说明 |
+|---|---|
+| `PaperCriteria.title` / `Paper.title` | 自定义试卷标题；为空时导出回落为「试卷」 |
+| `PaperCriteria.notes` / `Paper.notes` | 试卷注释（总分说明 / 注意事项）；逐行以引用块渲染在标题下方 |
 
-如果你不想手动复制，也可以直接跑下面这条命令，我帮你安全覆盖写入：
-
-```powershell
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-cd E:\code\question-bank
-
-@'
-from pathlib import Path
-
-content = '''# 接口文档（INTERFACES）
-
-Feature Name: question-paper-generator
-Updated: 2026-10-18
-
-本文给出全部抽象接口与服务类的**方法签名、参数与返回、异常、实现者与调用者**，以及关键调用链。
-
-约定：
-- 抽象接口位于 `app/interfaces/`，实现位于 `app/infrastructure/`，应用服务通过构造注入持有接口类型。
-- 异常类型定义于 `app/domain/errors.py`。
+组卷页「试卷信息」区写入 `PaperCriteria`，`PaperComposer.generate` 转写到 `Paper`；
+随 `GenerationTask` 持久化（`task_repository` 序列化 title / notes），复用条件时回填；
+导出前以界面最新值覆盖 `Paper` 后再渲染。
 

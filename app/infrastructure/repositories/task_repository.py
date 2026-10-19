@@ -19,6 +19,8 @@ def _criteria_to_dict(c: PaperCriteria) -> dict:
         "solution_enabled": c.solution_enabled,
         "fill_enabled": c.fill_enabled,
         "subject": c.subject,
+        "title": c.title,
+        "notes": c.notes,
         "choice_items": [
             {"question_type": i.question_type.value, "subject": i.subject,
              "difficulty": i.difficulty.value, "count": i.count,
@@ -61,6 +63,8 @@ def _dict_to_criteria(data: dict) -> PaperCriteria:
         solution_enabled=data.get("solution_enabled", False),
         fill_enabled=data.get("fill_enabled", False),
         subject=data.get("subject", ""),
+        title=data.get("title", ""),
+        notes=data.get("notes", ""),
         choice_items=_items("choice_items"),
         fill_items=_items("fill_items"),
         solution_items=_items("solution_items"),

@@ -1,7 +1,7 @@
 # 架构说明（ARCHITECTURE）
 
 Feature Name: question-paper-generator
-Updated: 2026-10-03
+Updated: 2026-10-19
 
 本文描述项目框架的分层结构与各模块职责。需求依据见
 `.monkeycode/specs/question-paper-generator/requirements.md`，
@@ -121,7 +121,9 @@ PaperGenerationView -> PaperComposer.generate
 ```text
 PaperGenerationView -> PaperExporter.export          （在后台线程执行，progress 回主线程显示）
     -> ScoreValidator.validate             分值完整性校验（缺分值阻止导出）
-    -> MdExporter / PdfExporter            按格式渲染（两部分 / 分区小计 / 总分 / 答案页）；
+    -> MdExporter / PdfExporter            按格式渲染（自定义标题 / 注释 / 分区小计 / 总分 / 答案页）；
+                                           Paper.title 与 Paper.notes 由 PaperCriteria 带入，
+                                           空标题回落为「试卷」，注释以引用块置于标题下方；
                                           答案页前插入分页标记（.pagebreak）；
                                           PDF：MD -> 带 MathJax 与打印 CSS 的 HTML ->
                                           Edge 无头打印（中文由 CSS 字体指定，避免乱码）
@@ -187,6 +189,7 @@ QuestionBankView（勾选辨识模块）
 - **标注**：AI 难度分析（远程 API 与本地模型双通道）；difficulty_source 区分 ai / manual，人工难度不被覆盖
 - **组卷**：当前按题库顺序截取候选；`SelectionScorer` / `WeightedSampler` / `CooldownPolicy` / `PaperComposer` 的评分-抽样-冷却-AI 补题链路**待实现**（见 `待完成工作.md`）
 - **导出**：MD → HTML → Edge 无头打印 PDF；含图题即时渲染 Typst 图为 PNG；相邻含图题自动合并；答案页前分页
+- **试卷信息**：组卷页可自定义试卷标题与注释（总分说明 / 注意事项），随 `PaperCriteria` 保存并在组卷历史中复现，导出时写入卷首；标题留空回落为「试卷」
 - **历史**：组卷历史 / 导入历史 / 编辑历史（操作台账）
 - **AI 调用**：全部需用户手动确认；模块化一次返回；返回内容有问题时弹窗列清单；未勾选的字段既不生成也不覆盖
 - **界面**：视图统一经 ui_utils.run_guarded / safe_call 调用服务，异常给出可读提示

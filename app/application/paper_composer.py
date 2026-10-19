@@ -120,7 +120,12 @@ class PaperComposer:
             )
             sections.append(section)
 
-        paper = Paper(criteria=criteria, sections=sections)
+        paper = Paper(
+            criteria=criteria,
+            sections=sections,
+            title=criteria.title,
+            notes=criteria.notes,
+        )
         self._record_usage(paper.questions())
         self._score_calculator.build_answer_page(paper)
         paper.total_score = self._score_calculator.total_score(paper)

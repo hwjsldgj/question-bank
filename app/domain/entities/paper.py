@@ -82,6 +82,12 @@ class Paper:
     total_score: float = 0.0
     """试卷总分 = Σ 各分区 subtotal（需求 R11）。"""
 
+    title: str = ""
+    """试卷标题（用户需求：自定义试卷标题）。"""
+
+    notes: str = ""
+    """试卷注释 / 注意事项（用户需求：自定义注释）。"""
+
     def questions(self) -> list[Question]:
         """按卷面顺序返回全部题目（跨分区拼接）。"""
         return [q for section in self.sections for q in section.questions]

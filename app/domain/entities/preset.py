@@ -77,6 +77,8 @@ def criteria_to_dict(criteria: PaperCriteria) -> dict:
         "fill_items": [_item_to_dict(i) for i in criteria.fill_items],
         "solution_items": [_item_to_dict(i) for i in criteria.solution_items],
         "subject": criteria.subject,
+        "title": criteria.title,
+        "notes": criteria.notes,
     }
 
 
@@ -99,6 +101,8 @@ def criteria_from_dict(data: dict) -> PaperCriteria:
         fill_items=_items("fill_items"),
         solution_items=_items("solution_items"),
         subject=str(data.get("subject", "")),
+        title=str(data.get("title", "")),
+        notes=str(data.get("notes", "")),
     )
 
 

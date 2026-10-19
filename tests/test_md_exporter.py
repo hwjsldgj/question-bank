@@ -85,6 +85,20 @@ def test_export_writes_markdown_with_knowledge_section(tmp_path) -> None:
     assert "   解析：含二次项" in lines
 
 
+def test_custom_title_and_notes_are_exported(tmp_path) -> None:
+    """自定义试卷标题与注释渲染到卷首（用户需求）。"""
+    paper = _paper(_single_question("代数"))
+    paper.title = "高三上学期期中考试卷"
+    paper.notes = "注意事项：闭卷作答。\n满分 150 分。"
+    path = MdExporter().export(paper, str(tmp_path))
+    lines = _read(path).splitlines()
+
+    assert lines[0] == "# 高三上学期期中考试卷"
+    assert lines[2] == "> 注意事项：闭卷作答。"
+    assert lines[3] == "> 满分 150 分。"
+    assert lines[5] == "**总分：2 分**"
+
+
 def test_export_without_section_omits_the_line(tmp_path) -> None:
     """题目未填知识点板块时不输出板块行。"""
     path = MdExporter().export(

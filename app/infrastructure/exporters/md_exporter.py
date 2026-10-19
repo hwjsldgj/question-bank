@@ -383,7 +383,17 @@ class MdExporter(BaseExporter):
 
     def _render(self, paper: Paper, options: ExportOptions) -> str:
         """把 Paper 渲染为全文 Markdown 文本（分区 / 小计 / 总分 / 答案页）。"""
-        lines = ["# 试卷", "", f"**总分：{paper.total_score:g} 分**", ""]
+        lines: list[str] = []
+        title = (paper.title or "试卷").strip().replace("\n", " ")
+        lines.append(f"# {title}")
+        lines.append("")
+        notes = (paper.notes or "").strip()
+        if notes:
+            for note_line in notes.splitlines():
+                lines.append(f"> {note_line}")
+            lines.append("")
+        lines.append(f"**总分：{paper.total_score:g} 分**")
+        lines.append("")
         number = 0
         for index, section in enumerate(paper.sections, start=1):
             lines.extend(self._render_section(section, index, number + 1))

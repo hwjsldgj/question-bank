@@ -66,6 +66,12 @@ class PaperCriteria:
     subject: str = ""
     """全局科目：一次组卷只针对一个科目（用户需求）。"""
 
+    title: str = ""
+    """试卷标题（用户需求：自定义试卷标题）。"""
+
+    notes: str = ""
+    """试卷注释 / 注意事项（用户需求：自定义注释）。"""
+
     def enabled_requirements(self) -> list[TypeRequirement]:
         """返回所有启用部分的题型要求列表（组卷引擎按此逐条选题）。"""
         requirements: list[TypeRequirement] = []

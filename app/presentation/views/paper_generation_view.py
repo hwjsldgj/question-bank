@@ -43,11 +43,13 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -196,6 +198,8 @@ class PaperGenerationView(QWidget):
         self._sections_map: dict[str, list[str]] = {}
         self._subject_points: list[str] = []
         self._exporting = False
+        self._title_edit: QLineEdit | None = None
+        self._notes_edit: QTextEdit | None = None
 
         self._hit_timer = QTimer(self)
         self._hit_timer.setSingleShot(True)
@@ -222,12 +226,30 @@ class PaperGenerationView(QWidget):
         self._generate_button.clicked.connect(self._on_generate)
         root.addWidget(self._generate_button)
 
+        root.addWidget(self._build_info_group())
         root.addWidget(self._build_stats_group())
         root.addWidget(self._build_result_group())
         root.addWidget(self._build_export_group())
 
         self._status = QLabel("就绪")
         root.addWidget(self._status)
+
+    def _build_info_group(self) -> QGroupBox:
+        """构建试卷信息区：自定义标题与注释（注释含注意事项）。"""
+        group = QGroupBox("试卷信息")
+        form = QFormLayout(group)
+
+        self._title_edit = QLineEdit()
+        self._title_edit.setPlaceholderText("留空则导出为「试卷」")
+        form.addRow("试卷标题", self._title_edit)
+
+        self._notes_edit = QTextEdit()
+        self._notes_edit.setPlaceholderText(
+            "可填写总分说明、注意事项等，导出时置于标题下方（留空则不输出）"
+        )
+        self._notes_edit.setFixedHeight(70)
+        form.addRow("试卷注释", self._notes_edit)
+        return group
 
     def _build_preset_bar(self) -> PresetBar:
         """构建预设操作条并连接业务处理。"""
@@ -908,10 +930,18 @@ class PaperGenerationView(QWidget):
             fill_items=items[QuestionType.FILL],
             solution_items=items[QuestionType.SOLUTION],
             subject=subject,
+            title=(self._title_edit.text().strip() if self._title_edit else ""),
+            notes=(
+                self._notes_edit.toPlainText().strip() if self._notes_edit else ""
+            ),
         )
 
     def apply_criteria(self, criteria: PaperCriteria) -> None:
         """回填历史组卷条件（需求 R14 第 3 条：仅回填条件，题单重新生成）。"""
+        if self._title_edit is not None:
+            self._title_edit.setText(criteria.title or "")
+        if self._notes_edit is not None:
+            self._notes_edit.setPlainText(criteria.notes or "")
         subject = criteria.subject or next(
             (item.subject for item in criteria.enabled_requirements()), ""
         )
@@ -1119,6 +1149,11 @@ class PaperGenerationView(QWidget):
         if self._paper is None:
             ui_utils.info(self, "请先生成试卷。")
             return
+        # 导出前同步最新的标题 / 注释（用户可能在生成后继续修改）
+        if self._title_edit is not None:
+            self._paper.title = self._title_edit.text().strip()
+        if self._notes_edit is not None:
+            self._paper.notes = self._notes_edit.toPlainText().strip()
         if self._exporting:
             ui_utils.info(self, "正在导出，请稍候…")
             return

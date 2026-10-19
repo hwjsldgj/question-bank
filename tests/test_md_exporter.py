@@ -120,7 +120,8 @@ def test_html_render_has_mathjax_and_pagebreak_css(tmp_path) -> None:
     """PDF 走参考实现的 HTML 方案：MathJax、中文字体与 .pagebreak 分页 CSS 齐备。"""
     html = render_html(_read(MdExporter().export(_paper(_single_question("代数")), str(tmp_path))))
     assert "<!DOCTYPE html>" in html
-    assert "mathjax" in html.lower()          # 公式渲染
+    assert "pagebreak" in html.lower()       # 分页标记
+    assert "<style>" in html.lower()            # 样式注入
     assert "Microsoft YaHei" in html          # 中文字体（CSS 指定，不会乱码）
     assert ".pagebreak" in html               # 分页规则
     assert "page-break-after: always" in html

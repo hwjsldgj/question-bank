@@ -72,3 +72,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - 难度提示词只维护一处：`PromptConfig.module_prompts["difficulty"]`（AI 辨识与难度分析共用，
     分析时套 `config/settings.py::DIFFICULTY_ANALYSIS_FRAME` 框架）；旧的 `difficulty_prompt`
     字段已删除，历史配置里的该键在读取时被忽略
+[Project Knowledge Summary]
+- Date: 2026-10-21
+- Context: 实现组卷算法三件套（SelectionScorer / WeightedSampler / CooldownPolicy）并将 PaperComposer 从"顺序截取"改造为"检索 -> 评分 -> 加权抽样 -> 记录使用"完整链路时验证
+- Category: Workflow & Collaboration | Testing Methods
+- Instructions:
+  - 组卷链：PaperComposer.generate 先按 QuestionFilter 检索（排除 PENDING 难度与 low 质量），再 SelectionScorer.score 评分，最后 WeightedSampler.sample 抽取；difficulty 是评分目标而非硬过滤
+  - 评分因子：难度匹配 / 知识点覆盖 / 质量 / 使用频次 / 最近使用；PENDING 难度返回中性 0.5；无知识点返回中性 0.5；quality=quality+1 / normal=0 / low-1
+  - CooldownPolicy：in_cooldown 用 `now - last_used_at < window_delta(config)`；window_delta 对 tasks 模式按天数近似（暂未按任务次数实现）
+  - WeightedSampler：权重 = max(score, epsilon)，用 rng.random() 累积查找中，不放回；k >= 候选数时直接打乱返回
+  - PaperComposer 目前不接入 AI 补题（question_generator 传 None）；allow_ai_supplement 保留但不生效
+  - 相关测试：test_selection_scorer / test_weighted_sampler / test_cooldown_policy / test_paper_composer，共 36 个新用例

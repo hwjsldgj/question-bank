@@ -1,4 +1,4 @@
-﻿# AGENTS.md
+# AGENTS.md
 
 给 AI 的入口笔记。**先读完这份，再改代码**。
 
@@ -144,7 +144,7 @@ container.py  → 唯一能 import 具体实现的地方（组合根）
 
 ## 测试
 
-`pytest tests/ -q`。有历史遗留失败（见 `待完成工作.md` 的"立即做"），不是近期改动引入的。
+`pytest tests/ -q`。当前全绿；3 个 skip 是 `test_ai_client_timeout.py` 的环境条件占位。
 
 ## 导出产物结构
 
@@ -165,8 +165,10 @@ MD 中间产物默认删（调试 tab 可保留）。导出目录由程序指定
 | PDF 渲染（离线 MathML）| `app/infrastructure/exporters/pdf_exporter.py`（使用 latex2mathml 纯离线转换）|
 | Typst 图渲染 PNG | `app/infrastructure/exporters/typst_renderer.py` |
 | PDF 生成（HTML / MathJax / CSS）| `app/infrastructure/exporters/pdf_exporter.py` |
-| 组卷算法 / 去重 | `app/application/paper_composer.py` |
-| 评分因子 | `app/application/selection_scorer.py` |
+| 组卷链（检索 -> 评分 -> 加权抽样 -> 去重） | `app/application/paper_composer.py` |
+| 评分因子（难度/覆盖/质量/频次/近期） | `app/application/selection_scorer.py` |
+| 加权随机抽样 | `app/application/weighted_sampler.py` |
+| 冷却窗口惩罚 | `app/application/cooldown_policy.py` |
 | 数据模型 / 表结构 | `app/infrastructure/database/schema.py` |
 | 导入 .typ 解析 | `app/application/paper_import.py` |
 | GUI 组卷页 | `app/presentation/views/paper_generation_view.py` |

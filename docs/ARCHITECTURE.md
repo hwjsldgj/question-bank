@@ -1,7 +1,7 @@
 # 架构说明（ARCHITECTURE）
 
 Feature Name: question-paper-generator
-Updated: 2026-10-19
+Updated: 2026-10-21
 
 本文描述项目框架的分层结构与各模块职责。需求依据见
 `.monkeycode/specs/question-paper-generator/requirements.md`，
@@ -81,7 +81,6 @@ workspace/
 │   │   └── config_store.py        配置持久化实现（AI / 评分 / 提示词 / 科目）
 │   └── presentation/              表现层（PySide6）
 │       ├── main_window.py         主窗口（菜单 / 状态栏 / 四标签页 / 信号协调）
-│       ├── theme.py               主题模块：DARK/LIGHT 双调色板 + 全局 QSS
 │       ├── widgets/               可复用 UI 组件（如 preset_bar.py）
 │       ├── ui_utils.py            共享工具（枚举标签 / 对话框 / 受限调用包装 /
 │       │                          题目详情弹窗 show_question_detail）
@@ -129,7 +128,7 @@ PaperGenerationView -> PaperComposer.generate
     -> SelectionScorer.score               评分决策（难度匹配 / 知识点覆盖 / 质量 / 频次 / 近期）
         -> CooldownPolicy                  冷却窗口惩罚（R13）
     -> WeightedSampler.sample              加权随机抽样、同卷去重（R9）
-    -> [候选不足] QuestionGenerator.generate_questions   AI API 补题（R10，需用户确认）
+    -> [候选不足] QuestionGenerator.generate_questions   AI API 补题（R10，需用户确认；**当前未接入**）
     -> UsageRepository.record_usage        使用记录更新（R13）
     -> ScoreCalculator.total_score         分值与总分汇总（R11）
     -> TaskHistoryService.save_task        任务记录（R14）

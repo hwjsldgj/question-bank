@@ -1,7 +1,7 @@
 # 依赖关系文档（DEPENDENCIES）
 
 Feature Name: question-paper-generator
-Updated: 2026-10-03
+Updated: 2026-10-21
 
 本文回答两个问题：**哪个文件依赖哪一个**、**谁调用了谁**。
 接口的方法级契约见 `INTERFACES.md`。
@@ -73,10 +73,10 @@ flowchart LR
 | `application/question_history_service.py` | `interfaces/repositories.QuestionOpRepository`、`domain/entities/question_op`、`domain/enums` | `presentation/views/history_view`、`app/container.py` |
 | `application/prompt_utils.py` | `domain/entities/configs.PromptConfig`、`config/settings`（默认模板） | `application/{difficulty_service,question_service}` |
 | `application/cooldown_policy.py` | `domain/entities/configs.ScoringConfig`、`domain/entities/usage_record` | `application/selection_scorer`、`app/container.py` |
-| `application/selection_scorer.py` | `interfaces/repositories.UsageRepository`、`application/cooldown_policy`、`domain/entities/{configs,scoring}` | `application/paper_composer`、`app/container.py` |
+| `application/selection_scorer.py` | `interfaces/repositories.UsageRepository`、`application/cooldown_policy`、`domain/entities/{configs,question,scoring,usage_record}`、`domain/enums.{Difficulty,QualityFlag}` | `application/paper_composer`、`app/container.py` |
 | `application/weighted_sampler.py` | `domain/entities/scoring.ScoredQuestion` | `application/paper_composer`、`app/container.py` |
 | `application/question_generator.py` | `interfaces/ai_client.AIClient`、`interfaces/repositories.QuestionRepository`、`domain/validators/question_validator` | `application/paper_composer`、`app/container.py` |
-| `application/paper_composer.py` | `interfaces/repositories.{QuestionRepository,UsageRepository}`、`application/{selection_scorer,weighted_sampler,question_generator,score_calculator}`、`domain/entities/{configs,criteria,paper}`、`domain/errors` | `presentation/views/paper_generation_view`、`app/container.py` |
+| `application/paper_composer.py` | `interfaces/repositories.{QuestionRepository,UsageRepository}`、`application/{selection_scorer,weighted_sampler,question_generator,score_calculator}`、`domain/entities/{configs,criteria,paper,scoring}`、`domain/enums.{Difficulty,QuestionType,SectionKind}`、`domain/errors` | `presentation/views/paper_generation_view`、`app/container.py` |
 | `application/score_calculator.py` | `domain/entities/paper` | `application/paper_composer`、`presentation/views/paper_generation_view` |
 | `application/paper_exporter.py` | `interfaces/exporters.BaseExporter`（格式映射注入）、`domain/validators/score_validator`、`domain/entities/{configs,paper}` | `presentation/views/paper_generation_view`、`app/container.py` |
 | `application/task_history_service.py` | `interfaces/repositories.TaskRepository` | `presentation/views/history_view`、`app/container.py` |

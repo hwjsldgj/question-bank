@@ -1,7 +1,7 @@
 # 接口文档（INTERFACES）
 
 Feature Name: question-paper-generator
-Updated: 2026-10-19
+Updated: 2026-10-21
 
 本文给出全部抽象接口与服务类的**方法签名、参数与返回、异常、实现者与调用者**，以及关键调用链。
 
@@ -165,15 +165,31 @@ class BaseExporter(ABC):
 ### 3.2 PaperComposer
 | 方法 | 说明 |
 |---|---|
-| `generate` | 条件校验 -> 检索 -> 评分（待实现） -> 抽样（待实现） -> 记录使用 -> 组卷 |
+| `generate` | 条件校验 -> 检索（排除 PENDING 难度与 low 质量）-> SelectionScorer 评分 -> WeightedSampler 加权抽样 -> 记录使用 -> 组卷 |
 
-### 3.3 SelectionScorer（核心算法，待补全）
+### 3.3 SelectionScorer / WeightedSampler / CooldownPolicy（组卷算法三件套）
+
+#### SelectionScorer（`application/selection_scorer.py`）
 | 方法 | 说明 |
 |---|---|
-| `score` | 综合五因子打分（难度/覆盖/质量/频次/近期） |
-| `difficulty_match_factor` | 难度匹配计算 |
-| `knowledge_coverage_factor` | 知识点覆盖度计算 |
-| `quality_factor` | 人工质量因子 |
+| `score` | 综合五因子打分，返回按分降序的 `ScoredQuestion[]` |
+| `difficulty_match_factor` | 难度匹配：目标与实际均非 PENDING 时按 `1 - abs(Δrank) / 2` 计算；PENDING 返回中性 0.5 |
+| `knowledge_coverage_factor` | 知识点覆盖：未覆盖比例；无知识点返回中性 0.5 |
+| `quality_factor` | 人工质量：quality=+1 / normal=0 / low=-1 |
+
+#### WeightedSampler（`application/weighted_sampler.py`）
+| 方法 | 说明 |
+|---|---|
+| `sample(scored, k)` | 不放回加权随机抽样；权重 = `max(score, epsilon)` 恒正；可注入 `rng` 复现 |
+
+#### CooldownPolicy（`application/cooldown_policy.py`）
+| 方法 | 说明 |
+|---|---|
+| `in_cooldown(record, now)` | 是否处于冷却窗口内（`last_used_at is None` 返回 False） |
+| `recency_penalty(record, now)` | 窗口内 1.0；窗口外按 `window / elapsed` 衰减，恒正 |
+| `use_count_penalty(record)` | 使用频次惩罚：`min(1.0, use_count / 5)` |
+| `relax_factor(level)` | 放宽系数：`0.5 ** level`，level 0 返回 1.0 |
+| `window_delta(config)` | 窗口换算：days 模式按 `cooldown_value` 天；tasks 模式按天数近似 |
 
 ### 3.4 DifficultyService
 | 方法 | 说明 |

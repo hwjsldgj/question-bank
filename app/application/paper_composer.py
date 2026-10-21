@@ -1,21 +1,23 @@
 """组卷引擎：一次组卷请求的总编排（需求 R7-R10 / R13，系统核心组件）。
 
-当前实现（用户需求：顺序读取题目作为占位）：
+实现流程（需求 R8 / R9 / R13 落地）：
 
 1. 校验组卷条件（至少启用一个部分，数量为正整数，需求 R7）
-2. 逐题型按条件（科目 / 难度 / 知识点）检索题库，**按题库顺序取前 N 道**作为选题占位
-3. 组卷分区（选择题 / 填空题 / 解答题），按题型写入默认单题分值
-4. 更新使用记录（需求 R13 第 1 条）
-5. 生成答案页数据并汇总总分（需求 R11 / R12）
+2. 逐题型按条件（科目 / 板块 / 题型）检索题库（难度作为评分目标而非硬过滤），
+   排除 PENDING 难度与 quality_flag='low' 的题
+3. 用 SelectionScorer 对候选逐题评分（难度匹配 / 知识点覆盖 / 质量 / 频次 / 最近使用）
+4. 用 WeightedSampler 不放回加权抽样抽取目标数量（评分越高越易中选，且保留随机性）
+5. 组卷分区（选择题 / 填空题 / 解答题），按题型写入默认单题分值
+6. 更新使用记录（需求 R13 第 1 条）
+7. 生成答案页数据并汇总总分（需求 R11 / R12）
 
-选题算法（评分决策 / 加权随机抽样 / AI 补题）尚未实现，注入的
-SelectionScorer / WeightedSampler / QuestionGenerator 暂时不参与流程，
-``allow_ai_supplement`` 参数被保留但不生效。
+选题算法中 AI 补题（QuestionGenerator）暂未接入，``allow_ai_supplement``
+参数保留但不生效。
 
 依赖（构造注入）：
 - app.interfaces.repositories.QuestionRepository / UsageRepository
-- app.application.selection_scorer.SelectionScorer（预留）
-- app.application.weighted_sampler.WeightedSampler（预留）
+- app.application.selection_scorer.SelectionScorer
+- app.application.weighted_sampler.WeightedSampler
 - app.application.question_generator.QuestionGenerator（预留）
 - app.application.score_calculator.ScoreCalculator
 - app.domain.entities.configs.ScoringConfig
@@ -31,7 +33,8 @@ from app.domain.entities.configs import ScoringConfig
 from app.domain.entities.criteria import PaperCriteria, TypeRequirement
 from app.domain.entities.paper import Paper, Section
 from app.domain.entities.question import Question, QuestionFilter
-from app.domain.enums import QuestionType, SectionKind
+from app.domain.entities.scoring import ScoringContext
+from app.domain.enums import Difficulty, QuestionType, SectionKind
 from app.domain.errors import CriteriaValidationError
 from app.interfaces.repositories import QuestionRepository, UsageRepository
 
@@ -58,7 +61,7 @@ _SECTION_KINDS: dict[QuestionType, SectionKind] = {
 
 
 class PaperComposer:
-    """组卷引擎：按组卷条件顺序读取题库并组装试卷。"""
+    """组卷引擎：按评分 + 加权抽样组装试卷。"""
 
     def __init__(
         self,
@@ -66,7 +69,7 @@ class PaperComposer:
         usage_repository: UsageRepository,
         selection_scorer: SelectionScorer,
         weighted_sampler: WeightedSampler,
-        question_generator: QuestionGenerator,
+        question_generator: QuestionGenerator | None,
         score_calculator: ScoreCalculator,
         config: ScoringConfig,
     ) -> None:
@@ -98,13 +101,18 @@ class PaperComposer:
         # 全局 seen_ids 保证整张卷子不出现重复题（用户需求）
         collected: dict[QuestionType, list[Question]] = {}
         seen_ids: set[str] = set()
+        covered_points: set[str] = set()
+        now = datetime.now()
         for requirement in criteria.enabled_requirements():
             bucket = collected.setdefault(requirement.question_type, [])
-            for question in self._select_for_requirement(requirement, exclude_ids=seen_ids):
+            for question in self._select_for_requirement(
+                requirement, covered_points, now, exclude_ids=seen_ids
+            ):
                 if question.id in seen_ids:
                     continue
                 bucket.append(question)
                 seen_ids.add(question.id)
+                covered_points.update(question.knowledge_points)
 
         sections: list[Section] = []
         for question_type, questions in collected.items():
@@ -148,23 +156,28 @@ class PaperComposer:
     def _select_for_requirement(
         self,
         requirement: TypeRequirement,
+        covered_points: set[str],
+        now: datetime,
         exclude_ids: set[str] | None = None,
     ) -> list[Question]:
-        """为单个题型要求顺序读取题目（占位实现：不评分、不抽样、不补题）。
+        """为单个题型要求检索候选、评分并按加权随机抽取（需求 R8 / R9）。
 
-        :param requirement: 单题型出题要求（题型 / 科目 / 知识点板块 / 难度 / 数量）
+        :param requirement: 单题型出题要求（题型 / 科目 / 知识点板块 / 目标难度 / 数量）
+        :param covered_points: 当前试卷已覆盖的知识点集合（用于覆盖度评分）
+        :param now: 本次组卷的统一时间基准（使同一卷所有题的惩罚计算一致）
         :param exclude_ids: 已在其他题型中入选的题目 id 集合，跨题型去重
-        :return: 按题库顺序截取的前 ``count`` 道题；不足时返回实际可提供的全部
+        :return: 最终入选题目列表（保持题库顺序，数量不超过 ``requirement.count``）
         """
         questions = self._question_repository.search(
             QuestionFilter(
                 subject=requirement.subject.strip(),
                 section=requirement.section.strip() or None,
-                difficulty=requirement.difficulty,
                 question_type=requirement.question_type,
                 exclude_low_quality=True,
             )
         )
+        # 排除 PENDING 难度（无法判定难度匹配，不参与智能组卷）
+        questions = [q for q in questions if q.difficulty != Difficulty.PENDING]
         # 跨题型去重（用户需求：同一张卷不能有重复题）
         if exclude_ids:
             questions = [q for q in questions if q.id not in exclude_ids]
@@ -173,7 +186,19 @@ class PaperComposer:
             questions = [
                 q for q in questions if any(p in q.knowledge_points for p in points)
             ]
-        return questions[: requirement.count]
+        if not questions:
+            return []
+
+        context = ScoringContext(
+            target_difficulty=requirement.difficulty,
+            covered_knowledge_points=set(covered_points),
+            now=now,
+        )
+        scored = self._selection_scorer.score(questions, context)
+        picked = self._weighted_sampler.sample(scored, requirement.count)
+        picked_ids = {item.question.id for item in picked}
+        # 按题库顺序回填，保证卷面题序与题库自然顺序一致
+        return [q for q in questions if q.id in picked_ids]
 
     def _record_usage(self, questions: list[Question]) -> None:
         """把本次入选题目写入使用记录（需求 R13 第 1 条）。"""

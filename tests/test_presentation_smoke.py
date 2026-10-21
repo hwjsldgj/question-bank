@@ -603,7 +603,8 @@ def test_export_runs_in_background_thread(window, monkeypatch) -> None:
 
     monkeypatch.setattr(ui_utils, "info", lambda *args, **kwargs: None)
     view = window.paper_generation_view
-    view._paper = object()  # 只验证线程行为，用占位试卷
+    from types import SimpleNamespace  # 占位试卷，仅供本测试验证后台线程行为
+    view._paper = SimpleNamespace(title="", notes="")
     main_thread = threading.current_thread()
     seen: dict = {}
 

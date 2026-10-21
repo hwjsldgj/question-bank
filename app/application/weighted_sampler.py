@@ -35,4 +35,25 @@ class WeightedSampler:
         :param k: 需要抽取的数量（k 不得大于候选数量，由调用方保证）
         :return: 抽中的候选列表（保持抽取顺序即卷面顺序）
         """
-        raise NotImplementedError("TODO(R9): 实现不放回加权随机抽样")
+        if k <= 0 or not scored:
+            return []
+        pool = list(scored)
+        if k >= len(pool):
+            # 数量足够时直接全部返回（仍打乱顺序，保持"随机"语义）
+            self._rng.shuffle(pool)
+            return pool
+
+        picked: list[ScoredQuestion] = []
+        for _ in range(k):
+            weights = [max(item.score, self._epsilon) for item in pool]
+            total = sum(weights)
+            threshold = self._rng.random() * total
+            cumulative = 0.0
+            chosen_index = len(pool) - 1  # 浮点误差兜底：默认取最后一个
+            for index, weight in enumerate(weights):
+                cumulative += weight
+                if threshold <= cumulative:
+                    chosen_index = index
+                    break
+            picked.append(pool.pop(chosen_index))
+        return picked

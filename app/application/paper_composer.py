@@ -168,10 +168,18 @@ class PaperComposer:
         :param exclude_ids: 已在其他题型中入选的题目 id 集合，跨题型去重
         :return: 最终入选题目列表（保持题库顺序，数量不超过 ``requirement.count``）
         """
+        # 难度硬过滤（需求 R7 第 2 条）：目标难度为 PENDING 时视为"不限"，
+        # 否则只检索该难度题库，不混入其它难度。
+        filter_difficulty = (
+            requirement.difficulty
+            if requirement.difficulty != Difficulty.PENDING
+            else None
+        )
         questions = self._question_repository.search(
             QuestionFilter(
                 subject=requirement.subject.strip(),
                 section=requirement.section.strip() or None,
+                difficulty=filter_difficulty,
                 question_type=requirement.question_type,
                 exclude_low_quality=True,
             )

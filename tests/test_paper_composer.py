@@ -31,6 +31,8 @@ class _FakeQuestionRepository:
             result = [q for q in result if q.quality_flag != QualityFlag.LOW]
         if filter.section:
             result = [q for q in result if filter.section in split_sections(q.section)]
+        if filter.difficulty is not None:
+            result = [q for q in result if q.difficulty == filter.difficulty]
         return result
 
     def save(self, question):  # pragma: no cover - 未使用
@@ -191,13 +193,26 @@ def test_pending_difficulty_excluded() -> None:
     assert ids == {"ok"}
 
 
-def test_target_difficulty_is_soft() -> None:
-    """目标难度是偏好而非硬过滤：库里只有 EASY 时仍能出卷。"""
-    questions = [_q(f"q{i}", difficulty=Difficulty.EASY) for i in range(5)]
+def test_target_difficulty_strict_filter() -> None:
+    """目标难度是硬过滤：目标 MEDIUM 时只出 MEDIUM 题，不混入其它难度。"""
+    questions = (
+        [_q(f"e{i}", difficulty=Difficulty.EASY) for i in range(5)]
+        + [_q(f"m{i}", difficulty=Difficulty.MEDIUM) for i in range(5)]
+        + [_q(f"h{i}", difficulty=Difficulty.HARD) for i in range(5)]
+    )
     composer, _ = _build_composer(questions)
     paper = composer.generate(_single_criteria(3, difficulty=Difficulty.MEDIUM))
-    assert len(paper.questions()) == 3
+    ids = {q.id for q in paper.questions()}
+    assert len(ids) == 3
+    assert all(q.startswith("m") for q in ids), f"混入了非 MEDIUM 题：{ids}"
 
+
+def test_insufficient_target_difficulty_returns_actual() -> None:
+    """目标难度题库不足时返回实际可提供数量，不混入其它难度。"""
+    questions = [_q(f"e{i}", difficulty=Difficulty.EASY) for i in range(5)]
+    composer, _ = _build_composer(questions)
+    paper = composer.generate(_single_criteria(3, difficulty=Difficulty.HARD))
+    assert paper.questions() == []
 
 def test_knowledge_points_filter() -> None:
     """指定知识点时只从命中其中任一知识点的题目中选。"""

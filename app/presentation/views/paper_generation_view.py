@@ -993,7 +993,7 @@ class PaperGenerationView(QWidget):
         if first.section:
             # 板块可多个，按标签整段回填（用户需求）
             self._type_sections[question_type].set_values(
-                split_sections(first.section)
+                [first.section]
             )
         self._type_knowledge[question_type].set_values(
             list(first.knowledge_points or [])

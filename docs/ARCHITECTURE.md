@@ -101,6 +101,25 @@ QuestionBankView -> QuestionService.create_question
     -> DifficultyService.analyze_silent    AI 难度分析，失败置 PENDING（R4）
 ```
 
+批量粘贴另走智能解析（不依赖精确关键字）：
+
+```text
+QuestionBankView（解析预览） -> QuestionService.batch_parse
+    -> _BLOCK_SPLIT                        空行 / `---` 分块
+    -> _parse_fields                       标签行归属（_match_field_label 模糊匹配）
+         · 标签容错：内部空格「科 目」、单字符错别字「科日 / 题形」
+         · 无标签段落：_find_role_marker 按句首 / 句子边界拆分
+           「答案：B 解析：含二次项」→ answer + solution，
+           题干中的「解析几何」等词不误判
+         · 形似标签但不可识别的行（「已知：x=1」）归入题干，不丢弃
+    -> _infer_subject                      科目留空时由知识点反查
+    -> _infer_section                      板块留空时按科目 + 知识点反查
+    -> _parse_type                         显式标注 > 选项/答案形态 > 「____」填空标记
+    -> _infer_difficulty                   易 / 简单 / 中等 / 困难 等中文写法
+```
+
+预览表逐行给出「状态 / 缺项」；缺项列直接列出待补字段（如「科目、知识点」）。
+
 ### 3.2 组卷链（R7-R10、R13）
 
 ```text
@@ -185,7 +204,7 @@ QuestionBankView（勾选辨识模块）
 
 全部核心链路已实现：
 
-- **题库**：手工录入 / 批量粘贴 / 检索统计 / 图片导入 / AI 辨识 / 批量维护
+- **题库**：手工录入 / 批量粘贴（智能解析：标签容错 + 无标签按句式抽取 + 科目板块反查）/ 检索统计 / 图片导入 / AI 辨识 / 批量维护
 - **标注**：AI 难度分析（远程 API 与本地模型双通道）；difficulty_source 区分 ai / manual，人工难度不被覆盖
 - **组卷**：当前按题库顺序截取候选；`SelectionScorer` / `WeightedSampler` / `CooldownPolicy` / `PaperComposer` 的评分-抽样-冷却-AI 补题链路**待实现**（见 `待完成工作.md`）
 - **导出**：MD → HTML → Edge 无头打印 PDF；含图题即时渲染 Typst 图为 PNG；相邻含图题自动合并；答案页前分页

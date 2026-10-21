@@ -741,9 +741,13 @@ class QuestionBankView(QWidget):
         layout = QVBoxLayout(page)
 
         hint = QLabel(
-            "粘贴多道题目，以空行或“---”分隔；每条可用“科目：/知识点：/题型：/"
-            "题干：/选项：/答案：/解析：”标注字段。点击“解析预览”后会自动逐项检查，"
-            "非题干信息不完整时会弹窗询问是否让 AI 填充，确认无误再点“确认提交”。"
+            "粘贴多道题目，以空行或“---”分隔。字段无需严格按关键字书写："
+            "科目 / 知识点板块 / 知识点 / 题型 / 题干 / 选项 / 答案 / 解析 / 难度"
+            "均可智能识别，支持“科 目：”“科日：”等间距与错别字容错，"
+            "未加标签的“答案：… 解析：…”按句式自动拆分；"
+            "科目与板块留空时由知识点反查补全。"
+            "点击“解析预览”后会自动逐项检查，非题干信息不完整时会弹窗询问是否让 "
+            "AI 填充，确认无误再点“确认提交”。"
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -765,7 +769,7 @@ class QuestionBankView(QWidget):
         self._preview_table = QTableWidget()
         ui_utils.configure_table(
             self._preview_table,
-            columns=["状态", "科目", "题型", "题干", "答案", "待修正"],
+            columns=["状态", "科目", "题型", "题干", "答案", "缺项"],
             stretch_index=3,
         )
         self._preview_table.doubleClicked.connect(self._on_preview_double_clicked)
@@ -1967,7 +1971,7 @@ class QuestionBankView(QWidget):
         self._paste_status.setText(f"第 {index + 1} 道候选题已修改")
 
     def _render_paste_preview(self, drafts: list[Question]) -> None:
-        """渲染候选题预览，待修正行标红（需求 R2 第 4 条）。"""
+        """渲染候选题预览，待修正行标红并列出缺项（需求 R2 第 4 条）。"""
         self._preview_table.setRowCount(0)
         for draft in drafts:
             incomplete = self._is_incomplete(draft)
@@ -1979,13 +1983,26 @@ class QuestionBankView(QWidget):
                 ui_utils.QUESTION_TYPE_LABELS.get(draft.type, ""),
                 draft.stem,
                 self._answer_text(draft),
-                "是" if incomplete else "否",
+                self._missing_text(draft),
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 if incomplete:
                     item.setForeground(QColor("red"))
                 self._preview_table.setItem(row, column, item)
+
+    @staticmethod
+    def _missing_text(question: Question) -> str:
+        """列出候选题缺失的必填项（预览"缺项"列，便于一眼看出要补什么）。"""
+        if not question.stem:
+            return "题干"
+        missing = QuestionService.required_missing_modules(question)
+        if not missing:
+            return "—"
+        return "、".join(
+            ui_utils.RECOGNIZE_MODULE_LABELS.get(module, module.value)
+            for module in missing
+        )
 
     @staticmethod
     def _answer_text(question: Question) -> str:

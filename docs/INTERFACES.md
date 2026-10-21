@@ -155,6 +155,7 @@ class BaseExporter(ABC):
 |---|---|
 | `create_question` | 校验 -> 落库 -> 本地或云端难度分析 |
 | `update_question` | 更新题目，保留使用记录 |
+| `batch_parse` | 批量粘贴智能解析：标签容错（空格 / 错别字）、无标签按句式抽取答案与解析、科目与板块由知识点反查、题型按选项与「____」兜底 |
 | `batch_commit` | 批量导入，支持缺失字段拦截与 AI 识别 |
 | `recognize_draft_report` | 云端 AI 模块化辨识，返回 `RecognitionReport(fields, issues)` |
 | `recognize_draft` | （旧版保留）仅返回 fields |

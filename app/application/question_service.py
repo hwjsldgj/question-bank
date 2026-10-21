@@ -72,11 +72,101 @@ from app.interfaces.repositories import (
 #: 题块分隔：空行或 "---" / "===" 行
 _BLOCK_SPLIT = re.compile(r"\n\s*\n|\n\s*[-=]{3,}\s*\n")
 
-#: 字段标签行（如 "科目：数学"）
-_LABEL_LINE = re.compile(r"^\s*([\u4e00-\u9fa5A-Za-z]{1,6})\s*[：:]\s*(.*)$")
+#: 字段标签行（如 "科目：数学"；允许标签内部有空格，如 "科 目：数学"）
+_LABEL_LINE = re.compile(
+    r"^\s*([\u4e00-\u9fa5A-Za-z](?:[\u4e00-\u9fa5A-Za-z]|\s){0,5}?)\s*[：:]\s*(.*)$"
+)
 
 #: 选项行（如 "A. 内容" / "A、内容" / "A) 内容"）
 _OPTION_LINE = re.compile(r"^\s*([A-Za-z])\s*[\.、\)．]\s*(.*)$")
+
+#: 句子边界字符：结构化抽取时，只把出现在句首或边界后的关键词当作字段标签
+_STRUCT_SENTENCE_BREAK = set("。！？；;）).,)")
+
+#: 结构化字段角色：（关键词组, 字段名）。关键词按长度降序排列，避免短词误匹配长词
+_STRUCT_ROLES: tuple[tuple[list[str], str], ...] = (
+    (["参考答案", "answer"], "answer"),
+    (["答案"], "answer"),
+    (["解析", "solution"], "solution"),
+    (["难度"], "difficulty"),
+    (["知识点", "考点", "知识"], "knowledge"),
+    (["知识点板块", "知识板块", "板块"], "section"),
+    (["科目", "学科"], "subject"),
+    (["题型", "类型"], "type"),
+)
+
+#: 答案/解析等结构化段落的去前缀正则（"答案：B" -> "B"）
+_STRUCT_PREFIX = re.compile(r"^[：:]\s*")
+
+
+def _one_edit_away(a: str, b: str) -> bool:
+    """判断两个字符串是否只差一次编辑（插入 / 删除 / 替换 / 换位）。"""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    for i in range(len(b)):
+        if a == b[:i] + b[i + 1:]:          # b 多一个字符（a 缺一个）
+            return True
+        if i < len(a) and a == b[:i] + a[i] + b[i + 1:]:  # 替换
+            return True
+        if i < len(a) - 1 and a == b[:i] + b[i + 1] + b[i] + b[i + 2:]:  # 换位
+            return True
+    return a == b
+
+
+def _normalize_label(raw: str) -> str:
+    """字段标签归一化：去空格、小写，消除"科 目"类间距差异。"""
+    return re.sub(r"\s+", "", raw).strip().lower()
+
+
+def _match_field_label(raw_label: str) -> str | None:
+    """字段标签模糊匹配（不再依赖精确关键字）。
+
+    匹配顺序：精确命中 → 单字符容错（错别字 / 间距，如"科 目""科日"）
+    → 标签是别名的前缀且仅多一个字符（兼容"科目：""题型："等写法）。
+    """
+    key = _normalize_label(raw_label)
+    if not key:
+        return None
+    alias = _FIELD_ALIASES.get(key)
+    if alias is not None:
+        return alias
+    for candidate, alias in _FIELD_ALIASES.items():
+        if _one_edit_away(key, candidate):
+            return alias
+    for candidate, alias in _FIELD_ALIASES.items():
+        if len(candidate) < len(key) and key.startswith(candidate) and len(key) - len(candidate) <= 1:
+            return alias
+    return None
+
+
+def _find_role_marker(text: str) -> tuple[int, str, str] | None:
+    """在文字中定位最靠前的结构化字段标记。
+
+    只把「后面紧跟冒号」或「位于句首 / 句子边界且后文较短」的标记视为字段名，
+    避免题干里的「解析几何」「已知条件」等词被误判。
+    """
+    best: tuple[int, str, str] | None = None
+    for markers, role in _STRUCT_ROLES:
+        for marker in sorted(markers, key=len, reverse=True):
+            pos = text.find(marker)
+            while pos >= 0:
+                after = text[pos + len(marker):].lstrip()
+                has_colon = after[:1] in ("：", ":")
+                at_boundary = pos == 0 or text[pos - 1] in _STRUCT_SENTENCE_BREAK
+                if has_colon or (at_boundary and len(after) <= 40):
+                    break
+                pos = text.find(marker, pos + 1)
+            if pos < 0:
+                continue
+            if (
+                best is None
+                or pos < best[0]
+                or (pos == best[0] and len(marker) > len(best[1]))
+            ):
+                best = (pos, marker, role)
+    return best
 
 #: AI 辨识返回字段期望结构（提示模型输出 JSON 对象）
 RECOGNIZE_SCHEMA: dict = {
@@ -1187,49 +1277,30 @@ class QuestionService:
         return "；".join(parts) if parts else "保存编辑（内容无变化）"
 
     def _parse_block(self, block: str) -> Question:
-        """解析单个题块为候选题目（需求 R2）。"""
-        fields: dict[str, str] = {}
-        current: str | None = None
-        for line in block.splitlines():
-            match = _LABEL_LINE.match(line)
-            alias = None
-            if match:
-                alias = _FIELD_ALIASES.get(match.group(1).strip().lower())
-            if alias:
-                current = alias
-                fields[alias] = match.group(2).strip()
-            elif current:
-                # 未标注"选项："时，题干后紧跟的 A./B. 行按选项归类
-                if current in ("stem", "options") and _OPTION_LINE.match(line.strip()):
-                    current = "options"
-                    fields["options"] = (
-                        (fields.get("options", "") + "\n" + line).strip()
-                    )
-                else:
-                    fields[current] = (fields[current] + "\n" + line).strip()
+        """解析单个题块为候选题目（需求 R2）。
 
-        if not fields:
-            # 完全无字段标签：把 A./B. 行抽为选项，其余作为题干
-            stem_lines: list[str] = []
-            option_lines: list[str] = []
-            for line in block.splitlines():
-                if _OPTION_LINE.match(line.strip()):
-                    option_lines.append(line)
-                else:
-                    stem_lines.append(line)
-            fields["stem"] = "\n".join(stem_lines).strip()
-            fields["options"] = "\n".join(option_lines)
+        字段识别不再依赖精确关键字：
+
+        - 标签行支持单字符容错（错别字 / 间距，如「科 目」「科日」）
+        - 未加标签的题块按段落与句子边界自动抽取答案 / 解析 / 难度 / 科目 /
+          板块 / 知识点（如「答案：B 解析：…」可自动拆分）
+        - 科目、板块缺失时由知识点反查兜底；题型由选项、答案形态与填空标记兜底
+        """
+        fields = self._parse_fields(block)
 
         stem = fields.get("stem", "").strip() or block.strip()
         options = self._parse_options(fields.get("options", ""))
-        question_type = self._parse_type(fields.get("type", ""), options, fields.get("answer", ""))
+        question_type = self._parse_type(
+            fields.get("type", ""), options, fields.get("answer", ""), stem=stem
+        )
         if question_type in (QuestionType.SOLUTION, QuestionType.FILL):
             options = []
-        subject = fields.get("subject", "").strip()
         points = self._split_knowledge(fields.get("knowledge", ""))
+        subject = fields.get("subject", "").strip() or self._infer_subject(points)
         # 知识点板块可多个（用户需求）：显式标注优先，否则按科目 + 知识点反查
         section = "、".join(split_sections(fields.get("section", "")))
         section = section or self._infer_section(subject, points)
+        difficulty_raw = fields.get("difficulty", "").strip()
         return Question(
             id="",
             subject=subject,
@@ -1240,15 +1311,123 @@ class QuestionService:
             options=options,
             answer=self._parse_answer(fields.get("answer", ""), question_type),
             solution=fields.get("solution", "").strip() or None,
-            difficulty=_DIFFICULTY_WORDS.get(
-                fields.get("difficulty", "").strip().lower(), Difficulty.PENDING
-            ),
+            difficulty=self._infer_difficulty(difficulty_raw),
             difficulty_source=(
-                DifficultySource.MANUAL
-                if fields.get("difficulty", "").strip()
-                else DifficultySource.AI
+                DifficultySource.MANUAL if difficulty_raw else DifficultySource.AI
             ),
         )
+
+    def _parse_fields(self, block: str) -> dict[str, str]:
+        """抽取题块字段：先按标签行归属，再用结构化规则补全缺失字段。"""
+        fields: dict[str, str] = {}
+        current: str | None = None
+        labelled = False
+        for line in block.splitlines():
+            match = _LABEL_LINE.match(line)
+            alias = _match_field_label(match.group(1)) if match else None
+            if alias:
+                labelled = True
+                current = alias
+                value = match.group(2).strip()
+                fields[alias] = (
+                    (fields[alias] + "\n" + value).strip()
+                    if fields.get(alias)
+                    else value
+                )
+            elif current:
+                # 未标注“选项：”时，题干后紧跟的 A./B. 行按选项归类
+                if current in ("stem", "options") and _OPTION_LINE.match(line.strip()):
+                    current = "options"
+                    fields["options"] = (
+                        (fields.get("options", "") + "\n" + line).strip()
+                    )
+                else:
+                    fields[current] = (fields[current] + "\n" + line).strip()
+            else:
+                # 形似标签但无法识别（如“已知：x=1”）的行不能丢，算作题干
+                current = "stem"
+                fields["stem"] = line.strip()
+
+        structured = self._extract_structured_fields(block)
+        if not labelled:
+            return structured
+        # 已标注部分以标签为准，结构化结果只补空缺（如未加“答案：”的答案段）
+        for key, value in structured.items():
+            if not fields.get(key, "").strip():
+                fields[key] = value
+        return fields
+
+    def _extract_structured_fields(self, block: str) -> dict[str, str]:
+        """无标签时的结构化抽取：按段落与句子边界识别各字段。"""
+        fields: dict[str, str] = {}
+        body: list[str] = []
+        for para in [p.strip() for p in re.split(r"\n\s*\n", block) if p.strip()]:
+            self._split_paragraph_by_role(para, fields, body)
+        body_text = "\n".join(body).strip()
+        if body_text:
+            fields.setdefault("stem", body_text)
+            fields.setdefault(
+                "options",
+                "\n".join(
+                    line
+                    for line in body_text.splitlines()
+                    if _OPTION_LINE.match(line.strip())
+                ),
+            )
+        if not fields.get("stem"):
+            fields["stem"] = block.strip()
+        return fields
+
+    @staticmethod
+    def _split_paragraph_by_role(
+        para: str, fields: dict[str, str], body: list[str]
+    ) -> None:
+        """把一段文字按「句首 / 句子边界后的字段关键词」拆成字段与正文。"""
+        text = para
+        while text:
+            found = _find_role_marker(text)
+            if found is None:
+                if text.strip():
+                    body.append(text.strip())
+                return
+            pos, marker, role = found
+            head = text[:pos].strip()
+            # 过短的“头部”多为“1.”“本题”一类的引导语，直接丢弃
+            if len(head) > 4:
+                body.append(head)
+            rest = _STRUCT_PREFIX.sub("", text[pos + len(marker):].strip())
+            nxt = _find_role_marker(rest)
+            if nxt is None:
+                value, text = rest.strip(), ""
+            else:
+                value, text = rest[: nxt[0]].strip(), rest[nxt[0]:]
+            if value and not fields.get(role, "").strip():
+                fields[role] = value
+            if not text.strip():
+                return
+
+    def _infer_subject(self, points: list[str]) -> str:
+        """按知识点反查科目（粘贴文本未标注科目时兜底）。"""
+        if not points:
+            return ""
+        for subject, groups in DEFAULT_KNOWLEDGE_SECTIONS.items():
+            for candidates in groups.values():
+                if any(point in candidates for point in points):
+                    return subject
+        return ""
+
+    @staticmethod
+    def _infer_difficulty(raw: str) -> Difficulty:
+        """难度识别：支持“易 / 简单 / 中 / 中等 / 难 / 困难”等中英写法与嵌词。"""
+        text = _normalize_label(raw)
+        if not text:
+            return Difficulty.PENDING
+        if text in _DIFFICULTY_WORDS:
+            return _DIFFICULTY_WORDS[text]
+        for word, value in _DIFFICULTY_WORDS.items():
+            if word in text:
+                return value
+        return Difficulty.PENDING
 
     def _infer_section(self, subject: str, points: list[str]) -> str:
         """按科目与知识点反查所属知识点板块（粘贴文本未标注板块时兜底）。
@@ -1279,9 +1458,12 @@ class QuestionService:
 
     @staticmethod
     def _parse_type(
-        raw: str, options: list[Option], answer: str
+        raw: str, options: list[Option], answer: str, stem: str = ""
     ) -> QuestionType:
-        """推断题型：显式标注优先，其次按选项与答案形态判断。"""
+        """推断题型：显式标注优先，其次按选项、答案形态与填空标记判断。
+
+        :param stem: 题干（无选项时用于识别「____」填空标记）
+        """
         text = raw.strip().lower()
         for word, question_type in _TYPE_WORDS.items():
             if word in text:
@@ -1289,6 +1471,8 @@ class QuestionService:
         if len(options) >= 2:
             letters = re.findall(r"[A-Za-z]", answer)
             return QuestionType.SINGLE if len(letters) <= 1 else QuestionType.MULTIPLE
+        if re.search(r"[_＿]{2,}", stem or ""):
+            return QuestionType.FILL
         return QuestionType.SOLUTION
 
     @staticmethod

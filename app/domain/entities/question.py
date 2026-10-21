@@ -142,6 +142,31 @@ def split_sections(text: str | None) -> list[str]:
     """
     parts = [part.strip() for part in re.split(r"[,，、;；\s]+", text or "")]
     return list(dict.fromkeys(part for part in parts if part))
+def display_section_names(raw: str | None) -> list[str]:
+    """显示用：把 q.section 原始值转成用户可读的板块名列表（剥离「9 」式编号）。
+
+    与 :func:`split_sections` 的区别：
+
+    - **不按空白拆分**：``"9 解析几何"`` 视为一个完整板块（而非 ``["9", "解析几何"]``）
+    - **剥离编号前缀**：``"9 解析几何"`` → ``"解析几何"``
+    - 分隔符仅为顿号 / 逗号 / 分号（与录入时的约定一致，不含空格）
+
+    本函数只用于显示，不改变数据库中存储的原始值。检索、过滤、模型反查
+    仍应使用 :func:`split_sections`。
+
+    :param raw: q.section 原始值；None 或空串返回空列表
+    :return: 去重后的板块名列表（保持出现顺序）
+    """
+    if not raw:
+        return []
+    parts = [p.strip() for p in re.split(r"[,，、;；]+", raw) if p.strip()]
+    cleaned = []
+    for p in parts:
+        m = re.match(r"^\d+\s*(.+)$", p)
+        cleaned.append(m.group(1).strip() if m else p)
+    return list(dict.fromkeys(c for c in cleaned if c))
+
+
 
 
 def stem_fingerprint(stem: str | None) -> str:

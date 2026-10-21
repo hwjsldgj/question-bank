@@ -19,7 +19,7 @@ from pathlib import Path
 from app.config.settings import DEFAULT_EXPORT_DIR
 from app.domain.entities.configs import ExportOptions
 from app.domain.entities.paper import Paper, Section
-from app.domain.entities.question import split_sections
+from app.domain.entities.question import display_section_names, split_sections
 from app.domain.enums import QuestionType, SectionKind
 from app.domain.errors import ExportError
 from app.interfaces.exporters import BaseExporter, ProgressCallback
@@ -421,7 +421,7 @@ class MdExporter(BaseExporter):
         # 一道题可属于多个板块：拆分后去重，导出全部涉及的板块（用户需求）
         sections_used = list(
             dict.fromkeys(
-                name for q in section.questions for name in split_sections(q.section)
+                name for q in section.questions for name in display_section_names(q.section)
             )
         )
         lines = [f"## {ordinal}、{title}（{type_title}）", ""]

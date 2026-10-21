@@ -46,6 +46,7 @@ from app.domain.enums import (
     RecognizeModule,
     SectionKind,
 )
+from app.domain.entities.question import display_section_names
 from app.domain.errors import DomainError
 
 #: 题型 -> 中文标签
@@ -159,7 +160,7 @@ def show_question_detail(parent, question, title: str = "题目详情") -> None:
         ("题目 ID", question.id),
         ("科目", question.subject),
         ("卷源", question.paper_source or "—"),
-        ("知识点板块", question.section or "—"),
+        ("知识点板块", "、".join(display_section_names(question.section)) or "—"),
         ("知识点", "、".join(question.knowledge_points) or "—"),
         ("题型", QUESTION_TYPE_LABELS.get(question.type, str(question.type))),
         ("难度", DIFFICULTY_LABELS.get(question.difficulty, str(question.difficulty))),
